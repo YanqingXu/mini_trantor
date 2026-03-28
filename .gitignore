@@ -1,0 +1,33 @@
+# Build directories
+/build/
+/cmake-build-*/
+
+# CMake generated files
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+/compile_commands.json
+/CTestTestfile.cmake
+
+# In-source build artifacts under src/
+/src/CMakeFiles/
+/src/CMakeCache.txt
+/src/Makefile
+/src/cmake_install.cmake
+
+# Compiled objects and binaries
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+
+# Editor and OS temp files
+*~
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
