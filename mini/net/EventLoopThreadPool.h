@@ -1,5 +1,8 @@
 #pragma once
 
+// EventLoopThreadPool 提供 one-loop-per-thread 的扩展模型。
+// 它在 base loop 线程中启动 worker loops，并按轮转策略返回下一个 loop。
+
 #include "mini/base/noncopyable.h"
 #include "mini/net/Callbacks.h"
 

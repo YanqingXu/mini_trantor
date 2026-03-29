@@ -1,5 +1,8 @@
 #pragma once
 
+// EventLoopThread 管理一个后台线程中的单个 EventLoop 生命周期。
+// 它负责启动、发布 loop 指针以及在析构时 quit + join。
+
 #include "mini/base/noncopyable.h"
 #include "mini/net/Callbacks.h"
 

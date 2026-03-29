@@ -132,7 +132,8 @@ TcpConnection::ReadAwaitable::ReadAwaitable(TcpConnectionPtr connection, std::si
 }
 
 bool TcpConnection::ReadAwaitable::await_ready() const noexcept {
-    return !connection_ || connection_->canReadImmediately(minBytes_);
+    return !connection_ ||
+           (connection_->getLoop()->isInLoopThread() && connection_->canReadImmediately(minBytes_));
 }
 
 void TcpConnection::ReadAwaitable::await_suspend(std::coroutine_handle<> handle) {
@@ -151,7 +152,8 @@ TcpConnection::WriteAwaitable::WriteAwaitable(TcpConnectionPtr connection, std::
 }
 
 bool TcpConnection::WriteAwaitable::await_ready() const noexcept {
-    return !connection_ || data_.empty() || connection_->disconnected();
+    return !connection_ ||
+           (connection_->getLoop()->isInLoopThread() && (data_.empty() || connection_->disconnected()));
 }
 
 void TcpConnection::WriteAwaitable::await_suspend(std::coroutine_handle<> handle) {
@@ -165,7 +167,8 @@ TcpConnection::CloseAwaitable::CloseAwaitable(TcpConnectionPtr connection) : con
 }
 
 bool TcpConnection::CloseAwaitable::await_ready() const noexcept {
-    return !connection_ || connection_->disconnected();
+    return !connection_ ||
+           (connection_->getLoop()->isInLoopThread() && connection_->disconnected());
 }
 
 void TcpConnection::CloseAwaitable::await_suspend(std::coroutine_handle<> handle) {
@@ -202,8 +205,7 @@ void TcpConnection::handleRead(mini::base::Timestamp receiveTime) {
     } else if (n == 0) {
         handleClose();
     } else {
-        errno = savedErrno;
-        handleError();
+        handleError(savedErrno);
     }
 }
 
@@ -231,9 +233,8 @@ void TcpConnection::handleWrite() {
         return;
     }
 
-    errno = savedErrno;
-    if (savedErrno != EWOULDBLOCK) {
-        handleError();
+    if (savedErrno != EWOULDBLOCK && savedErrno != EAGAIN) {
+        handleError(savedErrno);
     }
 }
 
@@ -251,9 +252,13 @@ void TcpConnection::handleClose() {
     }
 }
 
-void TcpConnection::handleError() {
-    const int err = sockets::getSocketError(channel_->fd());
+void TcpConnection::handleError(int savedErrno) {
+    loop_->assertInLoopThread();
+    const int err = savedErrno != 0 ? savedErrno : sockets::getSocketError(channel_->fd());
     std::fprintf(stderr, "TcpConnection error on %s: %d (%s)\n", name_.c_str(), err, std::strerror(err));
+    if (state_ != kDisconnected) {
+        handleClose();
+    }
 }
 
 void TcpConnection::sendInLoop(const char* data, std::size_t len) {
@@ -280,12 +285,15 @@ void TcpConnection::sendInLoop(const char* data, std::size_t len) {
             }
         } else {
             nwrote = 0;
-            if (errno != EWOULDBLOCK) {
-                if (errno == EPIPE || errno == ECONNRESET) {
-                    faultError = true;
-                }
+            if (errno != EWOULDBLOCK && errno != EAGAIN) {
+                faultError = true;
             }
         }
+    }
+
+    if (faultError) {
+        handleError(errno);
+        return;
     }
 
     if (!faultError && remaining > 0) {
@@ -350,7 +358,7 @@ void TcpConnection::armWriteWaiter(std::coroutine_handle<> handle, std::string d
         if (self->writeWaiter_.active) {
             throw std::logic_error("only one write waiter is allowed per TcpConnection");
         }
-        if (self->state_ == kDisconnected) {
+        if (data.empty() || self->state_ == kDisconnected) {
             self->queueResume(handle);
             return;
         }

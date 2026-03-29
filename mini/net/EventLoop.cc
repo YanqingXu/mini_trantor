@@ -49,6 +49,14 @@ EventLoop::EventLoop()
 }
 
 EventLoop::~EventLoop() {
+    if (!isInLoopThread()) {
+        std::fputs("EventLoop destroyed from non-owner thread\n", stderr);
+        std::abort();
+    }
+    if (looping_) {
+        std::fputs("EventLoop destroyed while loop() is still running\n", stderr);
+        std::abort();
+    }
     wakeupChannel_->disableAll();
     wakeupChannel_->remove();
     ::close(wakeupFd_);

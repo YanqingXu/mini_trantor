@@ -1,5 +1,8 @@
 #pragma once
 
+// Poller 抽象 I/O 多路复用后端，只维护注册关系与活跃 Channel 收集。
+// 它不拥有 Channel，也不能脱离所属 EventLoop 的线程纪律独立工作。
+
 #include "mini/base/Timestamp.h"
 #include "mini/base/noncopyable.h"
 

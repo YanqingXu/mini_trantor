@@ -4,6 +4,8 @@
 #include "mini/net/SocketsOps.h"
 
 #include <cerrno>
+#include <cstdio>
+#include <cstdlib>
 
 namespace mini::net {
 
@@ -19,8 +21,14 @@ Acceptor::Acceptor(EventLoop* loop, const InetAddress& listenAddr, bool reusePor
 }
 
 Acceptor::~Acceptor() {
-    acceptChannel_.disableAll();
-    acceptChannel_.remove();
+    if (!loop_->isInLoopThread()) {
+        std::fputs("Acceptor destroyed from non-owner thread\n", stderr);
+        std::abort();
+    }
+    if (listening_) {
+        acceptChannel_.disableAll();
+        acceptChannel_.remove();
+    }
 }
 
 void Acceptor::setNewConnectionCallback(NewConnectionCallback cb) {

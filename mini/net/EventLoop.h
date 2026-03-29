@@ -1,5 +1,8 @@
 #pragma once
 
+// EventLoop 是单线程 Reactor 调度核心，负责 poll、事件分发与跨线程任务回流。
+// 所有 loop-owned 可变状态都必须只在 owner 线程上访问与销毁。
+
 #include "mini/base/Timestamp.h"
 #include "mini/base/noncopyable.h"
 

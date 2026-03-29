@@ -1,5 +1,8 @@
 #pragma once
 
+// TcpServer 协调 Acceptor、线程池和连接生命周期。
+// 连接映射由 base loop 线程维护，跨 loop 移除必须显式回流。
+
 #include "mini/base/noncopyable.h"
 #include "mini/net/Acceptor.h"
 #include "mini/net/Callbacks.h"
@@ -43,6 +46,7 @@ private:
     std::atomic<bool> started_;
     int nextConnId_;
     std::unordered_map<std::string, TcpConnectionPtr> connections_;
+    std::shared_ptr<void> lifetimeToken_;
 };
 
 }  // namespace mini::net

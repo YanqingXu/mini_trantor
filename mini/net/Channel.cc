@@ -2,6 +2,10 @@
 
 #include "mini/net/EventLoop.h"
 
+#include <cstdio>
+#include <cstdlib>
+#include <stdexcept>
+
 namespace mini::net {
 
 Channel::Channel(EventLoop* loop, int fd)
@@ -15,7 +19,16 @@ Channel::Channel(EventLoop* loop, int fd)
       tied_(false) {
 }
 
-Channel::~Channel() = default;
+Channel::~Channel() {
+    if (eventHandling_) {
+        std::fputs("Channel destroyed while handling events\n", stderr);
+        std::abort();
+    }
+    if (addedToLoop_) {
+        std::fputs("Channel destroyed without remove-before-destroy\n", stderr);
+        std::abort();
+    }
+}
 
 void Channel::handleEvent(mini::base::Timestamp receiveTime) {
     std::shared_ptr<void> guard;
@@ -100,6 +113,9 @@ void Channel::disableAll() {
 }
 
 void Channel::remove() {
+    if (!isNoneEvent()) {
+        throw std::runtime_error("Channel::remove requires disableAll() first");
+    }
     addedToLoop_ = false;
     loop_->removeChannel(this);
 }

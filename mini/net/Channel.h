@@ -1,5 +1,8 @@
 #pragma once
 
+// Channel 表示一个 fd 在所属 EventLoop 中的事件订阅与回调分发实体。
+// 它不拥有 EventLoop，也不默认拥有 fd，但必须遵守 remove-before-destroy。
+
 #include "mini/base/Timestamp.h"
 #include "mini/base/noncopyable.h"
 

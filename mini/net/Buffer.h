@@ -1,5 +1,8 @@
 #pragma once
 
+// Buffer 是连接读写路径上的字节容器，负责维护可读/可写/可预留区域。
+// 它不解析协议，也不做线程同步，默认由所属连接的 loop 线程独占修改。
+
 #include <cstddef>
 #include <string>
 #include <string_view>

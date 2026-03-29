@@ -1,5 +1,8 @@
 #pragma once
 
+// TcpConnection 表示一个绑定到单个 EventLoop 的 TCP 连接。
+// 它统一管理连接状态、缓冲区、Channel 回调和 coroutine 恢复入口。
+
 #include "mini/base/noncopyable.h"
 #include "mini/net/Buffer.h"
 #include "mini/net/Callbacks.h"
@@ -109,7 +112,7 @@ private:
     void handleRead(mini::base::Timestamp receiveTime);
     void handleWrite();
     void handleClose();
-    void handleError();
+    void handleError(int savedErrno = 0);
 
     void sendInLoop(const char* data, std::size_t len);
     void shutdownInLoop();

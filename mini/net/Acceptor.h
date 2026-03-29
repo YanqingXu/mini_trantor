@@ -1,5 +1,8 @@
 #pragma once
 
+// Acceptor 负责监听 socket 的注册与 accept 路径，是 TcpServer 的薄适配层。
+// 它只在所属 EventLoop 线程中修改监听 Channel 和回调交付。
+
 #include "mini/base/noncopyable.h"
 #include "mini/net/Channel.h"
 #include "mini/net/InetAddress.h"

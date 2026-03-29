@@ -14,15 +14,23 @@ TcpServer::TcpServer(EventLoop* loop, const InetAddress& listenAddr, std::string
       acceptor_(std::make_unique<Acceptor>(loop, listenAddr, reusePort)),
       threadPool_(std::make_shared<EventLoopThreadPool>(loop, name_)),
       started_(false),
-      nextConnId_(1) {
+      nextConnId_(1),
+      lifetimeToken_(std::make_shared<int>(0)) {
     acceptor_->setNewConnectionCallback(
         [this](int sockfd, const InetAddress& peerAddr) { newConnection(sockfd, peerAddr); });
 }
 
 TcpServer::~TcpServer() {
+    loop_->assertInLoopThread();
+    lifetimeToken_.reset();
+    acceptor_->setNewConnectionCallback({});
+
     for (auto& [name, connection] : connections_) {
         auto conn = connection;
-        conn->getLoop()->runInLoop([conn] { conn->connectDestroyed(); });
+        conn->getLoop()->runInLoop([conn] {
+            conn->setCloseCallback({});
+            conn->connectDestroyed();
+        });
     }
 }
 
@@ -58,6 +66,7 @@ void TcpServer::newConnection(int sockfd, const InetAddress& peerAddr) {
     loop_->assertInLoopThread();
     EventLoop* ioLoop = threadPool_->getNextLoop();
     const std::string connName = name_ + "#" + std::to_string(nextConnId_++);
+    std::weak_ptr<void> lifetime = lifetimeToken_;
 
     const InetAddress localAddr(sockets::getLocalAddr(sockfd));
     auto connection = std::make_shared<TcpConnection>(ioLoop, connName, sockfd, localAddr, peerAddr);
@@ -66,13 +75,25 @@ void TcpServer::newConnection(int sockfd, const InetAddress& peerAddr) {
     connection->setConnectionCallback(connectionCallback_);
     connection->setMessageCallback(messageCallback_);
     connection->setWriteCompleteCallback(writeCompleteCallback_);
-    connection->setCloseCallback([this](const TcpConnectionPtr& conn) { removeConnection(conn); });
+    // Guard delayed close callbacks so worker-loop teardown never dereferences a dead TcpServer.
+    connection->setCloseCallback([this, lifetime](const TcpConnectionPtr& conn) {
+        if (!lifetime.lock()) {
+            return;
+        }
+        removeConnection(conn);
+    });
 
     ioLoop->runInLoop([connection] { connection->connectEstablished(); });
 }
 
 void TcpServer::removeConnection(const TcpConnectionPtr& connection) {
-    loop_->runInLoop([this, connection] { removeConnectionInLoop(connection); });
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    loop_->runInLoop([this, lifetime, connection] {
+        if (!lifetime.lock()) {
+            return;
+        }
+        removeConnectionInLoop(connection);
+    });
 }
 
 void TcpServer::removeConnectionInLoop(const TcpConnectionPtr& connection) {
