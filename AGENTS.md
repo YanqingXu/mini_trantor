@@ -42,6 +42,7 @@ Start from:
 - Always obey ownership rules
 - Always generate tests for public contracts
 - Always document lifecycle-sensitive modules with state/sequence diagrams
+- Always answer the core-module change gate questions in PR/change descriptions
 - Prefer explicit state machines over scattered boolean flags
 - Prefer narrow, clear responsibilities over large “god classes”
 
@@ -102,6 +103,16 @@ Do not start by reading implementation details first for complex modules.
 
 ---
 
+## Core Module Change Gate
+Each PR or direct change touching a core module must answer:
+1. Which loop/thread owns this module?
+2. Who owns it and who releases it?
+3. Which callbacks may re-enter?
+4. Which operations are allowed cross-thread, and how are they marshaled?
+5. Which test file verifies this change?
+
+---
+
 ## Coding Style Direction
 - modern C++17/20 style where appropriate
 - keep public interfaces small
@@ -113,24 +124,21 @@ Do not start by reading implementation details first for complex modules.
 ---
 
 ## Current v1 Focus
-- Channel
-- Poller
-- EventLoop
-- Buffer
-- Acceptor
-- TcpConnection
-- EventLoopThread / EventLoopThreadPool
-- TimerQueue
-- coroutine integration points
+- `v1-alpha`: synchronous Reactor main path is stable
+  - Channel / Poller / EPollPoller / EventLoop / Buffer / Acceptor / TcpConnection / TcpServer
+  - contract + integration coverage for the callback-based mainline
+- `v1-beta`: thread model is stable
+  - EventLoopThread / EventLoopThreadPool
+  - cross-thread scheduling and one-loop-per-thread behavior are contract-tested
+- `v1-coro-preview`: coroutine bridge runs through
+  - `mini::coroutine::Task`
+  - `TcpConnection` awaitables
+  - coroutine echo main path runs through without bypassing EventLoop semantics
 
-Current first wave implementation target:
-- Channel
-- Poller
-- EPollPoller
-- EventLoop
-- wakeup mechanism
-- queueInLoop/runInLoop
-- unit + contract tests
+Deferred until after `v1-coro-preview`:
+- TimerQueue
+- async timers
+- backpressure policy work
 
 
 ## When the user asks to analyze a framework / understand a project / generate source-code reading documentation

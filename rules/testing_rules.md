@@ -11,6 +11,17 @@ Each core module should have:
 - failure-path test
 - threading-related test if cross-thread behavior exists
 
+## 2.1 Test Layering
+Tests should live in:
+- `tests/unit/<module>/`
+- `tests/contract/<module>/`
+- `tests/integration/<module>/`
+
+Layer meaning:
+- unit = local logic and small invariants
+- contract = public API, lifecycle, thread-affinity, callback ordering
+- integration = end-to-end main path validation across modules
+
 ## 3. Unit Test Focus
 Unit tests verify:
 - local logic
@@ -53,6 +64,10 @@ For lifecycle-sensitive modules, tests should include:
 ## 9. AI-Specific Requirement
 When generating code, generate tests in the same change set.
 No public interface should be added without at least one direct contract assertion.
+
+## 9.1 Change Gate Requirement
+For core modules, the change description must name the specific test file that validates the behavior.
+"covered by tests" is not sufficient.
 
 ## 10. Forbidden
 - test only happy path for lifecycle-heavy module

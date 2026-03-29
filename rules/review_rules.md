@@ -31,14 +31,23 @@ The following areas always require focused review:
 - coroutine suspend/resume integration points
 
 ## 4. PR Standard
-Each PR for a core module should ideally contain:
+Each PR for a core module should contain:
 - intent reference
+- stage reference (`v1-alpha`, `v1-beta`, or `v1-coro-preview`)
+- answers to the 5 core-module change gate questions
 - public interface
 - implementation
 - tests
 - diagram/doc updates if lifecycle-sensitive
 
-## 5. Review Checklist Example
+## 5. Core Module Change Gate
+- Which loop/thread owns this module?
+- Who owns it and who releases it?
+- Which callbacks may re-enter?
+- Which operations are allowed cross-thread, and how are they marshaled?
+- Which specific test file verifies the change?
+
+## 6. Review Checklist Example
 - Does this change violate existing intent?
 - Does it add hidden ownership?
 - Does it create a non-owner-thread mutation path?
@@ -46,7 +55,7 @@ Each PR for a core module should ideally contain:
 - Does it weaken remove-before-destroy discipline?
 - Does it require updating docs/tests/diagram?
 
-## 6. Forbidden
+## 7. Forbidden
 - review only code diff without intent context
 - approve complex lifecycle changes without tests
 - approve thread-affinity changes without explicit rule update

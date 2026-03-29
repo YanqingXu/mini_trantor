@@ -22,7 +22,7 @@ Its primary value is architectural correctness and evolvability.
 ---
 
 ## 3. Core Modules
-### Mandatory v1 modules
+### Mandatory v1 foundation modules
 - Channel
 - Poller
 - EPollPoller
@@ -33,14 +33,21 @@ Its primary value is architectural correctness and evolvability.
 - TcpServer
 - EventLoopThread
 - EventLoopThreadPool
-- TimerQueue
-
-### Near-future extension modules
 - Coroutine adapters / awaitables
 - Task abstraction
+
+### Deferred until after v1-coro-preview
+- TimerQueue
 - Async timers
 - Metrics/tracing hooks
 - Backpressure policies
+
+### Staged boundary
+- `v1-alpha`: synchronous Reactor mainline is stable
+- `v1-beta`: threading model is stable
+- `v1-coro-preview`: coroutine bridge runs through on top of Reactor semantics
+
+Detailed stage contracts are defined in `v1_stages.intent.md`.
 
 ---
 

@@ -5,7 +5,7 @@
 - `mini-trantor` 是一个面向学习、演进和 AI 协作开发的 C++ Reactor 风格网络库。
 - 它解决的核心问题不是“功能很多”，而是“结构正确”：线程归属明确、生命周期可推理、回调上下文可预测。
 - 项目把 `intent -> rules -> tests -> implementation` 放在代码之前，代码只是设计意图的实现载体。
-- 当前真正参与构建和运行的核心代码位于 `mini/`，尤其是 `mini/net/`；`src/` 更像早期原型残留，不是当前主线。
+- 当前真正参与构建和运行的核心代码位于 `mini/`，尤其是 `mini/net/`；旧 `src/` 路径已经从仓库移除，避免主线歧义。
 - v1 已落地的核心模块包括 `EventLoop`、`Channel`、`Poller/EPollPoller`、`Buffer`、`Acceptor`、`TcpConnection`、`TcpServer`、`EventLoopThread`、`EventLoopThreadPool`。
 - 协程能力已经有最小可运行形态，但它是“贴着 Reactor 语义扩展”的，不是另起一套调度体系。
 - 阅读这个项目时，最先要抓住的是三个约束：一个线程一个 `EventLoop`、跨线程操作必须回流到 owner loop、销毁前必须解除注册。
@@ -88,8 +88,11 @@
 │   ├── coroutine/
 │   └── net/
 ├── rules/
-├── src/
+├── .github/
 └── tests/
+    ├── unit/
+    ├── contract/
+    └── integration/
 ```
 
 ### 2.2 各目录职责
@@ -121,7 +124,11 @@
 
 #### `tests/`
 
-契约验证层。当前测试不是海量覆盖，而是围绕公共契约、线程行为、生命周期行为、主路径集成来布置。
+契约验证层。测试现在按三层组织：
+
+- `unit/`：局部语义、小不变量、基础回调分发
+- `contract/`：公共 API、线程行为、生命周期契约
+- `integration/`：同步 Reactor 主链路与协程桥接主链路
 
 #### `examples/`
 
@@ -134,11 +141,6 @@
 
 工程理解文档层，存放生命周期说明、整改清单，以及本次生成的框架理解文档。
 
-#### `src/`
-
-历史原型/过渡目录。这里有非常早期的 `EventLoop` / `Channel` / `Poller` 草图，但它们未进入当前库构建。  
-阅读时不要把 `src/` 误认为当前实现，否则会对项目结构产生错误认知。
-
 #### `include/`
 
 当前为空，说明项目暂时没有把“公共头文件发布布局”和“内部源码布局”分离。
@@ -150,7 +152,6 @@
 - `tests/` 是契约验证层
 - `examples/` 是接入与演示层
 - `docs/` 是解释与沉淀层
-- `src/` 是历史痕迹，不是当前主线
 
 ## 3. 核心模块地图
 
@@ -495,7 +496,7 @@
 定义当前项目的真实构建入口，决定哪些源码会被编进 `mini_trantor`。
 
 #### 2）为什么这个文件必须存在
-它是识别“当前主线实现”最可靠的证据。没有它，很容易误把 `src/` 当成核心代码。
+它是识别“当前主线实现”和“测试闭环入口”最可靠的证据。
 
 #### 3）它在系统中的位置
 启动层 / 构建层。
@@ -509,13 +510,14 @@
 #### 6）文件中的关键内容
 - `add_library(mini_trantor ...)`：说明 `mini/net/*.cc` 才是当前运行时实现
 - `add_executable(...)`：示例和测试入口
+- `add_subdirectory(tests)`：测试由分层目录统一接入
 - `target_link_libraries(... pthread)`：线程模型依赖 pthread
 
 #### 7）阅读这个文件时应该重点看什么
 先看 `add_library` 的源码列表，再看测试和 examples 列表。
 
 #### 8）这个文件最容易让人误解的地方
-README 中还写着 `src/`，但构建系统已经切换到 `mini/`。
+新增测试时不能只把文件放进 `tests/`，还必须同步接入分层 `CMake`。
 
 #### 9）如果我要修改/扩展这个文件，应该注意什么
 新增模块时必须同步更新构建入口和测试入口，否则 intent 和实现会再次脱节。
@@ -975,7 +977,7 @@ socket API、`InetAddress`。
 #### 9）如果我要修改/扩展这个文件，应该注意什么
 示例最好继续承担“教学入口”角色，不要把它膨胀成复杂业务 demo。
 
-### 文件：`tests/test_event_loop.cpp`、`tests/test_poller_contract.cpp`、`tests/test_tcp_connection.cpp`、`tests/test_tcp_server.cpp`
+### 文件：`tests/contract/event_loop/test_event_loop.cpp`、`tests/contract/poller/test_poller_contract.cpp`、`tests/contract/tcp_connection/test_tcp_connection.cpp`、`tests/integration/tcp_server/test_tcp_server.cpp`、`tests/integration/coroutine/test_coroutine_echo_server.cpp`
 
 #### 1）这个文件的核心职责
 固定当前最重要的线程、注册、连接、服务端主路径契约。
@@ -996,7 +998,8 @@ socket API、`InetAddress`。
 - `test_event_loop.cpp`：验证 same-thread immediate 与 cross-thread queue 回流
 - `test_poller_contract.cpp`：验证注册、触发、remove 语义
 - `test_tcp_connection.cpp`：验证 socketpair 下的连接建立、消息读取、关闭
-- `test_tcp_server.cpp`：验证 echo server 主链路
+- `test_tcp_server.cpp`：验证同步 echo server 主链路
+- `test_coroutine_echo_server.cpp`：验证 coroutine echo 路径在 worker loop 上跑通
 
 #### 7）阅读这个文件时应该重点看什么
 关注“测试在保护什么契约”，而不是只看断言数量。
@@ -1006,35 +1009,6 @@ socket API、`InetAddress`。
 
 #### 9）如果我要修改/扩展这个文件，应该注意什么
 一旦更改线程顺序、生命周期约束或回调语义，相关 contract test 应同步更新。
-
-### 文件：`src/`
-
-#### 1）这个文件的核心职责
-它不是当前核心职责实现，而是早期原型痕迹。
-
-#### 2）为什么这个文件必须存在
-从仓库演化角度看，它说明项目曾经历过更粗糙的最小版本。
-
-#### 3）它在系统中的位置
-历史/演进痕迹层。
-
-#### 4）它依赖谁
-非常少，且未形成当前可运行主线。
-
-#### 5）谁依赖它
-当前构建不依赖。
-
-#### 6）文件中的关键内容
-极简 `EventLoop/Channel/Poller` 草图。
-
-#### 7）阅读这个文件时应该重点看什么
-只把它当“演进参考”，不要当现状。
-
-#### 8）这个文件最容易让人误解的地方
-目录名叫 `src/`，但它并不是当前源码主线。
-
-#### 9）如果我要修改/扩展这个文件，应该注意什么
-更合理的方向是继续弱化它的存在感，或在未来明确标注 legacy。
 
 ## 8. 类级职责拆解（针对关键类）
 
@@ -1228,7 +1202,7 @@ loop 选择器，不是任务线程池。
 
 - `Channel` 直接依赖 epoll 常量，说明后端细节还没有完全被 `Poller` 层隔离
 - `TcpConnection` 同时承载回调接口和协程等待逻辑，属于变化集中区
-- `src/` 未参与构建，但名字容易造成理解分层误导
+- 测试已经按 layer + module 拆分，新增覆盖时应保持构建入口和文档同步
 
 ### 9.4 是否存在循环依赖
 
@@ -1399,11 +1373,12 @@ loop 选择器，不是任务线程池。
 
 ### 第六轮：回到测试验证认知
 
-1. `tests/test_event_loop.cpp`
-2. `tests/test_poller_contract.cpp`
-3. `tests/test_tcp_connection.cpp`
-4. `tests/test_tcp_server.cpp`
-5. `tests/test_event_loop_thread_pool.cpp`
+1. `tests/contract/event_loop/test_event_loop.cpp`
+2. `tests/contract/poller/test_poller_contract.cpp`
+3. `tests/contract/tcp_connection/test_tcp_connection.cpp`
+4. `tests/integration/tcp_server/test_tcp_server.cpp`
+5. `tests/contract/event_loop_thread_pool/test_event_loop_thread_pool.cpp`
+6. `tests/integration/coroutine/test_coroutine_echo_server.cpp`
 
 ## 13. 框架设计优点 / 风险点
 
@@ -1418,9 +1393,9 @@ loop 选择器，不是任务线程池。
 
 ### 13.2 风险点
 
-- 文档和目录演进尚未完全同步：README 还提 `src/`，实际构建在 `mini/`
-- `Channel` 对 epoll 常量的直接依赖意味着后端抽象仍有泄漏
 - `TcpConnection` 当前职责较多，是未来最容易膨胀的类
+- v1 阶段边界虽然已经正式化，但后续扩展仍需避免把 `TimerQueue`、复杂 backpressure 或独立协程调度器提前混入当前主线
+- `Channel` 对 epoll 常量的直接依赖意味着后端抽象仍有泄漏
 - 当前错误处理多为 `abort()` / stderr 打印，适合学习但不够生产化
 - `include/` 为空，说明对外 API 组织尚未稳定
 - `TimerQueue` 等 intent 中的规划模块还未落地，未来扩展时需要谨慎保持现有调度顺序
@@ -1430,7 +1405,7 @@ loop 选择器，不是任务线程池。
 ### 14.1 这个框架最该抓住的 6 个核心点
 
 1. 这是一个 Intent-first 的 Reactor 网络库，不是单纯代码集合。
-2. 真正的运行时主线在 `mini/net`，不是 `src/`。
+2. 真正的运行时主线在 `mini/net`，并且仓库已经移除了会制造误导的旧 `src/` 路径。
 3. `EventLoop` 是线程归属边界，所有 loop-owned 状态都必须回到 owner thread。
 4. `Channel` 是 fd 事件语义对象，`Poller` 是事件来源，`TcpConnection` 是连接生命周期总管。
 5. 关闭路径和销毁路径是这个项目最重要的正确性来源之一。
@@ -1439,7 +1414,7 @@ loop 选择器，不是任务线程池。
 ### 14.2 如果想快速上手，下一步该做什么
 
 - 先本地跑 `echo_server`
-- 再读 `test_tcp_server.cpp`
+- 再读 `tests/integration/tcp_server/test_tcp_server.cpp`
 - 然后尝试给 `TcpConnection` 增加一个小能力，比如高水位回调或更明确的状态日志
 
 ### 14.3 如果想快速改几个文件练手
@@ -1447,7 +1422,7 @@ loop 选择器，不是任务线程池。
 - `mini/net/TcpServer.cc`
 - `mini/net/TcpConnection.cc`
 - `mini/net/EventLoop.cc`
-- `tests/test_tcp_server.cpp`
+- `tests/integration/tcp_server/test_tcp_server.cpp`
 
 ### 14.4 如果想真正掌握这个项目
 
