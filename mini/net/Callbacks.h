@@ -1,5 +1,8 @@
 #pragma once
 
+// Callbacks.h 集中定义网络层公开使用的回调签名。
+// 它让连接、消息、关闭与线程初始化的契约类型保持一致。
+
 #include <functional>
 #include <memory>
 

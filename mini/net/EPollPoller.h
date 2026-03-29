@@ -1,5 +1,8 @@
 #pragma once
 
+// EPollPoller 是 Poller 的 epoll 后端实现。
+// 它负责把 Channel 注册关系映射到内核 epoll，并回填活跃事件。
+
 #include "mini/net/Poller.h"
 
 #include <sys/epoll.h>

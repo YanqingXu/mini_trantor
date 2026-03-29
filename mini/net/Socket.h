@@ -1,5 +1,8 @@
 #pragma once
 
+// Socket 是对 fd 级 socket 操作的薄 RAII 封装。
+// 它负责 listen/accept/shutdown/setsockopt 之类的系统调用边界。
+
 #include "mini/base/noncopyable.h"
 #include "mini/net/InetAddress.h"
 

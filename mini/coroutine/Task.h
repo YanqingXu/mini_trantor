@@ -1,5 +1,8 @@
 #pragma once
 
+// Task 是一个最小可组合的 coroutine 结果对象。
+// 它提供 start/detach/co_await 语义，但不替代 EventLoop 的调度规则。
+
 #include <coroutine>
 #include <exception>
 #include <optional>

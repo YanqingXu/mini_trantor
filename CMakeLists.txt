@@ -60,3 +60,7 @@ add_test(NAME test_tcp_connection COMMAND test_tcp_connection)
 add_executable(test_tcp_server tests/test_tcp_server.cpp)
 target_link_libraries(test_tcp_server PRIVATE mini_trantor)
 add_test(NAME test_tcp_server COMMAND test_tcp_server)
+
+add_executable(test_event_loop_thread_pool tests/test_event_loop_thread_pool.cpp)
+target_link_libraries(test_event_loop_thread_pool PRIVATE mini_trantor)
+add_test(NAME test_event_loop_thread_pool COMMAND test_event_loop_thread_pool)

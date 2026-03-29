@@ -1,6 +1,7 @@
 #include "mini/net/Buffer.h"
 
 #include <cassert>
+#include <cerrno>
 #include <string>
 #include <unistd.h>
 
@@ -27,6 +28,14 @@ int main() {
     assert(data.size() == 3 + payload.size());
     assert(data.substr(0, 3) == "llo");
     assert(data.substr(3) == payload);
+
+    savedErrno = 0;
+    assert(buffer.writeFd(-1, &savedErrno) == -1);
+    assert(savedErrno == EBADF);
+
+    savedErrno = 0;
+    assert(buffer.readFd(-1, &savedErrno) == -1);
+    assert(savedErrno == EBADF);
 
     ::close(fds[0]);
     ::close(fds[1]);

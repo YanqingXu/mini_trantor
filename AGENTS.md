@@ -131,3 +131,22 @@ Current first wave implementation target:
 - wakeup mechanism
 - queueInLoop/runInLoop
 - unit + contract tests
+
+
+## When the user asks to analyze a framework / understand a project / generate source-code reading documentation
+
+The agent must automatically load and apply:
+
+- `rules/framework-understanding-doc.md`
+
+The response must prioritize producing a complete **Framework Understanding Document** rather than a short summary.
+
+If the project is large:
+- first provide a high-level overview
+- then expand into directory-by-directory and file-by-file analysis
+
+If the user explicitly asks for a **very detailed** explanation:
+- cover all core directories
+- cover all core files
+- provide a recommended reading order
+- explain the main call chains and extension points

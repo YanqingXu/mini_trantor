@@ -1,5 +1,8 @@
 #pragma once
 
+// InetAddress 是 IPv4 地址与端口的轻量封装。
+// 它只负责 sockaddr_in 的构造、保存与文本转换。
+
 #include <cstdint>
 #include <netinet/in.h>
 #include <string>

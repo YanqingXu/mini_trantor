@@ -1,5 +1,8 @@
 #pragma once
 
+// SocketsOps 暴露最底层的 socket 系统调用辅助函数。
+// 这里保持 C 风格边界，供上层 Socket/Acceptor/TcpConnection 复用。
+
 #include <netinet/in.h>
 #include <sys/socket.h>
 
