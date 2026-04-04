@@ -26,6 +26,8 @@ TcpConnection::TcpConnection(
       localAddr_(localAddr),
       peerAddr_(peerAddr),
       highWaterMark_(0),
+      backpressureHighWaterMark_(0),
+      backpressureLowWaterMark_(0),
       reading_(true) {
     channel_->setReadCallback([this](mini::base::Timestamp receiveTime) { handleRead(receiveTime); });
     channel_->setWriteCallback([this] { handleWrite(); });
@@ -99,6 +101,26 @@ void TcpConnection::setTcpNoDelay(bool on) {
     socket_->setTcpNoDelay(on);
 }
 
+void TcpConnection::setBackpressurePolicy(std::size_t highWaterMark, std::size_t lowWaterMark) {
+    if (highWaterMark == 0) {
+        if (lowWaterMark != 0) {
+            throw std::invalid_argument("backpressure low water mark requires a non-zero high water mark");
+        }
+    } else if (lowWaterMark >= highWaterMark) {
+        throw std::invalid_argument("backpressure low water mark must be smaller than high water mark");
+    }
+
+    if (loop_->isInLoopThread()) {
+        setBackpressurePolicyInLoop(highWaterMark, lowWaterMark);
+        return;
+    }
+
+    auto self = shared_from_this();
+    loop_->runInLoop([self, highWaterMark, lowWaterMark] {
+        self->setBackpressurePolicyInLoop(highWaterMark, lowWaterMark);
+    });
+}
+
 void TcpConnection::setConnectionCallback(ConnectionCallback cb) {
     connectionCallback_ = std::move(cb);
 }
@@ -124,7 +146,9 @@ void TcpConnection::connectEstablished() {
     loop_->assertInLoopThread();
     setState(kConnected);
     channel_->tie(shared_from_this());
+    reading_ = true;
     channel_->enableReading();
+    applyBackpressurePolicy();
     if (connectionCallback_) {
         connectionCallback_(shared_from_this());
     }
@@ -134,6 +158,7 @@ void TcpConnection::connectDestroyed() {
     loop_->assertInLoopThread();
     if (state_ == kConnected) {
         setState(kDisconnected);
+        reading_ = false;
         channel_->disableAll();
         if (connectionCallback_) {
             connectionCallback_(shared_from_this());
@@ -234,6 +259,7 @@ void TcpConnection::handleWrite() {
     const ssize_t n = outputBuffer_.writeFd(channel_->fd(), &savedErrno);
     if (n > 0) {
         outputBuffer_.retrieve(static_cast<std::size_t>(n));
+        applyBackpressurePolicy();
         if (outputBuffer_.readableBytes() == 0) {
             channel_->disableWriting();
             if (writeCompleteCallback_) {
@@ -259,6 +285,7 @@ void TcpConnection::handleClose() {
         return;
     }
     setState(kDisconnected);
+    reading_ = false;
     channel_->disableAll();
     auto guardThis = shared_from_this();
     resumeAllWaitersOnClose();
@@ -325,6 +352,7 @@ void TcpConnection::sendInLoop(const char* data, std::size_t len) {
             auto self = shared_from_this();
             loop_->queueInLoop([self, cb = highWaterMarkCallback_, newLen] { cb(self, newLen); });
         }
+        applyBackpressurePolicy();
     }
 }
 
@@ -339,6 +367,40 @@ void TcpConnection::forceCloseInLoop() {
     loop_->assertInLoopThread();
     if (state_ == kConnected || state_ == kDisconnecting) {
         handleClose();
+    }
+}
+
+void TcpConnection::setBackpressurePolicyInLoop(std::size_t highWaterMark, std::size_t lowWaterMark) {
+    loop_->assertInLoopThread();
+    backpressureHighWaterMark_ = highWaterMark;
+    backpressureLowWaterMark_ = lowWaterMark;
+    applyBackpressurePolicy();
+}
+
+void TcpConnection::applyBackpressurePolicy() {
+    loop_->assertInLoopThread();
+    if (state_ != kConnected && state_ != kDisconnecting) {
+        return;
+    }
+
+    if (backpressureHighWaterMark_ == 0) {
+        if (!reading_) {
+            reading_ = true;
+            channel_->enableReading();
+        }
+        return;
+    }
+
+    const auto bufferedBytes = outputBuffer_.readableBytes();
+    if (reading_ && bufferedBytes >= backpressureHighWaterMark_) {
+        reading_ = false;
+        channel_->disableReading();
+        return;
+    }
+
+    if (!reading_ && bufferedBytes <= backpressureLowWaterMark_) {
+        reading_ = true;
+        channel_->enableReading();
     }
 }
 

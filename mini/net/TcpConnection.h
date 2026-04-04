@@ -43,6 +43,7 @@ public:
     void shutdown();
     void forceClose();
     void setTcpNoDelay(bool on);
+    void setBackpressurePolicy(std::size_t highWaterMark, std::size_t lowWaterMark);
 
     void setConnectionCallback(ConnectionCallback cb);
     void setMessageCallback(MessageCallback cb);
@@ -120,6 +121,8 @@ private:
     void sendInLoop(const char* data, std::size_t len);
     void shutdownInLoop();
     void forceCloseInLoop();
+    void setBackpressurePolicyInLoop(std::size_t highWaterMark, std::size_t lowWaterMark);
+    void applyBackpressurePolicy();
     void setState(StateE state) noexcept;
 
     bool canReadImmediately(std::size_t minBytes) const noexcept;
@@ -147,6 +150,8 @@ private:
     WriteCompleteCallback writeCompleteCallback_;
     CloseCallback closeCallback_;
     std::size_t highWaterMark_;
+    std::size_t backpressureHighWaterMark_;
+    std::size_t backpressureLowWaterMark_;
     bool reading_;
     ReadAwaiterState readWaiter_;
     WriteAwaiterState writeWaiter_;

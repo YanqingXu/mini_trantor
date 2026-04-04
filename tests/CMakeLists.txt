@@ -58,6 +58,11 @@ add_mini_test(
 )
 add_mini_test(
     integration
+    tcp_server
+    ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_server/test_tcp_server_backpressure_policy.cpp
+)
+add_mini_test(
+    integration
     coroutine
     ${CMAKE_CURRENT_SOURCE_DIR}/integration/coroutine/test_coroutine_echo_server.cpp
 )

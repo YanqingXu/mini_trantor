@@ -12,6 +12,7 @@ and callback/coroutine handoff points while preserving reactor semantics.
 - translate read/write/close/error events into unified connection state changes
 - expose send/shutdown APIs that preserve owner-thread execution
 - expose force-close style teardown entry that still converges on the same close path
+- enforce optional per-connection read-throttling when outbound bytes exceed configured thresholds
 - coordinate coroutine waiters without bypassing EventLoop scheduling
 
 ---
@@ -29,6 +30,7 @@ and callback/coroutine handoff points while preserving reactor semantics.
 - connection state mutation happens on owner loop thread
 - close and error teardown converge on one safe path
 - channel registration is removed before effective destruction
+- backpressure-driven read suspend/resume only changes Channel interest on owner loop thread
 - coroutine resume returns through EventLoop scheduling
 
 ---
@@ -36,6 +38,7 @@ and callback/coroutine handoff points while preserving reactor semantics.
 ## 5. Threading Rules
 - handleRead/handleWrite/handleClose/handleError run on owner loop thread
 - cross-thread send/shutdown must marshal back into the loop
+- backpressure threshold evaluation and read-interest toggling happen on the owner loop
 - await readiness checks must not inspect loop-owned mutable state off-thread
 
 ---
@@ -44,13 +47,14 @@ and callback/coroutine handoff points while preserving reactor semantics.
 - fatal read/write errors should produce explicit teardown
 - repeated close/error handling should be guarded or idempotent
 - timeout-driven close should reuse the normal close path rather than inventing a side channel
+- backpressure throttling should resume automatically after the output buffer drains below the low-water threshold
 - disconnected state should block unsafe user-visible actions
 
 ---
 
 ## 7. Extension Points
 - coroutine read/write/close awaiters
-- future high-water-mark policy
+- optional high-water-mark notification callback
 - future backpressure metrics
 
 ---
@@ -59,6 +63,7 @@ and callback/coroutine handoff points while preserving reactor semantics.
 - cross-thread send executes on owner loop thread
 - read/write error path converges on safe close handling
 - cross-thread force-close marshals back to the owner loop and converges on safe close handling
+- high-water to low-water drain path pauses and resumes read processing on the owner loop
 - coroutine awaiters resume through EventLoop rather than arbitrary caller thread
 - repeated teardown does not leave stale registration behind
 

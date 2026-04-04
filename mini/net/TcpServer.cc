@@ -5,6 +5,7 @@
 #include "mini/net/TcpConnection.h"
 
 #include <cstdint>
+#include <stdexcept>
 #include <utility>
 
 namespace mini::net {
@@ -62,6 +63,8 @@ TcpServer::TcpServer(EventLoop* loop, const InetAddress& listenAddr, std::string
       started_(false),
       nextConnId_(1),
       highWaterMark_(0),
+      backpressureHighWaterMark_(0),
+      backpressureLowWaterMark_(0),
       idleTimeout_(Duration::zero()),
       lifetimeToken_(std::make_shared<int>(0)) {
     acceptor_->setNewConnectionCallback(
@@ -88,6 +91,19 @@ void TcpServer::setThreadNum(int numThreads) {
 
 void TcpServer::setIdleTimeout(Duration timeout) {
     idleTimeout_ = timeout;
+}
+
+void TcpServer::setBackpressurePolicy(std::size_t highWaterMark, std::size_t lowWaterMark) {
+    if (highWaterMark == 0) {
+        if (lowWaterMark != 0) {
+            throw std::invalid_argument("backpressure low water mark requires a non-zero high water mark");
+        }
+    } else if (lowWaterMark >= highWaterMark) {
+        throw std::invalid_argument("backpressure low water mark must be smaller than high water mark");
+    }
+
+    backpressureHighWaterMark_ = highWaterMark;
+    backpressureLowWaterMark_ = lowWaterMark;
 }
 
 void TcpServer::setThreadInitCallback(ThreadInitCallback cb) {
@@ -162,6 +178,9 @@ void TcpServer::newConnection(int sockfd, const InetAddress& peerAddr) {
             cb(conn, buffer);
         }
     });
+    if (backpressureHighWaterMark_ > 0) {
+        connection->setBackpressurePolicy(backpressureHighWaterMark_, backpressureLowWaterMark_);
+    }
     if (highWaterMarkCallback_ && highWaterMark_ > 0) {
         connection->setHighWaterMarkCallback(highWaterMarkCallback_, highWaterMark_);
     }

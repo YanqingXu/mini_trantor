@@ -27,6 +27,7 @@ public:
 
     void setThreadNum(int numThreads);
     void setIdleTimeout(Duration timeout);
+    void setBackpressurePolicy(std::size_t highWaterMark, std::size_t lowWaterMark);
     void setThreadInitCallback(ThreadInitCallback cb);
     void setConnectionCallback(ConnectionCallback cb);
     void setMessageCallback(MessageCallback cb);
@@ -53,6 +54,8 @@ private:
     std::atomic<bool> started_;
     int nextConnId_;
     std::size_t highWaterMark_;
+    std::size_t backpressureHighWaterMark_;
+    std::size_t backpressureLowWaterMark_;
     Duration idleTimeout_;
     std::unordered_map<std::string, TcpConnectionPtr> connections_;
     std::shared_ptr<void> lifetimeToken_;

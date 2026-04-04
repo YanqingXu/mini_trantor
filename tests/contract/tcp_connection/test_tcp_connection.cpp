@@ -1,10 +1,12 @@
 #include "mini/coroutine/Task.h"
 #include "mini/net/Buffer.h"
 #include "mini/net/EventLoop.h"
+#include "mini/net/EventLoopThread.h"
 #include "mini/net/TcpConnection.h"
 
 #include <array>
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <future>
@@ -74,6 +76,132 @@ mini::coroutine::Task<void> suspendedRead(TcpConnectionPtr connection, bool* res
     std::string payload = co_await connection->asyncReadSome();
     assert(payload.empty());
     *resumed = true;
+}
+
+void testBackpressurePolicyRejectsInvalidThresholds() {
+    auto sockets = makeSocketPair();
+
+    mini::net::EventLoop loop;
+    auto connection = std::make_shared<mini::net::TcpConnection>(
+        &loop,
+        "socketpair#backpressure-invalid",
+        sockets[0],
+        mini::net::InetAddress(),
+        mini::net::InetAddress());
+
+    bool rejectedLowWithoutHigh = false;
+    try {
+        connection->setBackpressurePolicy(0, 1);
+    } catch (const std::invalid_argument& error) {
+        rejectedLowWithoutHigh = true;
+        assert(std::string_view(error.what()) == "backpressure low water mark requires a non-zero high water mark");
+    }
+    assert(rejectedLowWithoutHigh);
+
+    bool rejectedNonHysteresisPair = false;
+    try {
+        connection->setBackpressurePolicy(1024, 1024);
+    } catch (const std::invalid_argument& error) {
+        rejectedNonHysteresisPair = true;
+        assert(std::string_view(error.what()) == "backpressure low water mark must be smaller than high water mark");
+    }
+    assert(rejectedNonHysteresisPair);
+
+    connection.reset();
+    ::close(sockets[1]);
+}
+
+void testBackpressurePolicyPausesAndResumesReading() {
+    auto sockets = makeSocketPair();
+
+    const int senderFlags = ::fcntl(sockets[0], F_GETFL, 0);
+    assert(senderFlags >= 0);
+    assert(::fcntl(sockets[0], F_SETFL, senderFlags | O_NONBLOCK) == 0);
+
+    const int peerFlags = ::fcntl(sockets[1], F_GETFL, 0);
+    assert(peerFlags >= 0);
+    assert(::fcntl(sockets[1], F_SETFL, peerFlags | O_NONBLOCK) == 0);
+
+    const int sendBufferSize = 4096;
+    const int rc = ::setsockopt(
+        sockets[0],
+        SOL_SOCKET,
+        SO_SNDBUF,
+        &sendBufferSize,
+        static_cast<socklen_t>(sizeof(sendBufferSize)));
+    assert(rc == 0);
+
+    mini::net::EventLoopThread loopThread;
+    mini::net::EventLoop* loop = loopThread.startLoop();
+    auto connection = std::make_shared<mini::net::TcpConnection>(
+        loop,
+        "socketpair#backpressure-policy",
+        sockets[0],
+        mini::net::InetAddress(),
+        mini::net::InetAddress());
+
+    std::promise<void> firstHandled;
+    std::promise<void> secondHandled;
+    std::promise<void> closed;
+    auto firstHandledFuture = firstHandled.get_future();
+    auto secondHandledFuture = secondHandled.get_future();
+    auto closedFuture = closed.get_future();
+
+    connection->setBackpressurePolicy(1024, 512);
+    connection->setMessageCallback(
+        [&](const TcpConnectionPtr& conn, mini::net::Buffer* buffer) {
+            const std::string message = buffer->retrieveAllAsString();
+            if (message == "first") {
+                conn->send(std::string(1 << 20, 'x'));
+                firstHandled.set_value();
+                return;
+            }
+            if (message == "second") {
+                secondHandled.set_value();
+                conn->forceClose();
+            }
+        });
+    connection->setCloseCallback([loop, connection, &closed](const TcpConnectionPtr&) {
+        closed.set_value();
+        loop->queueInLoop([connection] { connection->connectDestroyed(); });
+        loop->quit();
+    });
+
+    loop->queueInLoop([connection] { connection->connectEstablished(); });
+
+    constexpr std::string_view firstPayload = "first";
+    const ssize_t firstWritten = ::write(sockets[1], firstPayload.data(), firstPayload.size());
+    assert(firstWritten == static_cast<ssize_t>(firstPayload.size()));
+    assert(firstHandledFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+
+    constexpr std::string_view secondPayload = "second";
+    const ssize_t secondWritten = ::write(sockets[1], secondPayload.data(), secondPayload.size());
+    assert(secondWritten == static_cast<ssize_t>(secondPayload.size()));
+    assert(secondHandledFuture.wait_for(std::chrono::milliseconds(150)) == std::future_status::timeout);
+
+    char buffer[8192];
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    std::size_t drainedBytes = 0;
+    while (secondHandledFuture.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready &&
+           std::chrono::steady_clock::now() < deadline) {
+        const ssize_t n = ::read(sockets[1], buffer, sizeof(buffer));
+        if (n > 0) {
+            drainedBytes += static_cast<std::size_t>(n);
+            continue;
+        }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+        break;
+    }
+
+    assert(drainedBytes > 0);
+    assert(secondHandledFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+    assert(closedFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+
+    connection.reset();
+    ::close(sockets[1]);
 }
 
 void testHighWaterMarkCallbackRunsOnOwnerLoop() {
@@ -494,7 +622,9 @@ void testSecondReadWaiterIsRejected() {
 }  // namespace
 
 int main() {
+    testBackpressurePolicyRejectsInvalidThresholds();
     testCallbackPathStillWorks();
+    testBackpressurePolicyPausesAndResumesReading();
     testForceCloseMarshalsBackToOwnerLoop();
     testHighWaterMarkCallbackRunsOnOwnerLoop();
     testReadAwaiterCrossThreadArmResumesOnOwnerLoopAndOnClose();
