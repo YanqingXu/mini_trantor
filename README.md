@@ -49,3 +49,31 @@ v1 分三段收口：
 - `rules/*`
 
 再开始生成或修改核心模块。
+
+## 构建与使用
+
+本项目现在支持标准 CMake 安装与 `find_package` 消费。
+
+构建并安装到本地前缀：
+
+```bash
+cmake -S . -B build
+cmake --build build
+cmake --install build --prefix ./build/_install
+```
+
+在外部工程中使用：
+
+```cmake
+find_package(mini_trantor CONFIG REQUIRED)
+
+add_executable(my_app main.cpp)
+target_link_libraries(my_app PRIVATE mini_trantor::mini_trantor)
+```
+
+头文件路径保持为：
+
+```cpp
+#include "mini/net/EventLoop.h"
+#include "mini/net/TcpServer.h"
+```
