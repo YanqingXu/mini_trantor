@@ -3,7 +3,7 @@
 ## 1. Intent
 EventLoop is the core event-dispatch engine bound to one thread.
 It waits for active I/O, dispatches Channel callbacks, executes queued tasks,
-and serves as the central scheduling point for future timer and coroutine extensions.
+and serves as the central scheduling point for timer and coroutine extensions.
 
 EventLoop is the heart of reactor execution in mini-trantor.
 
@@ -44,9 +44,9 @@ EventLoop is the heart of reactor execution in mini-trantor.
 
 ## 5. Collaboration
 - owns one Poller
+- owns one TimerQueue
 - coordinates with Channel objects for I/O event dispatch
-- later coordinates with TimerQueue
-- later provides scheduling point for coroutine awaiter resume
+- provides scheduling point for timer callbacks and coroutine awaiter resume
 - interacts with EventLoopThread / thread-pool wrappers in scaled mode
 
 ---
@@ -71,13 +71,17 @@ Typical API direction:
 - quit()
 - runInLoop(Functor)
 - queueInLoop(Functor)
+- runAt(Timestamp, Functor)
+- runAfter(Duration, Functor)
+- runEvery(Duration, Functor)
+- cancel(TimerId)
 - updateChannel(Channel*)
 - removeChannel(Channel*)
 - assertInLoopThread()
 - isInLoopThread()
 - wakeup()
 
-Additional APIs can be added later for timers/coroutines.
+Additional APIs can be added later for richer timer and coroutine features.
 
 ---
 
@@ -117,7 +121,6 @@ v1 should prefer predictable behavior over over-complicated generic error models
 ---
 
 ## 11. Future Extension Points
-- TimerQueue integration
 - coroutine awaiter scheduling
 - metrics/tracing hooks
 - idle strategy tuning

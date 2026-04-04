@@ -5,8 +5,10 @@
 
 #include "mini/base/Timestamp.h"
 #include "mini/base/noncopyable.h"
+#include "mini/net/TimerId.h"
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -17,10 +19,12 @@ namespace mini::net {
 
 class Channel;
 class Poller;
+class TimerQueue;
 
 class EventLoop : private mini::base::noncopyable {
 public:
     using Functor = std::function<void()>;
+    using TimerDuration = std::chrono::steady_clock::duration;
 
     EventLoop();
     ~EventLoop();
@@ -32,6 +36,10 @@ public:
 
     void runInLoop(Functor cb);
     void queueInLoop(Functor cb);
+    TimerId runAt(mini::base::Timestamp time, Functor cb);
+    TimerId runAfter(TimerDuration delay, Functor cb);
+    TimerId runEvery(TimerDuration interval, Functor cb);
+    void cancel(TimerId timerId);
 
     void wakeup();
     void updateChannel(Channel* channel);
@@ -54,6 +62,7 @@ private:
     const std::thread::id threadId_;
     mini::base::Timestamp pollReturnTime_;
     std::unique_ptr<Poller> poller_;
+    std::unique_ptr<TimerQueue> timerQueue_;
     int wakeupFd_;
     std::unique_ptr<Channel> wakeupChannel_;
     ChannelList activeChannels_;

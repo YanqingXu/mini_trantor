@@ -2,6 +2,7 @@
 
 #include "mini/net/Channel.h"
 #include "mini/net/Poller.h"
+#include "mini/net/TimerQueue.h"
 
 #include <cerrno>
 #include <cstdio>
@@ -36,6 +37,7 @@ EventLoop::EventLoop()
       callingPendingFunctors_(false),
       threadId_(std::this_thread::get_id()),
       poller_(Poller::newDefaultPoller(this)),
+      timerQueue_(std::make_unique<TimerQueue>(this)),
       wakeupFd_(createEventfd()),
       wakeupChannel_(std::make_unique<Channel>(this, wakeupFd_)),
       currentActiveChannel_(nullptr) {
@@ -124,6 +126,25 @@ void EventLoop::queueInLoop(Functor cb) {
     if (!isInLoopThread() || callingPendingFunctors_) {
         wakeup();
     }
+}
+
+TimerId EventLoop::runAt(mini::base::Timestamp time, Functor cb) {
+    return timerQueue_->addTimer(std::move(cb), time);
+}
+
+TimerId EventLoop::runAfter(TimerDuration delay, Functor cb) {
+    return timerQueue_->addTimer(std::move(cb), mini::base::now() + delay, TimerDuration::zero());
+}
+
+TimerId EventLoop::runEvery(TimerDuration interval, Functor cb) {
+    if (interval <= TimerDuration::zero()) {
+        throw std::invalid_argument("runEvery interval must be positive");
+    }
+    return timerQueue_->addTimer(std::move(cb), mini::base::now() + interval, interval);
+}
+
+void EventLoop::cancel(TimerId timerId) {
+    timerQueue_->cancel(timerId);
 }
 
 void EventLoop::wakeup() {

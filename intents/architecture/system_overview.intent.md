@@ -27,6 +27,7 @@ Its primary value is architectural correctness and evolvability.
 - Poller
 - EPollPoller
 - EventLoop
+- TimerQueue
 - Buffer
 - Acceptor
 - TcpConnection
@@ -37,7 +38,6 @@ Its primary value is architectural correctness and evolvability.
 - Task abstraction
 
 ### Deferred until after v1-coro-preview
-- TimerQueue
 - Async timers
 - Metrics/tracing hooks
 - Backpressure policies

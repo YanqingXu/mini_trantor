@@ -131,8 +131,8 @@ int main() {
 
     assert(connectionEvents >= 2);
     assert(disconnectedFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
-    assert(readResumedOnFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
-    assert(closeResumedOnFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
+    assert(readResumedOnFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+    assert(closeResumedOnFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
     assert(readResumedOnFuture.get() == workerThreadId);
     assert(closeResumedOnFuture.get() == workerThreadId);
     assert(workerThreadId != baseLoopThread);

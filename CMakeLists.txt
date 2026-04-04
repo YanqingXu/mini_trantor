@@ -16,6 +16,7 @@ add_library(mini_trantor
     mini/net/Poller.cc
     mini/net/EPollPoller.cc
     mini/net/EventLoop.cc
+    mini/net/TimerQueue.cc
     mini/net/Acceptor.cc
     mini/net/EventLoopThread.cc
     mini/net/EventLoopThreadPool.cc
