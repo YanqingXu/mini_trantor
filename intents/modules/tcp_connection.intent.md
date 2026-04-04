@@ -11,6 +11,7 @@ and callback/coroutine handoff points while preserving reactor semantics.
 - own connection-local socket/channel/buffer state
 - translate read/write/close/error events into unified connection state changes
 - expose send/shutdown APIs that preserve owner-thread execution
+- expose force-close style teardown entry that still converges on the same close path
 - coordinate coroutine waiters without bypassing EventLoop scheduling
 
 ---
@@ -42,6 +43,7 @@ and callback/coroutine handoff points while preserving reactor semantics.
 ## 6. Failure Semantics
 - fatal read/write errors should produce explicit teardown
 - repeated close/error handling should be guarded or idempotent
+- timeout-driven close should reuse the normal close path rather than inventing a side channel
 - disconnected state should block unsafe user-visible actions
 
 ---
@@ -56,6 +58,7 @@ and callback/coroutine handoff points while preserving reactor semantics.
 ## 8. Test Contracts
 - cross-thread send executes on owner loop thread
 - read/write error path converges on safe close handling
+- cross-thread force-close marshals back to the owner loop and converges on safe close handling
 - coroutine awaiters resume through EventLoop rather than arbitrary caller thread
 - repeated teardown does not leave stale registration behind
 

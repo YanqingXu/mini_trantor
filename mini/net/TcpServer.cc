@@ -4,9 +4,55 @@
 #include "mini/net/SocketsOps.h"
 #include "mini/net/TcpConnection.h"
 
+#include <cstdint>
 #include <utility>
 
 namespace mini::net {
+
+namespace {
+
+struct IdleTimeoutState {
+    EventLoop* loop;
+    std::weak_ptr<TcpConnection> connection;
+    TcpServer::Duration timeout;
+    TimerId timerId;
+    std::uint64_t generation{0};
+};
+
+void cancelIdleTimer(const std::shared_ptr<IdleTimeoutState>& idleState) {
+    if (!idleState || idleState->timeout <= TcpServer::Duration::zero()) {
+        return;
+    }
+
+    ++idleState->generation;
+    if (idleState->timerId.valid()) {
+        idleState->loop->cancel(idleState->timerId);
+        idleState->timerId = {};
+    }
+}
+
+void refreshIdleTimer(const std::shared_ptr<IdleTimeoutState>& idleState) {
+    if (!idleState || idleState->timeout <= TcpServer::Duration::zero()) {
+        return;
+    }
+
+    cancelIdleTimer(idleState);
+    const auto generation = idleState->generation;
+    idleState->timerId = idleState->loop->runAfter(idleState->timeout, [idleState, generation] {
+        if (idleState->generation != generation) {
+            return;
+        }
+        idleState->timerId = {};
+
+        auto connection = idleState->connection.lock();
+        if (!connection || !connection->connected()) {
+            return;
+        }
+        connection->forceClose();
+    });
+}
+
+}  // namespace
 
 TcpServer::TcpServer(EventLoop* loop, const InetAddress& listenAddr, std::string name, bool reusePort)
     : loop_(loop),
@@ -15,6 +61,8 @@ TcpServer::TcpServer(EventLoop* loop, const InetAddress& listenAddr, std::string
       threadPool_(std::make_shared<EventLoopThreadPool>(loop, name_)),
       started_(false),
       nextConnId_(1),
+      highWaterMark_(0),
+      idleTimeout_(Duration::zero()),
       lifetimeToken_(std::make_shared<int>(0)) {
     acceptor_->setNewConnectionCallback(
         [this](int sockfd, const InetAddress& peerAddr) { newConnection(sockfd, peerAddr); });
@@ -38,6 +86,10 @@ void TcpServer::setThreadNum(int numThreads) {
     threadPool_->setThreadNum(numThreads);
 }
 
+void TcpServer::setIdleTimeout(Duration timeout) {
+    idleTimeout_ = timeout;
+}
+
 void TcpServer::setThreadInitCallback(ThreadInitCallback cb) {
     threadInitCallback_ = std::move(cb);
 }
@@ -48,6 +100,11 @@ void TcpServer::setConnectionCallback(ConnectionCallback cb) {
 
 void TcpServer::setMessageCallback(MessageCallback cb) {
     messageCallback_ = std::move(cb);
+}
+
+void TcpServer::setHighWaterMarkCallback(HighWaterMarkCallback cb, std::size_t highWaterMark) {
+    highWaterMarkCallback_ = std::move(cb);
+    highWaterMark_ = highWaterMark;
 }
 
 void TcpServer::setWriteCompleteCallback(WriteCompleteCallback cb) {
@@ -76,14 +133,53 @@ void TcpServer::newConnection(int sockfd, const InetAddress& peerAddr) {
     const InetAddress localAddr(sockets::getLocalAddr(sockfd));
     auto connection = std::make_shared<TcpConnection>(ioLoop, connName, sockfd, localAddr, peerAddr);
     connections_[connName] = connection;
+    std::shared_ptr<IdleTimeoutState> idleState;
+    if (idleTimeout_ > Duration::zero()) {
+        idleState = std::make_shared<IdleTimeoutState>(IdleTimeoutState{
+            .loop = ioLoop,
+            .connection = connection,
+            .timeout = idleTimeout_,
+        });
+    }
 
-    connection->setConnectionCallback(connectionCallback_);
-    connection->setMessageCallback(messageCallback_);
-    connection->setWriteCompleteCallback(writeCompleteCallback_);
+    connection->setConnectionCallback([cb = connectionCallback_, idleState](const TcpConnectionPtr& conn) {
+        if (idleState != nullptr) {
+            if (conn->connected()) {
+                refreshIdleTimer(idleState);
+            } else {
+                cancelIdleTimer(idleState);
+            }
+        }
+        if (cb) {
+            cb(conn);
+        }
+    });
+    connection->setMessageCallback([cb = messageCallback_, idleState](const TcpConnectionPtr& conn, Buffer* buffer) {
+        if (idleState != nullptr) {
+            refreshIdleTimer(idleState);
+        }
+        if (cb) {
+            cb(conn, buffer);
+        }
+    });
+    if (highWaterMarkCallback_ && highWaterMark_ > 0) {
+        connection->setHighWaterMarkCallback(highWaterMarkCallback_, highWaterMark_);
+    }
+    connection->setWriteCompleteCallback([cb = writeCompleteCallback_, idleState](const TcpConnectionPtr& conn) {
+        if (idleState != nullptr) {
+            refreshIdleTimer(idleState);
+        }
+        if (cb) {
+            cb(conn);
+        }
+    });
     // Guard delayed close callbacks so worker-loop teardown never dereferences a dead TcpServer.
-    connection->setCloseCallback([this, lifetime](const TcpConnectionPtr& conn) {
+    connection->setCloseCallback([this, lifetime, idleState](const TcpConnectionPtr& conn) {
         if (!lifetime.lock()) {
             return;
+        }
+        if (idleState != nullptr) {
+            cancelIdleTimer(idleState);
         }
         removeConnection(conn);
     });

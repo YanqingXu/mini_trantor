@@ -10,6 +10,7 @@ It is the lifecycle boundary between listening infrastructure and per-connection
 - own Acceptor and EventLoopThreadPool collaboration
 - create TcpConnection on chosen loop
 - maintain connection map on base loop thread
+- optionally coordinate per-connection idle-timeout policy through owner-loop timers
 - remove connections safely during close/shutdown
 
 ---
@@ -25,6 +26,7 @@ It is the lifecycle boundary between listening infrastructure and per-connection
 - base loop owns connection map mutation
 - close/remove path must not dereference a destroyed TcpServer
 - connection creation and removal remain explicit and loop-safe
+- idle-timeout policy must not bypass connection owner-loop close semantics
 - shutdown should detach callbacks before asynchronous teardown continues
 
 ---
@@ -39,6 +41,7 @@ It is the lifecycle boundary between listening infrastructure and per-connection
 ## 6. Failure Semantics
 - worker-loop teardown should not leave stale entries in the base-loop map
 - shutdown should tolerate already-closing connections
+- idle timeout should converge on the normal connection close/remove path
 - callback lifetime must remain safe during server destruction
 
 ---
@@ -46,6 +49,7 @@ It is the lifecycle boundary between listening infrastructure and per-connection
 ## 7. Test Contracts
 - new connections are assigned to a loop and registered there
 - close callback removes the connection through the base loop
+- idle timeout closes quiet connections without skipping the normal removal path
 - destruction invalidates delayed removal callbacks safely
 
 ---

@@ -25,6 +25,7 @@ TcpConnection::TcpConnection(
       channel_(std::make_unique<Channel>(loop, sockfd)),
       localAddr_(localAddr),
       peerAddr_(peerAddr),
+      highWaterMark_(0),
       reading_(true) {
     channel_->setReadCallback([this](mini::base::Timestamp receiveTime) { handleRead(receiveTime); });
     channel_->setWriteCallback([this] { handleWrite(); });
@@ -85,6 +86,15 @@ void TcpConnection::shutdown() {
     }
 }
 
+void TcpConnection::forceClose() {
+    auto self = shared_from_this();
+    if (loop_->isInLoopThread()) {
+        forceCloseInLoop();
+    } else {
+        loop_->runInLoop([self] { self->forceCloseInLoop(); });
+    }
+}
+
 void TcpConnection::setTcpNoDelay(bool on) {
     socket_->setTcpNoDelay(on);
 }
@@ -95,6 +105,11 @@ void TcpConnection::setConnectionCallback(ConnectionCallback cb) {
 
 void TcpConnection::setMessageCallback(MessageCallback cb) {
     messageCallback_ = std::move(cb);
+}
+
+void TcpConnection::setHighWaterMarkCallback(HighWaterMarkCallback cb, std::size_t highWaterMark) {
+    highWaterMarkCallback_ = std::move(cb);
+    highWaterMark_ = highWaterMark;
 }
 
 void TcpConnection::setWriteCompleteCallback(WriteCompleteCallback cb) {
@@ -300,9 +315,15 @@ void TcpConnection::sendInLoop(const char* data, std::size_t len) {
     }
 
     if (!faultError && remaining > 0) {
+        const auto oldLen = outputBuffer_.readableBytes();
         outputBuffer_.append(data + nwrote, remaining);
         if (!channel_->isWriting()) {
             channel_->enableWriting();
+        }
+        const auto newLen = outputBuffer_.readableBytes();
+        if (highWaterMarkCallback_ && highWaterMark_ > 0 && oldLen < highWaterMark_ && newLen >= highWaterMark_) {
+            auto self = shared_from_this();
+            loop_->queueInLoop([self, cb = highWaterMarkCallback_, newLen] { cb(self, newLen); });
         }
     }
 }
@@ -311,6 +332,13 @@ void TcpConnection::shutdownInLoop() {
     loop_->assertInLoopThread();
     if (!channel_->isWriting()) {
         socket_->shutdownWrite();
+    }
+}
+
+void TcpConnection::forceCloseInLoop() {
+    loop_->assertInLoopThread();
+    if (state_ == kConnected || state_ == kDisconnecting) {
+        handleClose();
     }
 }
 

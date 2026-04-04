@@ -11,6 +11,7 @@
 #include "mini/net/Socket.h"
 
 #include <coroutine>
+#include <cstddef>
 #include <string>
 #include <string_view>
 
@@ -40,10 +41,12 @@ public:
     void send(std::string_view message);
     void send(const void* data, std::size_t len);
     void shutdown();
+    void forceClose();
     void setTcpNoDelay(bool on);
 
     void setConnectionCallback(ConnectionCallback cb);
     void setMessageCallback(MessageCallback cb);
+    void setHighWaterMarkCallback(HighWaterMarkCallback cb, std::size_t highWaterMark);
     void setWriteCompleteCallback(WriteCompleteCallback cb);
     void setCloseCallback(CloseCallback cb);
 
@@ -116,6 +119,7 @@ private:
 
     void sendInLoop(const char* data, std::size_t len);
     void shutdownInLoop();
+    void forceCloseInLoop();
     void setState(StateE state) noexcept;
 
     bool canReadImmediately(std::size_t minBytes) const noexcept;
@@ -139,8 +143,10 @@ private:
     Buffer outputBuffer_;
     ConnectionCallback connectionCallback_;
     MessageCallback messageCallback_;
+    HighWaterMarkCallback highWaterMarkCallback_;
     WriteCompleteCallback writeCompleteCallback_;
     CloseCallback closeCallback_;
+    std::size_t highWaterMark_;
     bool reading_;
     ReadAwaiterState readWaiter_;
     WriteAwaiterState writeWaiter_;

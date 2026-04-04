@@ -76,6 +76,110 @@ mini::coroutine::Task<void> suspendedRead(TcpConnectionPtr connection, bool* res
     *resumed = true;
 }
 
+void testHighWaterMarkCallbackRunsOnOwnerLoop() {
+    auto sockets = makeSocketPair();
+
+    const int flags = ::fcntl(sockets[0], F_GETFL, 0);
+    assert(flags >= 0);
+    assert(::fcntl(sockets[0], F_SETFL, flags | O_NONBLOCK) == 0);
+
+    const int sendBufferSize = 4096;
+    const int rc = ::setsockopt(
+        sockets[0],
+        SOL_SOCKET,
+        SO_SNDBUF,
+        &sendBufferSize,
+        static_cast<socklen_t>(sizeof(sendBufferSize)));
+    assert(rc == 0);
+
+    mini::net::EventLoopThread loopThread;
+    mini::net::EventLoop* loop = loopThread.startLoop();
+    auto connection = std::make_shared<mini::net::TcpConnection>(
+        loop,
+        "socketpair#high-water",
+        sockets[0],
+        mini::net::InetAddress(),
+        mini::net::InetAddress());
+
+    std::promise<std::pair<std::thread::id, std::size_t>> highWater;
+    auto highWaterFuture = highWater.get_future();
+    std::promise<void> closed;
+    auto closedFuture = closed.get_future();
+
+    connection->setHighWaterMarkCallback([&](const TcpConnectionPtr& conn, std::size_t bytes) {
+        assert(conn->getLoop()->isInLoopThread());
+        highWater.set_value({std::this_thread::get_id(), bytes});
+        conn->forceClose();
+    }, 1024);
+    connection->setCloseCallback([loop, connection, &closed](const TcpConnectionPtr&) {
+        closed.set_value();
+        loop->queueInLoop([connection] { connection->connectDestroyed(); });
+        loop->quit();
+    });
+
+    const auto callerThread = std::this_thread::get_id();
+    loop->queueInLoop([connection] {
+        connection->connectEstablished();
+        std::string payload(1 << 20, 'x');
+        connection->send(payload);
+    });
+
+    assert(highWaterFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+    const auto [firedThread, bytes] = highWaterFuture.get();
+    assert(firedThread != callerThread);
+    assert(bytes >= 1024);
+    assert(closedFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+
+    connection.reset();
+    ::close(sockets[1]);
+}
+
+void testForceCloseMarshalsBackToOwnerLoop() {
+    auto sockets = makeSocketPair();
+
+    mini::net::EventLoop loop;
+    auto connection = std::make_shared<mini::net::TcpConnection>(
+        &loop,
+        "socketpair#force-close",
+        sockets[0],
+        mini::net::InetAddress(),
+        mini::net::InetAddress());
+
+    int connectionEvents = 0;
+    bool closeCalled = false;
+    std::promise<void> closed;
+    auto closedFuture = closed.get_future();
+
+    connection->setConnectionCallback([&](const TcpConnectionPtr& conn) {
+        ++connectionEvents;
+        if (!conn->connected()) {
+            assert(conn->disconnected());
+        }
+    });
+    connection->setCloseCallback([&](const TcpConnectionPtr&) {
+        closeCalled = true;
+        closed.set_value();
+        loop.quit();
+    });
+
+    loop.runInLoop([&] { connection->connectEstablished(); });
+
+    std::thread closer([connection] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        connection->forceClose();
+    });
+
+    loop.loop();
+    closer.join();
+
+    assert(closeCalled);
+    assert(connectionEvents >= 2);
+    assert(closedFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
+
+    destroyConnectionOnLoop(loop, connection);
+    ::close(sockets[1]);
+}
+
 void testCallbackPathStillWorks() {
     auto sockets = makeSocketPair();
 
@@ -391,6 +495,8 @@ void testSecondReadWaiterIsRejected() {
 
 int main() {
     testCallbackPathStillWorks();
+    testForceCloseMarshalsBackToOwnerLoop();
+    testHighWaterMarkCallbackRunsOnOwnerLoop();
     testReadAwaiterCrossThreadArmResumesOnOwnerLoopAndOnClose();
     testReadAwaiterSuppressesMessageCallback();
     testWriteAndWaitClosedResumeOnOwnerLoop();

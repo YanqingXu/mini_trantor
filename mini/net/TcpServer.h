@@ -9,6 +9,7 @@
 #include "mini/net/EventLoopThreadPool.h"
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -19,13 +20,17 @@ class EventLoop;
 
 class TcpServer : private mini::base::noncopyable {
 public:
+    using Duration = std::chrono::steady_clock::duration;
+
     TcpServer(EventLoop* loop, const InetAddress& listenAddr, std::string name, bool reusePort = true);
     ~TcpServer();
 
     void setThreadNum(int numThreads);
+    void setIdleTimeout(Duration timeout);
     void setThreadInitCallback(ThreadInitCallback cb);
     void setConnectionCallback(ConnectionCallback cb);
     void setMessageCallback(MessageCallback cb);
+    void setHighWaterMarkCallback(HighWaterMarkCallback cb, std::size_t highWaterMark);
     void setWriteCompleteCallback(WriteCompleteCallback cb);
     std::size_t connectionCount() const;
 
@@ -42,10 +47,13 @@ private:
     std::shared_ptr<EventLoopThreadPool> threadPool_;
     ConnectionCallback connectionCallback_;
     MessageCallback messageCallback_;
+    HighWaterMarkCallback highWaterMarkCallback_;
     WriteCompleteCallback writeCompleteCallback_;
     ThreadInitCallback threadInitCallback_;
     std::atomic<bool> started_;
     int nextConnId_;
+    std::size_t highWaterMark_;
+    Duration idleTimeout_;
     std::unordered_map<std::string, TcpConnectionPtr> connections_;
     std::shared_ptr<void> lifetimeToken_;
 };
