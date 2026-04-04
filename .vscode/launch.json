@@ -2,10 +2,10 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "gdb: debug test_buffer",
+            "name": "gdb: debug current test file",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/test_buffer",
+            "program": "${workspaceFolder}/build/.vscode/current-test",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -13,33 +13,7 @@
             "externalConsole": false,
             "MIMode": "gdb",
             "miDebuggerPath": "/usr/bin/gdb",
-            "preLaunchTask": "CMake: build test_buffer (Debug)",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                },
-                {
-                    "description": "Set disassembly flavor to Intel",
-                    "text": "-gdb-set disassembly-flavor intel",
-                    "ignoreFailures": true
-                }
-            ]
-        },
-        {
-            "name": "gdb: debug test_tcp_server",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/test_tcp_server",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}",
-            "environment": [],
-            "externalConsole": false,
-            "MIMode": "gdb",
-            "miDebuggerPath": "/usr/bin/gdb",
-            "preLaunchTask": "CMake: build test_tcp_server (Debug)",
+            "preLaunchTask": "CMake: build current test (Debug)",
             "setupCommands": [
                 {
                     "description": "Enable pretty-printing for gdb",

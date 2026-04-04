@@ -28,3 +28,11 @@
 - 只跑 integration：`ctest --output-on-failure -L integration`
 
 也可以直接使用构建目标：`check-unit`、`check-contract`、`check-integration`、`check-tests`。
+
+## VSCode 断点调试
+
+- 打开任意一个 `tests/.../*.cpp` 测试文件
+- 选择 `gdb: debug current test file`
+- 按 `F5`，会先自动构建当前文件对应的 CMake 测试目标，再进入断点调试
+
+这个调试入口依赖当前活动编辑器文件路径来推导测试目标，因此需要从测试源文件本身发起调试。

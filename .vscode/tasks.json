@@ -15,35 +15,18 @@
             "problemMatcher": []
         },
         {
-            "label": "CMake: build test_buffer (Debug)",
+            "label": "CMake: build current test (Debug)",
             "type": "shell",
-            "command": "cmake",
+            "command": "bash",
             "args": [
-                "--build",
-                "${workspaceFolder}/build",
-                "--target",
-                "test_buffer"
+                "${workspaceFolder}/.vscode/prepare_test_debug.sh",
+                "${workspaceFolder}",
+                "${relativeFile}"
             ],
-            "dependsOn": "CMake: configure Debug",
-            "group": {
-                "kind": "build",
-                "isDefault": false
-            },
-            "problemMatcher": [
-                "$gcc"
-            ]
-        },
-        {
-            "label": "CMake: build test_tcp_server (Debug)",
-            "type": "shell",
-            "command": "cmake",
-            "args": [
-                "--build",
-                "${workspaceFolder}/build",
-                "--target",
-                "test_tcp_server"
+            "dependsOn": [
+                "CMake: configure Debug"
             ],
-            "dependsOn": "CMake: configure Debug",
+            "dependsOrder": "sequence",
             "group": {
                 "kind": "build",
                 "isDefault": true
