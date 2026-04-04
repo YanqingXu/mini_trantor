@@ -54,6 +54,11 @@ void TcpServer::setWriteCompleteCallback(WriteCompleteCallback cb) {
     writeCompleteCallback_ = std::move(cb);
 }
 
+std::size_t TcpServer::connectionCount() const {
+    loop_->assertInLoopThread();
+    return connections_.size();
+}
+
 void TcpServer::start() {
     bool expected = false;
     if (started_.compare_exchange_strong(expected, true)) {

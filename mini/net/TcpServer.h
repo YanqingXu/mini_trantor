@@ -27,6 +27,7 @@ public:
     void setConnectionCallback(ConnectionCallback cb);
     void setMessageCallback(MessageCallback cb);
     void setWriteCompleteCallback(WriteCompleteCallback cb);
+    std::size_t connectionCount() const;
 
     void start();
 
