@@ -240,6 +240,9 @@ void TcpConnection::handleWrite() {
 
 void TcpConnection::handleClose() {
     loop_->assertInLoopThread();
+    if (state_ == kDisconnected) {
+        return;
+    }
     setState(kDisconnected);
     channel_->disableAll();
     auto guardThis = shared_from_this();
