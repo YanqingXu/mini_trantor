@@ -81,6 +81,18 @@ void EventLoop::loop() {
         doPendingFunctors();
     }
 
+    while (true) {
+        bool hasPending = false;
+        {
+            std::lock_guard lock(mutex_);
+            hasPending = !pendingFunctors_.empty();
+        }
+        if (!hasPending) {
+            break;
+        }
+        doPendingFunctors();
+    }
+
     looping_ = false;
 }
 

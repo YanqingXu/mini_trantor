@@ -35,6 +35,7 @@ EventLoop is the heart of reactor execution in mini-trantor.
 - loop() runs only on owner thread
 - Poller is used only by owner thread
 - pending functors execute on owner thread
+- quit must not abandon already-queued pending functors
 - wakeup is used to interrupt blocking poll when needed
 - channel update/remove must respect EventLoop ownership
 - Poller lifetime does not exceed EventLoop lifetime
@@ -56,6 +57,9 @@ Default v1 loop direction:
 2. dispatch active channels
 3. execute pending functors
 4. repeat until quit requested
+
+If quit is observed, EventLoop may stop polling new iterations,
+but it should still drain already-queued pending functors before leaving loop().
 
 If this order changes, docs/tests/contracts must be updated.
 
@@ -106,6 +110,7 @@ EventLoop should explicitly handle:
 - invalid non-owner-thread mutation attempts
 - callback exceptions if exception policy exists
 - quit request while processing current iteration
+- queued functors that were already accepted before loop exit
 
 v1 should prefer predictable behavior over over-complicated generic error models.
 
@@ -128,6 +133,7 @@ These extensions must preserve EventLoop as the single-thread scheduling core.
 - cross-thread queueInLoop wakes blocked poll
 - quit causes safe loop exit
 - pending functors preserve expected execution semantics
+- quit still drains already-queued nested functors before loop exit
 - update/remove channel routes through correct Poller interaction path
 
 ---

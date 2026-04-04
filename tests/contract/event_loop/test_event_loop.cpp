@@ -103,5 +103,21 @@ int main() {
         loopOwner.join();
     }
 
+    {
+        mini::net::EventLoopThread loopThread;
+        mini::net::EventLoop* loop = loopThread.startLoop();
+
+        std::promise<void> nestedRan;
+        auto nestedFuture = nestedRan.get_future();
+
+        loop->queueInLoop([&] {
+            loop->queueInLoop([&] { nestedRan.set_value(); });
+            loop->quit();
+        });
+
+        const auto status = nestedFuture.wait_for(1s);
+        assert(status == std::future_status::ready);
+    }
+
     return 0;
 }

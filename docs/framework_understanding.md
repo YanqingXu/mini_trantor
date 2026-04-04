@@ -270,6 +270,7 @@
    - 通过 `loop_->runInLoop` 把 `acceptor_->listen()` 安排到 base loop 线程
 7. 调用 `loop.loop()`
 8. `EventLoop` 进入稳定运行态：`poll -> dispatch -> doPendingFunctors -> repeat`
+9. 如果 `quit()` 在某一轮内被请求，loop 会停止新的 poll 迭代，但仍会先清空已经入队的 pending functors，再真正退出
 
 ### 4.3 连接进入系统的过程
 
@@ -307,6 +308,7 @@
    - 恢复所有 waiters
    - 触发 connection callback
    - 触发 close callback
+   - 即使 close callback 触发了 `quit()`，已经入队的 waiter 恢复动作也必须在 loop 退出前被执行
 4. `TcpServer::removeConnection()` 把移除操作回流到 base loop
 5. base loop 从 `connections_` 擦除该连接
 6. io loop 上 `queueInLoop(connectDestroyed())`
@@ -391,6 +393,7 @@
 6. wakeup fd 可读，`handleRead()` 把计数读走
 7. 当前轮事件分发结束后，`doPendingFunctors()` 执行积压任务
 8. 任务最终在 owner loop 线程中运行
+9. 如果某个任务在退出过程中再入队了后续 functor，这些已接受的 functor 也应在 loop 真正退出前继续被 drain
 
 这条链路说明：跨线程不是直接改状态，而是“提交任务 + 打断 poll + 回 owner 线程执行”。
 
@@ -406,6 +409,7 @@
 8. 协程拿到消息后 `co_await asyncWrite(...)`
 9. 写完成后 `resumeWriteWaiterIfNeeded()` 恢复协程
 10. 如果连接关闭，`resumeAllWaitersOnClose()` 统一唤醒等待者
+11. 就算 close callback 随后请求 `quit()`，这些已入队的协程恢复动作也要先跑完
 
 这条链路最重要的点是：协程没有绕开 EventLoop，而是把“恢复”也纳入 EventLoop 调度。
 
@@ -544,6 +548,7 @@
 - `runInLoop/queueInLoop()`：跨线程回流 API
 - `wakeup()`：中断 poll
 - `doPendingFunctors()`：在 owner thread 冲刷任务队列
+- `quit()` 收尾：停止新一轮 poll 前，继续 drain 已接受的 pending functors
 - 构造/析构：建立并清理 wakeup fd 与 wakeup channel
 
 #### 7）阅读这个文件时应该重点看什么
@@ -553,7 +558,7 @@
 它看起来像“事件循环容器”，实际上它才是整个线程归属与执行上下文的边界。
 
 #### 9）如果我要修改/扩展这个文件，应该注意什么
-任何 timer、metrics、coroutine 恢复、优先级任务扩展都不能破坏当前的单线程 owner-loop 纪律。
+任何 timer、metrics、coroutine 恢复、优先级任务扩展都不能破坏当前的单线程 owner-loop 纪律，也不能让 `quit()` 丢弃已经入队的 functor。
 
 ### 文件：`mini/net/Channel.h` / `mini/net/Channel.cc`
 

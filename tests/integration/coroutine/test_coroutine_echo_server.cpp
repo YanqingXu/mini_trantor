@@ -16,6 +16,11 @@
 
 namespace {
 
+struct WorkerInfo {
+    mini::net::EventLoop* loop;
+    std::thread::id threadId;
+};
+
 uint16_t allocateTestPort() {
     const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
     assert(fd >= 0);
@@ -39,13 +44,15 @@ uint16_t allocateTestPort() {
 
 mini::coroutine::Task<void> echoSession(
     mini::net::TcpConnectionPtr connection,
-    std::promise<std::thread::id>* resumedOn) {
+    std::promise<std::thread::id>* readResumedOn,
+    std::promise<std::thread::id>* closeResumedOn) {
     std::string message = co_await connection->asyncReadSome();
-    resumedOn->set_value(std::this_thread::get_id());
+    readResumedOn->set_value(std::this_thread::get_id());
     if (!message.empty()) {
         co_await connection->asyncWrite(std::move(message));
     }
     co_await connection->waitClosed();
+    closeResumedOn->set_value(std::this_thread::get_id());
 }
 
 }  // namespace
@@ -58,23 +65,41 @@ int main() {
     mini::net::TcpServer server(&loop, mini::net::InetAddress(port, true), "test_coroutine_echo_server");
     server.setThreadNum(1);
 
+    std::promise<WorkerInfo> workerReady;
+    auto workerFuture = workerReady.get_future();
     int connectionEvents = 0;
     std::promise<void> disconnected;
     auto disconnectedFuture = disconnected.get_future();
-    std::promise<std::thread::id> sessionThread;
-    auto sessionThreadFuture = sessionThread.get_future();
+    std::promise<std::thread::id> readResumedOn;
+    auto readResumedOnFuture = readResumedOn.get_future();
+    std::promise<std::thread::id> closeResumedOn;
+    auto closeResumedOnFuture = closeResumedOn.get_future();
+    mini::net::EventLoop* workerLoop = nullptr;
+    std::thread::id workerThreadId;
+
+    server.setThreadInitCallback([&](mini::net::EventLoop* worker) {
+        workerReady.set_value(WorkerInfo{worker, std::this_thread::get_id()});
+    });
 
     server.setConnectionCallback([&](const mini::net::TcpConnectionPtr& connection) {
         ++connectionEvents;
         if (connection->connected()) {
-            echoSession(connection, &sessionThread).detach();
+            assert(connection->getLoop() == workerLoop);
+            assert(connection->getLoop()->isInLoopThread());
+            assert(std::this_thread::get_id() == workerThreadId);
+            echoSession(connection, &readResumedOn, &closeResumedOn).detach();
             return;
         }
+        assert(connection->getLoop() == workerLoop);
+        assert(std::this_thread::get_id() == workerThreadId);
         disconnected.set_value();
         loop.quit();
     });
 
     server.start();
+    const WorkerInfo worker = workerFuture.get();
+    workerLoop = worker.loop;
+    workerThreadId = worker.threadId;
 
     std::thread client([port] {
         const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
@@ -106,8 +131,11 @@ int main() {
 
     assert(connectionEvents >= 2);
     assert(disconnectedFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
-    assert(sessionThreadFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
-    assert(sessionThreadFuture.get() != baseLoopThread);
+    assert(readResumedOnFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
+    assert(closeResumedOnFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
+    assert(readResumedOnFuture.get() == workerThreadId);
+    assert(closeResumedOnFuture.get() == workerThreadId);
+    assert(workerThreadId != baseLoopThread);
 
     return 0;
 }

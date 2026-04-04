@@ -13,6 +13,7 @@ That thread is the only place where:
 - Poller wait/dispatch occurs
 - Channel registration changes occur
 - pending functors are flushed
+- already-queued pending functors are drained before loop exit
 - lifecycle-sensitive state transitions occur
 
 This is the primary concurrency discipline of the system.
@@ -58,6 +59,7 @@ Approved paths:
 ### queueInLoop(fn)
 - always enqueues
 - loop thread executes queued functions later
+- if fn was accepted before quit completes, it should still run on the owner loop thread
 
 ### wakeup()
 - interrupts blocked poll wait
@@ -79,6 +81,9 @@ v1 default direction:
 2. dispatch active channels
 3. execute pending functors
 4. repeat
+
+If quit is requested during an iteration, already-queued functors should still be drained
+before the loop fully exits.
 
 If this changes, related contracts/tests/docs must be updated.
 
