@@ -26,8 +26,7 @@ private:
     void threadFunc();
 
     EventLoop* loop_;
-    bool exiting_;
-    std::thread thread_;
+    std::jthread thread_;
     std::mutex mutex_;
     std::condition_variable condition_;
     ThreadInitCallback callback_;

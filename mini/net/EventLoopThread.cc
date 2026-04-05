@@ -5,21 +5,17 @@
 namespace mini::net {
 
 EventLoopThread::EventLoopThread(ThreadInitCallback callback, std::string name)
-    : loop_(nullptr), exiting_(false), callback_(std::move(callback)), name_(std::move(name)) {
+    : loop_(nullptr), callback_(std::move(callback)), name_(std::move(name)) {
 }
 
 EventLoopThread::~EventLoopThread() {
-    exiting_ = true;
     if (loop_ != nullptr) {
         loop_->quit();
-    }
-    if (thread_.joinable()) {
-        thread_.join();
     }
 }
 
 EventLoop* EventLoopThread::startLoop() {
-    thread_ = std::thread([this] { threadFunc(); });
+    thread_ = std::jthread([this] { threadFunc(); });
 
     EventLoop* loop = nullptr;
     {

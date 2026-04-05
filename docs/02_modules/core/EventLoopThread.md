@@ -24,9 +24,8 @@
       └── loop.loop()  ← 进入事件循环，直到 quit()
 
   析构 (EventLoopThread::~EventLoopThread):
-      exiting_ = true
-      loop_->quit()  ← 请求 worker 退出
-      thread_.join()  ← 等待 worker 线程结束
+      loop_->quit()    ← 请求 worker 退出（析构函数体）
+      ~std::jthread()  ← 自动 join，等待 worker 线程结束（成员析构）
 ```
 
 EventLoop 的生命周期**完全由 worker thread 的栈帧控制**，EventLoopThread 不持有 EventLoop 的所有权，只持有指向它的原始指针。
@@ -63,8 +62,7 @@ EventLoopThread 提供的保证：
 
 ```cpp
 EventLoop* loop_;           // 指向 worker thread 栈上的 EventLoop（不拥有）
-bool exiting_;              // 析构标志
-std::thread thread_;        // worker 线程（RAII，析构时 detach 或 join）
+std::jthread thread_;       // worker 线程（C++20，析构时自动 join）
 std::mutex mutex_;          // 保护 loop_ 的初始发布
 std::condition_variable condition_;  // 用于 creator 等待 loop 就绪
 ThreadInitCallback callback_;  // per-thread 初始化回调（可空）
@@ -75,9 +73,9 @@ std::string name_;          // 线程名称（调试用）
 
 | 对象 | 持有者 | 生命周期 |
 |------|--------|----------|
-| `EventLoop` | worker thread 栈帧 | `thread_.join()` 之前有效 |
-| `loop_` 指针 | EventLoopThread | `thread_.join()` 之前有效 |
-| `thread_` | EventLoopThread | 析构时 join |
+| `EventLoop` | worker thread 栈帧 | `~jthread()` 之前有效 |
+| `loop_` 指针 | EventLoopThread | `~jthread()` 之前有效 |
+| `thread_` | EventLoopThread | 析构时自动 join（`std::jthread`） |
 
 ---
 
@@ -87,7 +85,7 @@ std::string name_;          // 线程名称（调试用）
 
 ```cpp
 EventLoop* EventLoopThread::startLoop() {
-    thread_ = std::thread([this] { threadFunc(); });  // 启动 worker 线程
+    thread_ = std::jthread([this] { threadFunc(); });  // 启动 worker 线程
 
     EventLoop* loop = nullptr;
     {
@@ -134,27 +132,30 @@ void EventLoopThread::threadFunc() {
 
 ```cpp
 EventLoopThread::~EventLoopThread() {
-    exiting_ = true;
     if (loop_ != nullptr) {
-        loop_->quit();        // 请求 EventLoop 退出（跨线程安全，quit 使用 atomic）
+        loop_->quit();  // 请求 EventLoop 退出（跨线程安全，quit 使用 atomic）
     }
-    if (thread_.joinable()) {
-        thread_.join();       // 等待 worker 线程结束
-    }
+    // thread_（std::jthread）在此之后作为成员析构，自动 join
 }
 ```
 
-析构序列：
+析构序列（按 C++ 规则：析构函数体先执行，成员按声明逆序销毁）：
 ```
-~EventLoopThread()
-  → loop_->quit()
-      → EventLoop::quit_  = true（atomic）
+① ~EventLoopThread() 函数体：loop_->quit()
+      → EventLoop::quit_ = true（atomic）
       → wakeup()（写 eventfd，唤醒 epoll_wait）
-  → loop.loop() 检测到 quit_ == true，退出
-  → threadFunc 返回
-  → thread_.join() 返回
-  → EventLoop loop 析构（栈展开）
+② ~std::jthread()：自动 join（成员析构，声明顺序第 2 位）
+      → 等待 loop.loop() 检测到 quit_ == true 并退出
+      → threadFunc 返回
+      → join 完成
+③ EventLoop loop 析构（worker thread 栈展开）
+④ ~mutex_, ~condition_variable_, ~callback_, ~name_（逆序）
 ```
+
+**顺序为何正确**：`quit()` 在析构函数体中执行，早于 `~jthread()` 的自动 join。
+若顺序颠倒（先 join 再 quit），线程永远无法退出，造成死锁。
+`std::jthread` 的声明位置（第 2 个成员）不影响这个关键顺序，
+因为关键路径是「析构函数体」vs「成员析构」，而非两个成员之间的顺序。
 
 ---
 
@@ -191,7 +192,26 @@ EventLoop 在 `threadFunc` 的栈帧上。这意味着：
 
 这是 one-loop-one-thread 最干净的实现方式。
 
-### 7.2 loop_ 的 null 保护
+### 7.2 为什么使用 std::jthread 而非 std::thread
+
+`std::jthread`（C++20）相比 `std::thread` 的唯一使用目的是：
+**析构时自动 join**，无需显式 `if (thread_.joinable()) thread_.join()`。
+
+```cpp
+// std::thread 时代需要的防御代码（已删除）：
+// exiting_ = true;               // 仅写不读，死代码
+// if (thread_.joinable()) {      // joinable 检查
+//     thread_.join();            // 显式 join
+// }
+
+// std::jthread：析构函数体执行完后，成员析构自动 join，等效但更简洁
+```
+
+**未使用 std::jthread 的停止令牌（stop_token）机制**：
+`EventLoop::quit()` 已通过 `atomic<bool> + eventfd` 实现完整的跨线程停止信号路径，
+不需要 `request_stop()` / `stop_token`，引入它们只会产生职责重叠的噪声。
+
+### 7.3 loop_ 的 null 保护
 
 `threadFunc` 在 `loop.loop()` 返回后将 `loop_` 置 `nullptr`。
 `~EventLoopThread()` 检查 `if (loop_ != nullptr)` 再调用 `quit()`，
@@ -200,7 +220,7 @@ EventLoop 在 `threadFunc` 的栈帧上。这意味着：
 注意：这里存在一个极小的竞态窗口（loop 置空和 quit 调用之间），
 但由于 `quit()` 是 atomic + wakeup，多次调用幂等，不会产生实际问题。
 
-### 7.3 threadInitCallback 的时机
+### 7.4 threadInitCallback 的时机
 
 ```
 callback_(&loop)    ← 在 loop.loop() 之前
@@ -256,8 +276,7 @@ public:
 1. **condition variable 同步** → 无竞态的 loop 指针发布
 2. **callback 时机** → per-thread 初始化在 loop 启动前
 3. **loop_ 置 nullptr**（退出后） → 防析构后访问
-4. **exiting_ + quit + join** → 清洁析构语义
-5. **thread_.joinable() 检查** → 防 join 未启动的线程
+4. **quit + jthread 自动 join** → 清洁析构语义（`std::jthread` 替代显式 joinable + join）
 
 ---
 
