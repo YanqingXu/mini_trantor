@@ -2,6 +2,7 @@
 
 // TcpServer 协调 Acceptor、线程池和连接生命周期。
 // 连接映射由 base loop 线程维护，跨 loop 移除必须显式回流。
+// 可选支持 TLS：通过 enableSsl() 配置后，新连接自动执行 TLS 握手。
 
 #include "mini/base/noncopyable.h"
 #include "mini/net/Acceptor.h"
@@ -17,6 +18,7 @@
 namespace mini::net {
 
 class EventLoop;
+class TlsContext;
 
 class TcpServer : private mini::base::noncopyable {
 public:
@@ -29,6 +31,9 @@ public:
     void setIdleTimeout(Duration timeout);
     void setBackpressurePolicy(std::size_t highWaterMark, std::size_t lowWaterMark);
     void setThreadInitCallback(ThreadInitCallback cb);
+
+    /// Enable TLS for all new connections. Must be called before start().
+    void enableSsl(std::shared_ptr<TlsContext> tlsContext);
     void setConnectionCallback(ConnectionCallback cb);
     void setMessageCallback(MessageCallback cb);
     void setHighWaterMarkCallback(HighWaterMarkCallback cb, std::size_t highWaterMark);
@@ -59,6 +64,7 @@ private:
     Duration idleTimeout_;
     std::unordered_map<std::string, TcpConnectionPtr> connections_;
     std::shared_ptr<void> lifetimeToken_;
+    std::shared_ptr<TlsContext> tlsContext_;
 };
 
 }  // namespace mini::net

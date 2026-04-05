@@ -2,6 +2,7 @@
 
 // TcpConnection 表示一个绑定到单个 EventLoop 的 TCP 连接。
 // 它统一管理连接状态、缓冲区、Channel 回调和 coroutine 恢复入口。
+// 可选支持 TLS：通过 startTls() 激活后，read/write 透明走 SSL 路径。
 
 #include "mini/base/noncopyable.h"
 #include "mini/net/Buffer.h"
@@ -12,12 +13,17 @@
 
 #include <coroutine>
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <string_view>
+
+// Forward declarations for OpenSSL types
+typedef struct ssl_st SSL;
 
 namespace mini::net {
 
 class EventLoop;
+class TlsContext;
 
 class TcpConnection : public std::enable_shared_from_this<TcpConnection>, private mini::base::noncopyable {
 public:
@@ -44,6 +50,15 @@ public:
     void forceClose();
     void setTcpNoDelay(bool on);
     void setBackpressurePolicy(std::size_t highWaterMark, std::size_t lowWaterMark);
+
+    /// Enable TLS on this connection. Must be called before connectEstablished().
+    /// @param ctx TLS context (shared across connections)
+    /// @param isServer true for server-side (SSL_accept), false for client-side (SSL_connect)
+    /// @param hostname SNI hostname for client connections (empty to skip SNI)
+    void startTls(std::shared_ptr<TlsContext> ctx, bool isServer, const std::string& hostname = "");
+
+    /// Returns true if TLS handshake has completed.
+    bool isTlsEstablished() const noexcept;
 
     void setConnectionCallback(ConnectionCallback cb);
     void setMessageCallback(MessageCallback cb);
@@ -125,6 +140,12 @@ private:
     void applyBackpressurePolicy();
     void setState(StateE state) noexcept;
 
+    // TLS internal methods
+    enum TlsState { kTlsNone, kTlsHandshaking, kTlsEstablished, kTlsShuttingDown };
+    void doTlsHandshake();
+    ssize_t sslReadIntoBuffer(int* savedErrno);
+    ssize_t sslWriteFromBuffer(int* savedErrno);
+
     bool canReadImmediately(std::size_t minBytes) const noexcept;
     std::string consumeReadableBytes(std::size_t minBytes);
     void armReadWaiter(std::coroutine_handle<> handle, std::size_t minBytes);
@@ -156,6 +177,11 @@ private:
     ReadAwaiterState readWaiter_;
     WriteAwaiterState writeWaiter_;
     CloseAwaiterState closeWaiter_;
+
+    // TLS state
+    std::shared_ptr<TlsContext> tlsContext_;
+    SSL* ssl_ = nullptr;
+    TlsState tlsState_ = kTlsNone;
 };
 
 }  // namespace mini::net

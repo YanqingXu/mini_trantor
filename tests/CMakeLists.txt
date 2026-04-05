@@ -93,6 +93,16 @@ add_mini_test(
     ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_client/test_tcp_client.cpp
 )
 
+# --- TLS tests ---
+add_mini_test(unit tls ${CMAKE_CURRENT_SOURCE_DIR}/unit/tls/test_tls_context.cpp)
+add_mini_test(contract tls ${CMAKE_CURRENT_SOURCE_DIR}/contract/tls/test_tls_handshake.cpp)
+add_mini_test(integration tls ${CMAKE_CURRENT_SOURCE_DIR}/integration/tls/test_tls_echo.cpp)
+
+# TLS tests need SOURCE_DIR to locate test certificates
+foreach(tls_target unit_tls_test_tls_context contract_tls_test_tls_handshake integration_tls_test_tls_echo)
+    target_compile_definitions(${tls_target} PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+endforeach()
+
 get_property(unit_targets GLOBAL PROPERTY MINI_UNIT_TEST_TARGETS)
 get_property(contract_targets GLOBAL PROPERTY MINI_CONTRACT_TEST_TARGETS)
 get_property(integration_targets GLOBAL PROPERTY MINI_INTEGRATION_TEST_TARGETS)

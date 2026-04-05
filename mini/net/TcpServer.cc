@@ -3,6 +3,7 @@
 #include "mini/net/EventLoop.h"
 #include "mini/net/SocketsOps.h"
 #include "mini/net/TcpConnection.h"
+#include "mini/net/TlsContext.h"
 
 #include <cstdint>
 #include <stdexcept>
@@ -110,6 +111,10 @@ void TcpServer::setThreadInitCallback(ThreadInitCallback cb) {
     threadInitCallback_ = std::move(cb);
 }
 
+void TcpServer::enableSsl(std::shared_ptr<TlsContext> tlsContext) {
+    tlsContext_ = std::move(tlsContext);
+}
+
 void TcpServer::setConnectionCallback(ConnectionCallback cb) {
     connectionCallback_ = std::move(cb);
 }
@@ -203,7 +208,15 @@ void TcpServer::newConnection(int sockfd, const InetAddress& peerAddr) {
         removeConnection(conn);
     });
 
-    ioLoop->runInLoop([connection] { connection->connectEstablished(); });
+    if (tlsContext_) {
+        auto ctx = tlsContext_;
+        ioLoop->runInLoop([connection, ctx] {
+            connection->startTls(ctx, /*isServer=*/true);
+            connection->connectEstablished();
+        });
+    } else {
+        ioLoop->runInLoop([connection] { connection->connectEstablished(); });
+    }
 }
 
 void TcpServer::removeConnection(const TcpConnectionPtr& connection) {

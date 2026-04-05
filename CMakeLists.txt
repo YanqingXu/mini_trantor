@@ -10,6 +10,7 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 add_library(mini_trantor
     mini/net/InetAddress.cc
@@ -28,6 +29,7 @@ add_library(mini_trantor
     mini/net/TcpConnection.cc
     mini/net/TcpClient.cc
     mini/net/TcpServer.cc
+    mini/net/TlsContext.cc
 )
 
 add_library(mini_trantor::mini_trantor ALIAS mini_trantor)
@@ -39,7 +41,7 @@ target_include_directories(
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_compile_features(mini_trantor PUBLIC cxx_std_20)
-target_link_libraries(mini_trantor PUBLIC Threads::Threads)
+target_link_libraries(mini_trantor PUBLIC Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 
 add_executable(echo_server examples/echo_server/main.cpp)
 target_link_libraries(echo_server PRIVATE mini_trantor)

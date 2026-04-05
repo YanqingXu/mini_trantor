@@ -21,13 +21,15 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - ✅ `v2-alpha`：TcpClient 主链路稳定 — Connector（主动连接适配器）/ TcpClient / 可配置重连退避
 - ✅ `v2-beta`：async timer API 稳定 — `SleepAwaitable` 协程定时器桥接 / coroutine idle timeout 集成
 
-当前 28/28 测试全部通过（unit × 6 + contract × 13 + integration × 9）。
+### v3（进行中）
+- ✅ `v3-gamma`：TLS/SSL 集成完成 — TlsContext（RAII SSL_CTX 封装）/ TcpConnection 非阻塞 TLS 状态机 / TcpServer·TcpClient 的 `enableSsl()` API / OpenSSL 后端
 
-## 下一阶段方向（v3）
+当前 34/34 测试全部通过（unit × 9 + contract × 15 + integration × 10）。
 
-以下为 v2 完成后的候选演进方向，具体阶段边界待 intent 文档定义：
+## 下一阶段方向
 
-- **TLS/SSL 集成**：在 TCP 连接之上叠加安全传输层，扩展 TcpConnection 和 TcpClient
+以下为候选演进方向，具体阶段边界待 intent 文档定义：
+
 - **DNS resolver**：异步域名解析，与 EventLoop 调度语义集成
 - **结构化并发原语**：如 `whenAll` / `whenAny`，使多个 awaitable 可以组合等待
 
@@ -43,7 +45,7 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 ## 目录说明
 - `intents/`: 设计意图与模块宪法（architecture / modules / usecases）
 - `rules/`: 项目级约束规则（线程亲和、所有权、测试、编码、Review）
-- `mini/net/`: Reactor 核心实现（EventLoop、Channel、Poller、TcpConnection、TcpServer、TcpClient、Connector、TimerQueue 等）
+- `mini/net/`: Reactor 核心实现（EventLoop、Channel、Poller、TcpConnection、TcpServer、TcpClient、Connector、TimerQueue、TlsContext 等）
 - `mini/coroutine/`: 协程桥接层（`Task.h` 协程结果对象、`SleepAwaitable.h` 定时器 awaitable）
 - `mini/base/`: 基础工具（Timestamp、noncopyable）
 - `tests/`: 按 `unit/`、`contract/`、`integration/` 分层的测试
@@ -96,4 +98,26 @@ target_link_libraries(my_app PRIVATE mini_trantor::mini_trantor)
 #include "mini/net/TcpClient.h"
 #include "mini/coroutine/Task.h"
 #include "mini/coroutine/SleepAwaitable.h"
+#include "mini/net/TlsContext.h"
+```
+
+### TLS/SSL 使用示例
+
+```cpp
+#include "mini/net/TcpServer.h"
+#include "mini/net/TlsContext.h"
+
+// 服务端启用 TLS
+auto ctx = mini::net::TlsContext::newServerContext("server.crt", "server.key");
+mini::net::TcpServer server(&loop, listenAddr, "TlsServer");
+server.enableSsl(ctx);
+server.start();
+
+// 客户端启用 TLS
+auto clientCtx = mini::net::TlsContext::newClientContext();
+clientCtx->setCaCertPath("ca.crt");
+clientCtx->setVerifyPeer(true);
+mini::net::TcpClient client(&loop, serverAddr, "TlsClient");
+client.enableSsl(clientCtx, "hostname");
+client.connect();
 ```

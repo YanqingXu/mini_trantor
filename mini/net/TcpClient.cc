@@ -4,6 +4,7 @@
 #include "mini/net/EventLoop.h"
 #include "mini/net/SocketsOps.h"
 #include "mini/net/TcpConnection.h"
+#include "mini/net/TlsContext.h"
 
 #include <cassert>
 #include <cstdio>
@@ -76,6 +77,11 @@ bool TcpClient::retry() const noexcept {
     return retry_;
 }
 
+void TcpClient::enableSsl(std::shared_ptr<TlsContext> tlsContext, std::string hostname) {
+    tlsContext_ = std::move(tlsContext);
+    tlsHostname_ = std::move(hostname);
+}
+
 const std::string& TcpClient::name() const noexcept {
     return name_;
 }
@@ -119,6 +125,9 @@ void TcpClient::newConnection(int sockfd) {
         connection_ = conn;
     }
 
+    if (tlsContext_) {
+        conn->startTls(tlsContext_, /*isServer=*/false, tlsHostname_);
+    }
     conn->connectEstablished();
 }
 
