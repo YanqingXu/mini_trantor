@@ -22,9 +22,11 @@ add_library(mini_trantor
     mini/net/EventLoop.cc
     mini/net/TimerQueue.cc
     mini/net/Acceptor.cc
+    mini/net/Connector.cc
     mini/net/EventLoopThread.cc
     mini/net/EventLoopThreadPool.cc
     mini/net/TcpConnection.cc
+    mini/net/TcpClient.cc
     mini/net/TcpServer.cc
 )
 

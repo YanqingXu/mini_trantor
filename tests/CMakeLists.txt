@@ -23,8 +23,10 @@ add_mini_test(unit buffer ${CMAKE_CURRENT_SOURCE_DIR}/unit/buffer/test_buffer.cp
 add_mini_test(unit channel ${CMAKE_CURRENT_SOURCE_DIR}/unit/channel/test_channel.cpp)
 add_mini_test(unit coroutine ${CMAKE_CURRENT_SOURCE_DIR}/unit/coroutine/test_task.cpp)
 add_mini_test(unit timer_queue ${CMAKE_CURRENT_SOURCE_DIR}/unit/timer_queue/test_timer_id.cpp)
+add_mini_test(unit connector ${CMAKE_CURRENT_SOURCE_DIR}/unit/connector/test_connector.cpp)
 
 add_mini_test(contract acceptor ${CMAKE_CURRENT_SOURCE_DIR}/contract/acceptor/test_acceptor.cpp)
+add_mini_test(contract connector ${CMAKE_CURRENT_SOURCE_DIR}/contract/connector/test_connector.cpp)
 add_mini_test(contract buffer ${CMAKE_CURRENT_SOURCE_DIR}/contract/buffer/test_buffer_contract.cpp)
 add_mini_test(contract channel ${CMAKE_CURRENT_SOURCE_DIR}/contract/channel/test_channel_contract.cpp)
 add_mini_test(contract event_loop ${CMAKE_CURRENT_SOURCE_DIR}/contract/event_loop/test_event_loop.cpp)
@@ -42,6 +44,7 @@ add_mini_test(
     event_loop_thread_pool
     ${CMAKE_CURRENT_SOURCE_DIR}/contract/event_loop_thread_pool/test_event_loop_thread_pool.cpp
 )
+add_mini_test(contract tcp_client ${CMAKE_CURRENT_SOURCE_DIR}/contract/tcp_client/test_tcp_client.cpp)
 
 add_mini_test(integration tcp_server ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_server/test_tcp_server.cpp)
 add_mini_test(
@@ -73,6 +76,11 @@ add_mini_test(
     integration
     timer_queue
     ${CMAKE_CURRENT_SOURCE_DIR}/integration/timer_queue/test_timer_queue_integration.cpp
+)
+add_mini_test(
+    integration
+    tcp_client
+    ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_client/test_tcp_client.cpp
 )
 
 get_property(unit_targets GLOBAL PROPERTY MINI_UNIT_TEST_TARGETS)
