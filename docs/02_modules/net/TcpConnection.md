@@ -2,448 +2,480 @@
 
 ## 1. 类定位
 
-* **角色**：整个网络库中**最复杂的类**，一个 TCP 连接的全部生命周期管理者
-* **层级**：Net 层（面向用户的核心抽象）
-* 统一管理连接状态、Socket、Channel、Buffer、回调、协程唤醒、TLS、背压
+* **角色**：单个 TCP 连接的**核心承载体**，统一管理连接状态、缓冲区、Channel 事件和 coroutine 恢复入口
+* **层级**：Net 应用层（坐落在 Reactor 核心层之上）
+* 继承 `enable_shared_from_this`，生命周期由 `shared_ptr` 管理
 
 ```
-用户代码
-   │
-   ├── onConnection(conn)     → 连接/断开通知
-   ├── onMessage(conn, buf)   → 收到数据
-   ├── conn->send(data)       → 发送数据
-   ├── co_await conn->asyncReadSome()  → 协程读
-   └── co_await conn->asyncWrite(data) → 协程写
-          │
-          ▼
-    ┌────────────────────────────────┐
-    │        TcpConnection           │ ◄── 本文主角
-    │  state_ / socket_ / channel_   │
-    │  inputBuffer_ / outputBuffer_  │
-    │  readWaiter_ / writeWaiter_    │
-    │  ssl_ / tlsState_              │
-    └────────────────────────────────┘
+         TcpServer (base loop)
+               │ 构造 + connectEstablished
+               ▼
+         TcpConnection  ──── std::shared_ptr ────► 用户持有
+               │
+       ┌───────┼──────────┐
+       │       │          │
+    Socket   Channel   Buffer×2
+     (fd)   (epoll)   (in/out)
+       │       │
+       └───────┴──► ioLoop (owner loop)
 ```
+
+TcpConnection **不拥有 EventLoop**，但**绑定到唯一一个 ioLoop**，所有状态变更都在该 loop 线程执行。
+
+---
 
 ## 2. 解决的问题
 
-**核心问题**：如何在单线程 Reactor 模型中安全地管理一个 TCP 连接的完整生命周期？
-
-需要解决：
-1. **状态管理**：连接从建立到关闭的四态切换
-2. **读写缓冲**：非阻塞 I/O 下的数据缓冲和拼接
-3. **跨线程发送**：用户可能在任意线程调用 `send()`
-4. **生命周期安全**：回调和协程恢复时连接可能已被销毁
-5. **协程桥接**：非侵入式地将 reactor 事件转为 co_await
-6. **TLS 透明支持**：read/write 路径自动选择明文或 SSL
+**核心问题**：TCP 连接有生命周期（connecting → connected → disconnecting → disconnected），读写、关闭、错误都可能在不同时机发生。如何在单线程模型下安全地管理？
 
 如果没有 TcpConnection：
-- 用户需要自己管理 fd + channel + buffer + 状态
-- 跨线程 send 需要自己实现 runInLoop
-- 关闭和错误处理需要分散在各处
+- 每个连接的状态（fd/buffer/callbacks）分散在回调函数中 → 无法保证原子性关闭
+- 跨线程 send 需要手动 marshal → 容易数据竞争
+- close 和 error 可能走不同路径 → 双重 close fd 或遗漏 epoll 注销
+- 没有 shared_ptr 保护 → 回调期间对象已销毁
+
+TcpConnection 的设计价值：
+1. **状态机**：4 个状态严格约束操作合法性
+2. **Loop 线程亲和**：所有 handle* 方法 + sendInLoop + shutdownInLoop 在 loop 线程
+3. **跨线程安全 send**：自动检测线程，非 loop 线程则 copy + runInLoop
+4. **统一关闭路径**：close/error/shutdown 都收敛到 `handleClose()`
+5. **coroutine 集成**：三种 awaitable 不绕过 EventLoop 调度
+
+---
 
 ## 3. 对外接口（API）
 
-### 用户调用
+### 用户（业务层）调用
 
-| 方法 | 用途 | 线程安全 |
-|------|------|----------|
-| `send(data)` | 发送数据 | 跨线程安全 |
-| `shutdown()` | 优雅关闭（half-close） | 跨线程安全 |
-| `forceClose()` | 强制关闭 | 跨线程安全 |
-| `connected()` / `disconnected()` | 查询状态 | 任意线程 |
-| `setTcpNoDelay(on)` | 设置 TCP_NODELAY | 任意线程 |
-| `setContext(any)` / `getContext()` | 附加用户数据 | 仅 loop 线程 |
-| `setBackpressurePolicy(hi, lo)` | 设置背压策略 | 跨线程安全 |
+| 方法 | 线程安全 | 用途 |
+|------|----------|------|
+| `send(string_view)` | 跨线程安全 | 发送数据 |
+| `send(void*, len)` | 跨线程安全 | 发送数据（原始指针版） |
+| `shutdown()` | 跨线程安全 | 优雅关闭（半关，等写完） |
+| `forceClose()` | 跨线程安全 | 强制关闭（立即） |
+| `setTcpNoDelay(bool)` | loop 线程 | 设置 TCP_NODELAY |
+| `setBackpressurePolicy(high, low)` | 跨线程安全 | 配置背压策略 |
+| `setContext(any)` / `getContext()` | loop 线程 | 挂载业务上下文 |
 
-### 协程接口
+### TLS 支持
 
-| 方法 | 用途 |
-|------|------|
-| `asyncReadSome(minBytes)` | 协程读，返回 ReadAwaitable |
-| `asyncWrite(data)` | 协程写，返回 WriteAwaitable |
-| `waitClosed()` | 协程等待关闭，返回 CloseAwaitable |
+| 方法 | 线程安全 | 用途 |
+|------|----------|------|
+| `startTls(ctx, isServer, hostname)` | loop 线程 | 激活 TLS，必须在 connectEstablished 前 |
+| `isTlsEstablished()` | loop 线程 | 查询握手是否完成 |
 
-### 回调设置（由 TcpServer/TcpClient 调用）
+### 回调设置（TcpServer 注入）
 
-| 方法 | 回调时机 |
+| 方法 | 触发时机 |
 |------|----------|
-| `setConnectionCallback` | 连接建立/断开 |
-| `setMessageCallback` | 收到数据 |
-| `setWriteCompleteCallback` | outputBuffer 清空 |
-| `setHighWaterMarkCallback` | outputBuffer 超过阈值 |
-| `setCloseCallback` | 连接关闭（内部用，TcpServer 设置） |
+| `setConnectionCallback(cb)` | 连接建立或断开 |
+| `setMessageCallback(cb)` | 收到数据 |
+| `setHighWaterMarkCallback(cb, mark)` | outputBuffer 超高水位 |
+| `setWriteCompleteCallback(cb)` | outputBuffer 清空 |
+| `setCloseCallback(cb)` | 连接关闭（TcpServer 用此移除连接） |
 
-### 内部接口
+### 生命周期控制（TcpServer 调用）
 
-| 方法 | 调用者 |
-|------|--------|
-| `connectEstablished()` | TcpServer/TcpClient |
-| `connectDestroyed()` | TcpServer/TcpClient |
-| `startTls(ctx, isServer)` | TcpServer/TcpClient |
+| 方法 | 调用者 | 用途 |
+|------|--------|------|
+| `connectEstablished()` | TcpServer（ioLoop） | 正式建立连接，tie Channel |
+| `connectDestroyed()` | TcpServer（ioLoop） | 彻底销毁，移除 Channel |
+
+### Coroutine Awaitables
+
+| 方法 | 功能 |
+|------|------|
+| `asyncReadSome(minBytes)` | co_await 等待读取至少 minBytes 字节 |
+| `asyncWrite(data)` | co_await 等待写完成 |
+| `waitClosed()` | co_await 等待连接关闭 |
+
+---
 
 ## 4. 核心成员变量
 
 ```cpp
-// ===== 基础 =====
-EventLoop* loop_;                        // 绑定的 EventLoop（不拥有）
-std::string name_;                       // 连接名称 "ServerName#1"
-StateE state_;                           // kConnecting → kConnected → kDisconnecting → kDisconnected
+// ===== 线程亲和 =====
+EventLoop* loop_;                   // owner loop（ioLoop），不拥有
 
-// ===== I/O 三件套 =====
-std::unique_ptr<Socket> socket_;         // 拥有 fd，析构时 close(fd)
-std::unique_ptr<Channel> channel_;       // fd 的事件订阅和分发
-Buffer inputBuffer_;                     // 接收缓冲区
-Buffer outputBuffer_;                    // 发送缓冲区
+// ===== 连接状态 =====
+std::string name_;                  // 唯一名称（base loop 分配）
+StateE state_;                      // kConnecting/kConnected/kDisconnecting/kDisconnected
+bool reading_;                      // 是否正在读取（背压暂停时为 false）
 
-// ===== 地址 =====
-InetAddress localAddr_;                  // 本端地址
-InetAddress peerAddr_;                   // 对端地址
+// ===== 网络资源 =====
+std::unique_ptr<Socket> socket_;    // RAII fd 包装（析构时 close）
+std::unique_ptr<Channel> channel_;  // fd 的事件代理（绑定到 ioLoop）
+InetAddress localAddr_, peerAddr_;
 
-// ===== 用户回调 =====
+// ===== 缓冲区 =====
+Buffer inputBuffer_;                // 入站字节缓冲
+Buffer outputBuffer_;               // 出站字节缓冲（write 不完时暂存）
+
+// ===== 回调 =====
 ConnectionCallback connectionCallback_;
 MessageCallback messageCallback_;
 HighWaterMarkCallback highWaterMarkCallback_;
 WriteCompleteCallback writeCompleteCallback_;
-CloseCallback closeCallback_;            // 内部回调，由 TcpServer 设置
+CloseCallback closeCallback_;       // ⟵ TcpServer 用此清理 connections_ 映射
 
 // ===== 背压 =====
-std::size_t highWaterMark_;              // 高水位回调阈值
-std::size_t backpressureHighWaterMark_;  // 背压策略高水位
-std::size_t backpressureLowWaterMark_;   // 背压策略低水位
-bool reading_;                           // 当前是否在读（背压可能暂停读取）
-
-// ===== 协程 =====
-ReadAwaiterState readWaiter_;            // { handle, minBytes, active }
-WriteAwaiterState writeWaiter_;          // { handle, active }
-CloseAwaiterState closeWaiter_;          // { handle, active }
+std::size_t highWaterMark_;         // 触发 highWaterMarkCallback 的阈值
+std::size_t backpressureHighWaterMark_;  // 触发读暂停的阈值
+std::size_t backpressureLowWaterMark_;   // 恢复读取的阈值
 
 // ===== TLS =====
-std::shared_ptr<TlsContext> tlsContext_; // TLS 上下文（多连接共享）
-SSL* ssl_ = nullptr;                    // OpenSSL 连接对象（独占）
-TlsState tlsState_ = kTlsNone;          // kTlsNone → kTlsHandshaking → kTlsEstablished
+TlsState tlsState_;                 // kTlsNone/kTlsHandshaking/kTlsEstablished/kTlsShuttingDown
+std::shared_ptr<TlsContext> tlsContext_;
+SSL* ssl_;                          // OpenSSL session（裸指针，析构时 SSL_free）
 
-// ===== 扩展 =====
-std::any context_;                       // 用户上下文（如 HttpContext）
+// ===== Coroutine waiters =====
+ReadAwaiterState readWaiter_;       // 当前等待的读协程
+WriteAwaiterState writeWaiter_;     // 当前等待的写协程
+CloseAwaiterState closeWaiter_;     // 当前等待关闭的协程
+
+// ===== 背景说明 =====
+std::any context_;                  // 用户自定义上下文（透明存储）
 ```
 
-## 5. 执行流程（最重要）
+---
 
-### 5.1 状态机
+## 5. 执行流程（关键路径）
 
-```
-         connectEstablished()      shutdown()         handleClose()
-              ┌──────┐           ┌──────────┐        ┌──────────┐
-              │      ▼           │          ▼        │          ▼
-kConnecting ──┴─► kConnected ───┴─► kDisconnecting ──┴─► kDisconnected
-    │                                                       │
-    │              forceClose() ─────────────────────────────┘
-    │              handleError() ────────────────────────────┘
-```
-
-### 5.2 建立连接
+### 5.1 连接状态机
 
 ```
-TcpServer::newConnection(sockfd, peerAddr)
-  → new TcpConnection(ioLoop, name, sockfd, localAddr, peerAddr)
-  │   ├─ state_ = kConnecting
-  │   ├─ socket_ = Socket(sockfd)
-  │   ├─ channel_ = Channel(loop, sockfd)
-  │   └─ channel_ 设置 read/write/close/error 回调
-  │
-  → ioLoop->runInLoop([conn] { conn->connectEstablished(); })
-
-connectEstablished():     // 在 ioLoop 线程执行
-  ├─ setState(kConnected)
-  ├─ channel_->tie(shared_from_this())     // 生命周期保护
-  ├─ channel_->enableReading()             // 开始监听 EPOLLIN
-  ├─ applyBackpressurePolicy()
-  └─ connectionCallback_(shared_from_this())  // 通知用户
+              构造
+               │ state_ = kConnecting
+               ▼
+         connectEstablished()
+               │ state_ = kConnected
+               │ channel_->tie(shared_from_this())
+               │ channel_->enableReading()
+               │ connectionCallback_(connected)
+               ▼
+         [正常收发阶段]
+               │
+        ┌──────┴──────┐
+        │             │
+    shutdown()    forceClose()
+        │             │
+ state_=kDisconnecting │
+        │             │
+    handleWrite()     │
+    （等输出清空）      │
+        │             │
+        └──────┬──────┘
+               ▼
+          handleClose()
+               │ state_ = kDisconnected
+               │ channel_->disableAll()
+               │ connectionCallback_(disconnected)
+               │ closeCallback_()  ──► TcpServer::removeConnection
+               ▼
+         connectDestroyed()  (由 TcpServer 在 ioLoop 调用)
+               │ channel_->remove()
+               │ TcpConnection 析构（shared_ptr 引用为 0）
 ```
 
-### 5.3 接收数据
+### 5.2 数据接收（handleRead）
 
-```
-epoll_wait → EPOLLIN → Channel::handleEvent → TcpConnection::handleRead
+```cpp
+void TcpConnection::handleRead(Timestamp) {
+    loop_->assertInLoopThread();
+    int savedErrno = 0;
+    ssize_t n = inputBuffer_.readFd(channel_->fd(), &savedErrno);
 
-handleRead():
-  ├─ TLS 握手中? → doTlsHandshake(); return
-  │
-  ├─ 记录当前是否有 readWaiter_
-  │
-  ├─ ssl_ ? sslReadIntoBuffer() : inputBuffer_.readFd()
-  │
-  ├─ n > 0:
-  │   ├─ resumeReadWaiterIfNeeded()        // 恢复挂起的协程
-  │   └─ if (messageCallback_ && !hasReadWaiter):
-  │       messageCallback_(this, &inputBuffer_)  // 通知用户
-  │
-  ├─ n == 0: handleClose()                 // 对端关闭
-  │
-  ├─ n == -2: /* SSL WANT_READ, ignore */
-  │
-  └─ n < 0: handleError(savedErrno)
+    if (n > 0) {
+        resumeReadWaiterIfNeeded();          // 唤醒 co_await asyncReadSome
+        if (messageCallback_ && !hasReadWaiter) {
+            messageCallback_(shared_from_this(), &inputBuffer_);
+        }
+    } else if (n == 0) {
+        handleClose();                       // 对端关闭（read 返回 0）
+    } else {
+        handleError(savedErrno);             // 读错误 → 同样走 handleClose
+    }
+}
 ```
 
-**协程与回调的互斥**：如果有活跃的 readWaiter（协程在等待），
-则不调用 messageCallback_，数据只给协程消费。
+### 5.3 数据发送（send → sendInLoop）
 
-### 5.4 发送数据
+```cpp
+void TcpConnection::send(const void* data, size_t len) {
+    if (state_ != kConnected) return;
 
-```
-conn->send(data)
-  ├─ isInLoopThread()? → sendInLoop(data) 直接执行
-  └─ else → runInLoop(sendInLoop(copy_of_data))  // 拷贝数据到 loop 线程
-
-sendInLoop(data, len):
-  ├─ state_ == kDisconnected? return
-  │
-  ├─ outputBuffer 为空且 Channel 未写? → 尝试直接 write
-  │   ├─ 全部写完 → writeCompleteCallback + resumeWriteWaiter + return
-  │   └─ 部分写入或 EAGAIN → 继续
-  │
-  ├─ faultError? → handleError; return
-  │
-  └─ 有剩余数据:
-      ├─ outputBuffer_.append(data + nwrote, remaining)
-      ├─ channel_->enableWriting()         // 订阅 EPOLLOUT
-      ├─ 检查 highWaterMark 回调
-      └─ applyBackpressurePolicy()
+    if (loop_->isInLoopThread()) {
+        sendInLoop(data, len);    // 直接执行
+    } else {
+        // 跨线程：copy payload 后 runInLoop
+        auto self = shared_from_this();
+        std::string payload(data, len);
+        loop_->runInLoop([self, payload = std::move(payload)]() mutable {
+            self->sendInLoop(payload.data(), payload.size());
+        });
+    }
+}
 ```
 
-**直接写优化**：如果 outputBuffer 为空，先尝试直接 `write()`/`SSL_write()`。
-大部分情况下数据能一次性写完，避免了不必要的 epoll_ctl 调用。
-
-### 5.5 handleWrite
-
 ```
-epoll_wait → EPOLLOUT → handleWrite()
-  ├─ TLS 握手中? → doTlsHandshake(); return
-  ├─ 未在写? → return
-  │
-  ├─ ssl_ ? sslWriteFromBuffer() : outputBuffer_.writeFd()
-  │
-  ├─ n > 0:
-  │   ├─ retrieve 已写数据
-  │   ├─ applyBackpressurePolicy()
-  │   └─ outputBuffer 清空?
-  │       ├─ channel_->disableWriting()    // 取消 EPOLLOUT
-  │       ├─ writeCompleteCallback()
-  │       ├─ resumeWriteWaiterIfNeeded()   // 恢复写协程
-  │       └─ state_ == kDisconnecting? → shutdownInLoop()
-  │
-  └─ n <= 0 && 不是 EAGAIN: handleError()
+sendInLoop 的三段逻辑：
+┌─────────────────────────────────────────────────────┐
+│ 1. outputBuffer 空且未在写                           │
+│    → 直接 ::write(fd, data, len)                    │
+│    → 若写完：queueInLoop(writeCompleteCallback)      │
+│    → 若未写完：转 2                                  │
+├─────────────────────────────────────────────────────┤
+│ 2. 还有剩余数据：append 到 outputBuffer               │
+│    → channel_->enableWriting()（订阅 EPOLLOUT）      │
+│    → 若超高水位：queueInLoop(highWaterMarkCallback)  │
+├─────────────────────────────────────────────────────┤
+│ 3. handleWrite 由 EPOLLOUT 触发                      │
+│    → writeFd 写出 outputBuffer                      │
+│    → 写完：disableWriting，唤醒写协程                 │
+│    → 若 kDisconnecting：shutdownInLoop              │
+└─────────────────────────────────────────────────────┘
 ```
 
-### 5.6 关闭连接
+### 5.4 关闭路径（统一收敛到 handleClose）
 
 ```
-handleClose():
-  ├─ state_ == kDisconnected? return (防重入)
-  ├─ setState(kDisconnected)
-  ├─ reading_ = false
-  ├─ channel_->disableAll()
-  ├─ guard = shared_from_this()           // 防止回调中析构
-  ├─ resumeAllWaitersOnClose()            // 恢复所有协程
-  ├─ connectionCallback_(guard)           // 通知用户断开
-  └─ closeCallback_(guard)                // 通知 TcpServer 移除
+handleClose() 是唯一的关闭入口：
+  - handleRead 中 read() == 0 → handleClose
+  - handleError 中 → handleClose
+  - forceCloseInLoop → handleClose
+  - shutdownInLoop（写完后）→ socket_->shutdownWrite → 对端 EOF → handleClose
 
-connectDestroyed():        // TcpServer 投递到 ioLoop
-  ├─ if (state_ == kConnected):
-  │   ├─ setState(kDisconnected)
-  │   ├─ channel_->disableAll()
-  │   └─ connectionCallback_()
-  └─ channel_->remove()                   // 从 Poller 移除
-  // shared_ptr 引用计数归零 → ~TcpConnection → ~Socket → close(fd)
+handleClose() 的幂等保护：
+  if (state_ == kDisconnected) return;  // 已处理，直接返回
 ```
 
-### 5.7 协程桥接
+### 5.5 Coroutine Awaitable 工作机制
 
 ```
-co_await conn->asyncReadSome(minBytes)
-  → ReadAwaitable::await_ready():
-      → canReadImmediately(minBytes)? → true (不挂起)
-  → ReadAwaitable::await_suspend(handle):
-      → armReadWaiter(handle, minBytes)   // 在 loop 线程执行
-          → if canReadImmediately → queueResume(handle)
-          → else readWaiter_ = {handle, minBytes, true}
-  → 数据到达 → handleRead → resumeReadWaiterIfNeeded()
-      → if readWaiter_.active && inputBuffer >= minBytes:
-          → queueResume(handle)           // 通过 queueInLoop 恢复
-  → ReadAwaitable::await_resume():
-      → return consumeReadableBytes()     // 消费 inputBuffer
+co_await conn->asyncReadSome(1024)：
+
+1. await_ready()：检查 inputBuffer 是否已有 >= 1024 字节（loop 线程快路径）
+2. await_suspend(handle)：
+   → armReadWaiter(handle, 1024)
+   → readWaiter_ = {handle, minBytes=1024, active=true}
+   → 协程挂起，控制权返回 EventLoop
+3. 下次 handleRead 到来：
+   → n > 0 → resumeReadWaiterIfNeeded()
+   → buffer 满足 minBytes → queueResume(handle)  // 通过 EventLoop 调度
+   → 下一轮 loop 中 handle.resume()
+4. await_resume()：
+   → consumeReadableBytes(minBytes) → 返回 string
 ```
 
-**单等待者约束**：每个连接同时只能有一个 read waiter、一个 write waiter、一个 close waiter。
-违反会抛 `logic_error`。
+**关键设计**：`queueResume` 把协程的 resume 调度到 EventLoop 的下一轮，而不是在 `handleRead` 内部直接 resume，防止协程占用 I/O 事件分发的调用栈。
 
-## 6. 关键交互关系
+---
+
+## 6. 协作关系
 
 ```
-TcpServer                       TcpClient
-    │                               │
-    ├─ 创建 TcpConnection ──────────┤
-    ├─ setCloseCallback ────────────┤
-    │                               │
-    ▼                               ▼
- TcpConnection
-    │
-    ├─ owns Socket (fd)
-    ├─ owns Channel (events)
-    ├─ owns Buffer ×2 (input/output)
-    ├─ uses EventLoop (runInLoop)
-    ├─ uses TlsContext (optional, shared)
-    │
-    └─ callbacks → User Code
-         ├─ connectionCallback
-         ├─ messageCallback
-         └─ writeCompleteCallback
+      TcpServer                EventLoopThreadPool
+          │                          │
+          │ 构造 TcpConnection         │ 分配 ioLoop
+          │ connectEstablished        │
+          │ removeConnection ◄── closeCallback
+          │
+      TcpConnection (ioLoop 线程)
+          ├── Socket（持有 fd，RAII close）
+          ├── Channel（epoll 事件代理）
+          │        │ READ → handleRead
+          │        │ WRITE → handleWrite
+          │        │ CLOSE → handleClose
+          │        │ ERROR → handleError
+          └── Buffer×2（inputBuffer_, outputBuffer_）
 ```
+
+| 关系 | 描述 |
+|------|------|
+| `TcpServer` → `TcpConnection` | `shared_ptr`，connections_ 映射持有 |
+| `TcpConnection` → `Socket` | `unique_ptr`，唯一所有者，析构时 close fd |
+| `TcpConnection` → `Channel` | `unique_ptr`，唯一所有者 |
+| `TcpConnection` → `EventLoop` | 借用（原始指针），不拥有 |
+| `Channel` ↔ `TcpConnection` | 通过 tie(shared_from_this()) 弱引用防悬空 |
+
+---
 
 ## 7. 关键设计点
 
-### 7.1 enable_shared_from_this
-
-TcpConnection 必须通过 `shared_ptr` 管理，因为：
-1. `channel_->tie()` 需要 `shared_from_this()`
-2. 跨线程 `send()` 需要持有 `shared_ptr` 防止生命周期问题
-3. `closeCallback` 需要 `shared_ptr` 让 TcpServer 安全移除
-
-### 7.2 直接写优化
+### 7.1 connectEstablished 中的 tie 机制
 
 ```cpp
-// sendInLoop 中：
-if (!channel_->isWriting() && outputBuffer_.readableBytes() == 0) {
-    nwrote = ::write(fd, data, len);  // 尝试直接写
-    if (remaining == 0) return;       // 全部写完，不注册 EPOLLOUT
+void TcpConnection::connectEstablished() {
+    channel_->tie(shared_from_this());   // ← 关键
+    channel_->enableReading();
+    // ...
 }
 ```
 
-避免了大部分场景下的 `epoll_ctl(MOD)` 调用，减少系统调用。
+Channel 的 `handleEvent` 会通过 `weak_ptr::lock()` 提升为 `shared_ptr`，
+只要 guard 不为空，即使用户代码在回调中释放了外部的 `shared_ptr`，
+TcpConnection 也不会在回调执行期间析构。
 
-### 7.3 协程与回调共存
+### 7.2 关闭路径的幂等性
 
 ```cpp
-if (n > 0) {
-    resumeReadWaiterIfNeeded();                   // 先通知协程
-    if (messageCallback_ && !hasReadWaiter) {     // 没有协程才走回调
-        messageCallback_(shared_from_this(), &inputBuffer_);
-    }
+void TcpConnection::handleClose() {
+    if (state_ == kDisconnected) return;  // 幂等保护
+    setState(kDisconnected);
+    // ...
 }
 ```
 
-同一个连接可以在不同阶段使用不同模式。
+多处路径（read=0、error、forceClose）都会调用 `handleClose`，幂等检查确保只执行一次。
 
-### 7.4 TLS 透明支持
+### 7.3 跨线程 send 的所有权转移
 
 ```cpp
-if (ssl_) {
-    n = sslReadIntoBuffer(&savedErrno);
-} else {
-    n = inputBuffer_.readFd(channel_->fd(), &savedErrno);
-}
+// 非 loop 线程 send：
+std::string payload(data, len);
+loop_->runInLoop([self, payload = std::move(payload)]() mutable {
+    self->sendInLoop(payload.data(), payload.size());
+});
 ```
 
-对用户完全透明，handleRead/handleWrite 自动选择 SSL 路径。
+`payload` 在 lambda capture 中 move，所有权转移到 EventLoop 的任务队列，
+不存在并发访问（TcpConnection 的 buffer 只在 loop 线程操作）。
 
-### 7.5 背压策略
+### 7.4 背压（Backpressure）
 
-```cpp
-void applyBackpressurePolicy() {
-    if (reading_ && buffered >= backpressureHighWaterMark_) {
-        reading_ = false;
-        channel_->disableReading();   // 暂停读取，让对端 TCP 窗口缩小
-    }
-    if (!reading_ && buffered <= backpressureLowWaterMark_) {
-        reading_ = true;
-        channel_->enableReading();    // 恢复读取
-    }
-}
+```
+写缓冲积累路径：
+outputBuffer 超过 backpressureHighWaterMark
+    → channel_->disableReading()（暂停读入站数据）
+    → reading_ = false
+
+输出清空路径（handleWrite）：
+outputBuffer 低于 backpressureLowWaterMark
+    → channel_->enableReading()（恢复读）
+    → reading_ = true
 ```
 
-## 8. 潜在问题
+背压策略的核心：通过控制读事件订阅，间接产生 TCP 窗口 0 的背压效果。
 
-### 8.1 协程异常安全
+### 7.5 状态机 + Channel 注册的一致性
 
-如果 `armReadWaiter` 中 `queueInLoop` 之后协程帧被外部销毁，
-`handle.resume()` 会访问悬空帧。
+| 状态 | Channel 订阅 |
+|------|-------------|
+| kConnecting | 无 |
+| kConnected | EPOLLIN（写时加 EPOLLOUT） |
+| kDisconnecting | EPOLLIN + EPOLLOUT（写完后取消） |
+| kDisconnected | 全部取消（disableAll） |
 
-**缓解**：协程帧由 `Task<T>` 管理，正常使用不会手动销毁。
+---
 
-### 8.2 send 的拷贝开销
+## 8. 核心模块改动闸门（5 问）
 
-跨线程 `send()` 需要将 data 拷贝到 `std::string` 再 move 到 lambda：
+1. **哪个 loop/线程拥有此模块？**
+   每个 TcpConnection 归属唯一的 ioLoop（由 EventLoopThreadPool 分配）。所有 handle* 方法需在此 loop 线程执行。
+
+2. **谁拥有它，谁释放它？**
+   `TcpServer::connections_` 以 `shared_ptr` 持有，`removeConnectionInLoop` 从映射中移除即减少引用。用户持有的 `shared_ptr` 释放后，若 Channel 的 guard 不再存活，TcpConnection 随之析构。
+
+3. **哪些回调可能重入？**
+   `handleRead` 中的 `messageCallback_` 可能调用 `conn->send()`，进而调用 `sendInLoop`（同 loop 线程直接执行）。`closeCallback_` 由 TcpServer 接管，执行 `removeConnectionInLoop`，此时连接已处于 `kDisconnected`。
+
+4. **哪些操作允许跨线程，如何 marshal？**
+   `send()` / `shutdown()` / `forceClose()` 检测线程，非 loop 线程通过 `runInLoop` marshal。`startTls` / `connectEstablished` / `connectDestroyed` 必须在 loop 线程。
+
+5. **哪个测试文件验证此改动？**
+   `tests/contract/test_tcp_connection.cc`（read/write/close 主路径）、`tests/integration/test_tcp_server.cc`（端到端）
+
+---
+
+## 9. 从极简到完整的演进路径
+
 ```cpp
-std::string payload(static_cast<const char*>(data), len);
-loop_->runInLoop([self, payload = std::move(payload)] { ... });
-```
-
-大数据量时可能有性能影响。
-
-### 8.3 TLS 重协商
-
-当前不处理 TLS 重协商（renegotiation）。如果对端发起重协商，可能导致意外行为。
-现代 TLS 1.3 已废弃重协商。
-
-## 9. 极简实现
-
-```cpp
-class MinimalTcpConnection {
+// 极简版本（无状态机、无跨线程、无背压）
+class MinimalTcpConn {
+    int fd_;
+    std::function<void(std::string)> onMessage_;
 public:
-    MinimalTcpConnection(int fd)
-        : fd_(fd), state_(kConnected) {}
-
     void handleRead() {
         char buf[4096];
         ssize_t n = ::read(fd_, buf, sizeof(buf));
-        if (n > 0) {
-            onMessage_(std::string(buf, n));
-        } else if (n == 0) {
-            state_ = kDisconnected;
-            ::close(fd_);
-        }
+        if (n > 0) onMessage_(std::string(buf, n));
+        else ::close(fd_);
     }
-
-    void send(const std::string& data) {
+    void send(std::string_view data) {
         ::write(fd_, data.data(), data.size());
     }
-
-private:
-    int fd_;
-    int state_;
-    std::function<void(std::string)> onMessage_;
 };
 ```
 
-完整版在此基础上加：
-1. **Buffer** → 非阻塞 I/O 的数据缓冲
-2. **Channel** → 事件订阅
-3. **状态机** → 优雅关闭、半关闭
-4. **shared_ptr + tie** → 生命周期安全
-5. **runInLoop** → 跨线程安全
-6. **协程 awaitable** → co_await 支持
-7. **TLS** → SSL_read/SSL_write 路径
-8. **背压** → disableReading/enableReading
+从极简 → 完整，需要加：
 
-## 10. 面试角度总结
+1. **状态机（4 态）** → 防止在 disconnected 状态写数据
+2. **Buffer** → 支持写一半暂存 + 消息边界控制
+3. **Channel** → 受 epoll 驱动，不轮询
+4. **RAII Socket** → 自动 close
+5. **跨线程 send marshal** → thread-safe send
+6. **handleClose 统一收敛** → 幂等关闭
+7. **tie 机制** → 回调期间防析构
+8. **背压策略** → 防止内存爆炸
+9. **Coroutine awaitables** → 支持结构化并发写法
 
-**Q1: TcpConnection 的四个状态是什么？转换条件？**
-A: kConnecting(初始) → kConnected(connectEstablished) → kDisconnecting(shutdown) → kDisconnected(handleClose/forceClose/connectDestroyed)
+---
 
-**Q2: send() 如何保证线程安全？**
-A: 不加锁。如果是 loop 线程直接 sendInLoop；否则拷贝数据到 lambda 通过 runInLoop 投递。
+## 10. 易错点与最佳实践
 
-**Q3: 为什么 send 有"直接写优化"？**
-A: 如果 outputBuffer 为空且未注册 EPOLLOUT，直接调 write()。大多数情况数据能一次写完，省去 epoll_ctl 系统调用。
+### 易错点
 
-**Q4: 协程和回调如何共存？**
-A: 有 readWaiter 活跃时，数据给协程（不调 messageCallback）；无 readWaiter 时，走传统回调路径。
+| 错误 | 后果 |
+|------|------|
+| 在非 loop 线程直接操作 inputBuffer_ | 数据竞争 |
+| forceClose 后仍调用 send | send 检查 `state_ != kConnected`，静默丢弃（有保护） |
+| closeCallback 中持有 TcpConnection 的 shared_ptr | 延迟析构，但不崩溃（需注意资源释放时机） |
+| 在 messageCallback 中同步调用 conn->shutdown() | 合法，shutdown 会在 handleWrite 清空后生效 |
+| 未在 connectEstablished 前调用 startTls | TLS 状态未初始化，doTlsHandshake 不会被触发 |
 
-**Q5: TcpConnection 为什么必须用 shared_ptr？**
-A: 因为 channel 的 tie() 需要 weak_ptr（来自 shared_from_this）；跨线程 send 需要持有引用；closeCallback 需要安全移除。
+### 最佳实践
 
-**Q6: 连接关闭的三种路径？**
-A: (1) 对端关闭：read 返回 0 → handleClose，(2) 主动 shutdown：half-close → 等对端，(3) forceClose：直接 handleClose。
+```cpp
+// ✓ 正确的连接建立与回调链路：
+server.setConnectionCallback([](const TcpConnectionPtr& conn) {
+    if (conn->connected()) {
+        conn->setContext(std::make_shared<MySession>());
+    } else {
+        // conn->disconnected()，清理上下文
+        auto session = std::any_cast<std::shared_ptr<MySession>>(conn->getContext());
+        session->cleanup();
+    }
+});
 
-**Q7: 背压策略如何工作？**
-A: outputBuffer 超过 highWaterMark 时 disableReading（暂停读取，TCP 窗口缩小）；低于 lowWaterMark 时 enableReading 恢复。
+// ✓ 协程写法（v1-coro-preview）：
+mini::coroutine::Task echo(TcpConnectionPtr conn) {
+    while (true) {
+        auto data = co_await conn->asyncReadSome(1);
+        if (data.empty()) break;
+        co_await conn->asyncWrite(std::move(data));
+    }
+    co_await conn->waitClosed();
+}
+```
+
+---
+
+## 11. 面试角度总结
+
+**Q1: TcpConnection 的状态机有哪 4 个状态？**
+A: `kConnecting`（构造后，未调用 connectEstablished）、`kConnected`（正常工作）、`kDisconnecting`（调用 shutdown 等写完）、`kDisconnected`（handleClose 之后）。
+
+**Q2: send 如何做到线程安全？**
+A: send 检测当前线程，若在 loop 线程则直接 `sendInLoop`；否则 copy payload 到 lambda，通过 `runInLoop` 投递到 loop 线程执行。copy 保证 payload 的所有权安全转移。
+
+**Q3: 为什么关闭路径要统一收敛到 handleClose？**
+A: 防止重复关闭（double close fd）和遗漏 epoll 注销。`handleClose` 有幂等保护（`if state == kDisconnected return`），无论哪条路径触发，结果一致。
+
+**Q4: connectEstablished 为什么调用 channel_->tie？**
+A: 防止 handleEvent 回调链中 closeCallback 触发 TcpConnection 析构，导致后续回调访问悬空对象。tie 持有 weak_ptr，在 handleEvent 开始时提升为 shared_ptr 作为 guard。
+
+**Q5: 背压如何实现？**
+A: outputBuffer 超过 `backpressureHighWaterMark` 时 `disableReading`，暂停读入站数据，使 TCP 接收窗口变小，产生端到端的背压。outputBuffer 降到 `backpressureLowWaterMark` 时恢复读。
+
+**Q6: coroutine awaitable 为什么不在 handleRead 内直接 resume？**
+A: 防止协程占用 I/O 分发的调用栈（深度嵌套），改用 `queueResume` 把 resume 投递到 EventLoop 的下一轮，与正常的事件分发流程一致，避免 stack overflow 和复杂的重入问题。
