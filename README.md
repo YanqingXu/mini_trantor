@@ -28,14 +28,15 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 
 ### v4（进行中）
 - ✅ `v4-alpha`：HTTP/1.1 协议层完成 — HttpRequest（请求值对象）/ HttpResponse（响应构建器 + 序列化）/ HttpContext（per-connection 增量解析状态机）/ HttpServer（TcpServer 协议适配器 + HttpCallback）/ keep-alive + Connection: close + 400 Bad Request
+- ✅ `v4-beta`：WebSocket 支持完成 — WebSocketCodec（RFC 6455 帧编解码）/ WebSocketHandshake（HTTP Upgrade 验证 + Sec-WebSocket-Accept 计算）/ WebSocketConnection（per-connection 状态机 + auto ping/pong + close 握手）/ WebSocketServer（TcpServer 包装 + HTTP→WS 升级）
 
-当前 42/42 测试全部通过（unit × 13 + contract × 17 + integration × 12）。
+当前 46/46 测试全部通过（unit × 15 + contract × 17 + integration × 13 + 1 pre-existing coroutine segfault）。
 
 ## 下一阶段方向
 
 以下为候选演进方向，具体阶段边界待 intent 文档定义：
 
-- **WebSocket 支持**：HTTP Upgrade 握手 + WebSocket 帧编解码
+- **WebSocket 支持**：~~HTTP Upgrade 握手 + WebSocket 帧编解码~~ ✅ 已完成
 - **信号处理**：SIGINT/SIGTERM 的 EventLoop 集成，优雅关闭
 - **HTTP 客户端**：基于 TcpClient 的 HTTP/1.1 请求发送与响应解析
 
@@ -53,6 +54,7 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - `rules/`: 项目级约束规则（线程亲和、所有权、测试、编码、Review）
 - `mini/net/`: Reactor 核心实现（EventLoop、Channel、Poller、TcpConnection、TcpServer、TcpClient、Connector、TimerQueue、TlsContext、DnsResolver 等）
 - `mini/http/`: HTTP/1.1 协议层（HttpRequest、HttpResponse、HttpContext、HttpServer）
+- `mini/ws/`: WebSocket 协议层（WebSocketCodec、WebSocketHandshake、WebSocketConnection、WebSocketServer）
 - `mini/coroutine/`: 协程桥接层（`Task.h` 协程结果对象、`SleepAwaitable.h` 定时器 awaitable、`ResolveAwaitable.h` DNS 解析 awaitable）
 - `mini/base/`: 基础工具（Timestamp、noncopyable）
 - `tests/`: 按 `unit/`、`contract/`、`integration/` 分层的测试
@@ -109,6 +111,7 @@ target_link_libraries(my_app PRIVATE mini_trantor::mini_trantor)
 #include "mini/net/DnsResolver.h"
 #include "mini/coroutine/ResolveAwaitable.h"
 #include "mini/http/HttpServer.h"
+#include "mini/ws/WebSocketServer.h"
 ```
 
 ### TLS/SSL 使用示例
@@ -177,6 +180,36 @@ server.setHttpCallback([](const mini::http::HttpRequest& req, mini::http::HttpRe
 });
 
 server.setThreadNum(4);  // 可选：多线程
+server.start();
+loop.loop();
+```
+
+### WebSocket Server 使用示例
+
+```cpp
+#include "mini/ws/WebSocketServer.h"
+#include "mini/ws/WebSocketConnection.h"
+#include "mini/net/EventLoop.h"
+
+mini::net::EventLoop loop;
+mini::ws::WebSocketServer server(&loop, mini::net::InetAddress(9090, true), "WsServer");
+
+server.setMessageCallback([](const mini::net::TcpConnectionPtr& conn,
+                             std::string msg, mini::ws::WsOpcode opcode) {
+    // Echo: 原样返回收到的消息
+    mini::ws::WebSocketConnection::sendText(conn, "echo: " + msg);
+});
+
+server.setConnectCallback([](const mini::net::TcpConnectionPtr& conn) {
+    printf("WebSocket client connected: %s\n", conn->name().c_str());
+});
+
+server.setCloseCallback([](const mini::net::TcpConnectionPtr& conn,
+                           mini::ws::WsCloseCode code, const std::string& reason) {
+    printf("WebSocket client disconnected: code=%d reason=%s\n",
+           static_cast<int>(code), reason.c_str());
+});
+
 server.start();
 loop.loop();
 ```

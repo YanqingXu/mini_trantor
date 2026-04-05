@@ -117,6 +117,12 @@ add_mini_test(unit http ${CMAKE_CURRENT_SOURCE_DIR}/unit/http/test_http_context.
 add_mini_test(contract http ${CMAKE_CURRENT_SOURCE_DIR}/contract/http/test_http_server.cpp)
 add_mini_test(integration http ${CMAKE_CURRENT_SOURCE_DIR}/integration/http/test_http_server.cpp)
 
+# --- WebSocket tests ---
+add_mini_test(unit ws ${CMAKE_CURRENT_SOURCE_DIR}/unit/ws/test_ws_codec.cpp)
+add_mini_test(unit ws ${CMAKE_CURRENT_SOURCE_DIR}/unit/ws/test_ws_handshake.cpp)
+add_mini_test(contract ws ${CMAKE_CURRENT_SOURCE_DIR}/contract/ws/test_ws_server.cpp)
+add_mini_test(integration ws ${CMAKE_CURRENT_SOURCE_DIR}/integration/ws/test_ws_server.cpp)
+
 get_property(unit_targets GLOBAL PROPERTY MINI_UNIT_TEST_TARGETS)
 get_property(contract_targets GLOBAL PROPERTY MINI_CONTRACT_TEST_TARGETS)
 get_property(integration_targets GLOBAL PROPERTY MINI_INTEGRATION_TEST_TARGETS)

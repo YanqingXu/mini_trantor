@@ -35,6 +35,10 @@ add_library(mini_trantor
     mini/http/HttpResponse.cc
     mini/http/HttpContext.cc
     mini/http/HttpServer.cc
+    mini/ws/WebSocketCodec.cc
+    mini/ws/WebSocketHandshake.cc
+    mini/ws/WebSocketConnection.cc
+    mini/ws/WebSocketServer.cc
 )
 
 add_library(mini_trantor::mini_trantor ALIAS mini_trantor)
