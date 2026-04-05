@@ -110,6 +110,13 @@ foreach(tls_target unit_tls_test_tls_context contract_tls_test_tls_handshake int
     target_compile_definitions(${tls_target} PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 endforeach()
 
+# --- HTTP tests ---
+add_mini_test(unit http ${CMAKE_CURRENT_SOURCE_DIR}/unit/http/test_http_request.cpp)
+add_mini_test(unit http ${CMAKE_CURRENT_SOURCE_DIR}/unit/http/test_http_response.cpp)
+add_mini_test(unit http ${CMAKE_CURRENT_SOURCE_DIR}/unit/http/test_http_context.cpp)
+add_mini_test(contract http ${CMAKE_CURRENT_SOURCE_DIR}/contract/http/test_http_server.cpp)
+add_mini_test(integration http ${CMAKE_CURRENT_SOURCE_DIR}/integration/http/test_http_server.cpp)
+
 get_property(unit_targets GLOBAL PROPERTY MINI_UNIT_TEST_TARGETS)
 get_property(contract_targets GLOBAL PROPERTY MINI_CONTRACT_TEST_TARGETS)
 get_property(integration_targets GLOBAL PROPERTY MINI_INTEGRATION_TEST_TARGETS)

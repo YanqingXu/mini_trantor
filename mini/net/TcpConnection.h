@@ -11,6 +11,7 @@
 #include "mini/net/InetAddress.h"
 #include "mini/net/Socket.h"
 
+#include <any>
 #include <coroutine>
 #include <cstddef>
 #include <memory>
@@ -50,6 +51,10 @@ public:
     void forceClose();
     void setTcpNoDelay(bool on);
     void setBackpressurePolicy(std::size_t highWaterMark, std::size_t lowWaterMark);
+
+    void setContext(std::any context) { context_ = std::move(context); }
+    const std::any& getContext() const noexcept { return context_; }
+    std::any& getContext() noexcept { return context_; }
 
     /// Enable TLS on this connection. Must be called before connectEstablished().
     /// @param ctx TLS context (shared across connections)
@@ -182,6 +187,9 @@ private:
     std::shared_ptr<TlsContext> tlsContext_;
     SSL* ssl_ = nullptr;
     TlsState tlsState_ = kTlsNone;
+
+    // User context (e.g., HttpContext for HTTP protocol layer)
+    std::any context_;
 };
 
 }  // namespace mini::net

@@ -21,17 +21,23 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - ✅ `v2-alpha`：TcpClient 主链路稳定 — Connector（主动连接适配器）/ TcpClient / 可配置重连退避
 - ✅ `v2-beta`：async timer API 稳定 — `SleepAwaitable` 协程定时器桥接 / coroutine idle timeout 集成
 
-### v3（进行中）
-- ✅ `v3-gamma`：TLS/SSL 集成完成 — TlsContext（RAII SSL_CTX 封装）/ TcpConnection 非阻塞 TLS 状态机 / TcpServer·TcpClient 的 `enableSsl()` API / OpenSSL 后端
+### v3（已完成）
+- ✅ `v3-alpha`：结构化并发原语完成 — `WhenAll`（多任务并发等待全部完成）/ `WhenAny`（多任务竞争等待首个完成 + 剩余取消）/ 与 `Task<T>`·`SleepAwaitable` 组合
 - ✅ `v3-beta`：DNS Resolver 完成 — DnsResolver（线程池异步解析 + TTL 缓存）/ TcpClient hostname-based connect / ResolveAwaitable 协程桥接
+- ✅ `v3-gamma`：TLS/SSL 集成完成 — TlsContext（RAII SSL_CTX 封装）/ TcpConnection 非阻塞 TLS 状态机 / TcpServer·TcpClient 的 `enableSsl()` API / OpenSSL 后端
 
-当前 37/37 测试全部通过（unit × 10 + contract × 16 + integration × 11）。
+### v4（进行中）
+- ✅ `v4-alpha`：HTTP/1.1 协议层完成 — HttpRequest（请求值对象）/ HttpResponse（响应构建器 + 序列化）/ HttpContext（per-connection 增量解析状态机）/ HttpServer（TcpServer 协议适配器 + HttpCallback）/ keep-alive + Connection: close + 400 Bad Request
+
+当前 42/42 测试全部通过（unit × 13 + contract × 17 + integration × 12）。
 
 ## 下一阶段方向
 
 以下为候选演进方向，具体阶段边界待 intent 文档定义：
 
-- **结构化并发原语**：如 `whenAll` / `whenAny`，使多个 awaitable 可以组合等待
+- **WebSocket 支持**：HTTP Upgrade 握手 + WebSocket 帧编解码
+- **信号处理**：SIGINT/SIGTERM 的 EventLoop 集成，优雅关闭
+- **HTTP 客户端**：基于 TcpClient 的 HTTP/1.1 请求发送与响应解析
 
 ## 核心理念
 对于重要模块，不先写代码，先写：
@@ -46,6 +52,7 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - `intents/`: 设计意图与模块宪法（architecture / modules / usecases）
 - `rules/`: 项目级约束规则（线程亲和、所有权、测试、编码、Review）
 - `mini/net/`: Reactor 核心实现（EventLoop、Channel、Poller、TcpConnection、TcpServer、TcpClient、Connector、TimerQueue、TlsContext、DnsResolver 等）
+- `mini/http/`: HTTP/1.1 协议层（HttpRequest、HttpResponse、HttpContext、HttpServer）
 - `mini/coroutine/`: 协程桥接层（`Task.h` 协程结果对象、`SleepAwaitable.h` 定时器 awaitable、`ResolveAwaitable.h` DNS 解析 awaitable）
 - `mini/base/`: 基础工具（Timestamp、noncopyable）
 - `tests/`: 按 `unit/`、`contract/`、`integration/` 分层的测试
@@ -101,6 +108,7 @@ target_link_libraries(my_app PRIVATE mini_trantor::mini_trantor)
 #include "mini/net/TlsContext.h"
 #include "mini/net/DnsResolver.h"
 #include "mini/coroutine/ResolveAwaitable.h"
+#include "mini/http/HttpServer.h"
 ```
 
 ### TLS/SSL 使用示例
@@ -150,4 +158,25 @@ if (!addrs.empty()) {
     mini::net::TcpClient client(&loop, addrs[0], "MyClient");
     client.connect();
 }
+```
+
+### HTTP/1.1 Server 使用示例
+
+```cpp
+#include "mini/http/HttpServer.h"
+#include "mini/net/EventLoop.h"
+
+mini::net::EventLoop loop;
+mini::http::HttpServer server(&loop, mini::net::InetAddress(8080, true), "HttpServer");
+
+server.setHttpCallback([](const mini::http::HttpRequest& req, mini::http::HttpResponse* resp) {
+    resp->setStatusCode(mini::http::HttpResponse::k200Ok);
+    resp->setStatusMessage("OK");
+    resp->setContentType("text/plain");
+    resp->setBody("Hello from mini-trantor HTTP server! Path: " + req.path());
+});
+
+server.setThreadNum(4);  // 可选：多线程
+server.start();
+loop.loop();
 ```
