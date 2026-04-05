@@ -1,6 +1,7 @@
 #include "mini/net/TcpClient.h"
 
 #include "mini/net/Connector.h"
+#include "mini/net/DnsResolver.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/SocketsOps.h"
 #include "mini/net/TcpConnection.h"
@@ -15,15 +16,32 @@ namespace mini::net {
 TcpClient::TcpClient(EventLoop* loop, const InetAddress& serverAddr, std::string name)
     : loop_(loop),
       name_(std::move(name)),
-      connector_(std::make_shared<Connector>(loop, serverAddr)),
       retry_(false),
       connect_(true),
       nextConnId_(1) {
-    connector_->setNewConnectionCallback([this](int sockfd) { newConnection(sockfd); });
+    initConnector(serverAddr);
+}
+
+TcpClient::TcpClient(EventLoop* loop, std::string hostname, uint16_t port,
+                     std::string name, std::shared_ptr<DnsResolver> resolver)
+    : loop_(loop),
+      name_(std::move(name)),
+      retry_(false),
+      connect_(true),
+      nextConnId_(1),
+      hostname_(std::move(hostname)),
+      port_(port),
+      resolver_(resolver ? std::move(resolver) : DnsResolver::getShared()),
+      resolveGuard_(std::make_shared<bool>(true)) {
 }
 
 TcpClient::~TcpClient() {
     loop_->assertInLoopThread();
+
+    // Invalidate pending DNS resolve callback.
+    if (resolveGuard_) {
+        *resolveGuard_ = false;
+    }
 
     TcpConnectionPtr conn;
     {
@@ -41,12 +59,18 @@ TcpClient::~TcpClient() {
         });
     }
 
-    connector_->stop();
+    if (connector_) {
+        connector_->stop();
+    }
 }
 
 void TcpClient::connect() {
     connect_ = true;
-    connector_->start();
+    if (!hostname_.empty() && !connector_) {
+        resolveAndConnect();
+    } else {
+        connector_->start();
+    }
 }
 
 void TcpClient::disconnect() {
@@ -62,7 +86,9 @@ void TcpClient::disconnect() {
 
 void TcpClient::stop() {
     connect_ = false;
-    connector_->stop();
+    if (connector_) {
+        connector_->stop();
+    }
 }
 
 void TcpClient::enableRetry() noexcept {
@@ -143,8 +169,35 @@ void TcpClient::removeConnection(const TcpConnectionPtr& conn) {
     loop_->queueInLoop([conn] { conn->connectDestroyed(); });
 
     if (retry_ && connect_) {
-        connector_->restart();
+        if (connector_) {
+            connector_->restart();
+        } else {
+            // Hostname-based: re-resolve and connect.
+            resolveAndConnect();
+        }
     }
+}
+
+void TcpClient::initConnector(const InetAddress& serverAddr) {
+    connector_ = std::make_shared<Connector>(loop_, serverAddr);
+    connector_->setNewConnectionCallback([this](int sockfd) { newConnection(sockfd); });
+}
+
+void TcpClient::resolveAndConnect() {
+    auto guard = resolveGuard_;
+    resolver_->resolve(hostname_, port_, loop_,
+        [this, guard](const std::vector<InetAddress>& addrs) {
+            // Delivered on owner loop thread.
+            if (!*guard) return;  // TcpClient was destroyed
+            if (!connect_) return;  // stop() was called
+            if (addrs.empty()) {
+                std::fprintf(stderr, "TcpClient: DNS resolution failed for '%s'\n",
+                             hostname_.c_str());
+                return;
+            }
+            initConnector(addrs[0]);
+            connector_->start();
+        });
 }
 
 }  // namespace mini::net

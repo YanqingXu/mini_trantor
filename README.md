@@ -23,14 +23,14 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 
 ### v3（进行中）
 - ✅ `v3-gamma`：TLS/SSL 集成完成 — TlsContext（RAII SSL_CTX 封装）/ TcpConnection 非阻塞 TLS 状态机 / TcpServer·TcpClient 的 `enableSsl()` API / OpenSSL 后端
+- ✅ `v3-beta`：DNS Resolver 完成 — DnsResolver（线程池异步解析 + TTL 缓存）/ TcpClient hostname-based connect / ResolveAwaitable 协程桥接
 
-当前 34/34 测试全部通过（unit × 9 + contract × 15 + integration × 10）。
+当前 37/37 测试全部通过（unit × 10 + contract × 16 + integration × 11）。
 
 ## 下一阶段方向
 
 以下为候选演进方向，具体阶段边界待 intent 文档定义：
 
-- **DNS resolver**：异步域名解析，与 EventLoop 调度语义集成
 - **结构化并发原语**：如 `whenAll` / `whenAny`，使多个 awaitable 可以组合等待
 
 ## 核心理念
@@ -45,8 +45,8 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 ## 目录说明
 - `intents/`: 设计意图与模块宪法（architecture / modules / usecases）
 - `rules/`: 项目级约束规则（线程亲和、所有权、测试、编码、Review）
-- `mini/net/`: Reactor 核心实现（EventLoop、Channel、Poller、TcpConnection、TcpServer、TcpClient、Connector、TimerQueue、TlsContext 等）
-- `mini/coroutine/`: 协程桥接层（`Task.h` 协程结果对象、`SleepAwaitable.h` 定时器 awaitable）
+- `mini/net/`: Reactor 核心实现（EventLoop、Channel、Poller、TcpConnection、TcpServer、TcpClient、Connector、TimerQueue、TlsContext、DnsResolver 等）
+- `mini/coroutine/`: 协程桥接层（`Task.h` 协程结果对象、`SleepAwaitable.h` 定时器 awaitable、`ResolveAwaitable.h` DNS 解析 awaitable）
 - `mini/base/`: 基础工具（Timestamp、noncopyable）
 - `tests/`: 按 `unit/`、`contract/`、`integration/` 分层的测试
 - `examples/`: 示例程序（echo_server、coroutine_echo_server）
@@ -99,6 +99,8 @@ target_link_libraries(my_app PRIVATE mini_trantor::mini_trantor)
 #include "mini/coroutine/Task.h"
 #include "mini/coroutine/SleepAwaitable.h"
 #include "mini/net/TlsContext.h"
+#include "mini/net/DnsResolver.h"
+#include "mini/coroutine/ResolveAwaitable.h"
 ```
 
 ### TLS/SSL 使用示例
@@ -120,4 +122,32 @@ clientCtx->setVerifyPeer(true);
 mini::net::TcpClient client(&loop, serverAddr, "TlsClient");
 client.enableSsl(clientCtx, "hostname");
 client.connect();
+```
+
+### DNS Resolver 使用示例
+
+```cpp
+#include "mini/net/DnsResolver.h"
+#include "mini/net/TcpClient.h"
+#include "mini/coroutine/ResolveAwaitable.h"
+
+// 方式一：TcpClient 直接使用 hostname 连接
+mini::net::TcpClient client(&loop, "example.com", 8080, "MyClient");
+client.connect();  // 内部自动 DNS 解析
+
+// 方式二：手动异步解析
+auto resolver = mini::net::DnsResolver::getShared();
+resolver->resolve("example.com", 8080, &loop,
+    [](const std::vector<mini::net::InetAddress>& addrs) {
+        if (!addrs.empty()) {
+            // 使用 addrs[0] 建立连接
+        }
+    });
+
+// 方式三：协程 awaitable
+auto addrs = co_await mini::coroutine::asyncResolve(resolver, &loop, "example.com", 8080);
+if (!addrs.empty()) {
+    mini::net::TcpClient client(&loop, addrs[0], "MyClient");
+    client.connect();
+}
 ```

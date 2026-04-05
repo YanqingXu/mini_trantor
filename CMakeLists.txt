@@ -30,6 +30,7 @@ add_library(mini_trantor
     mini/net/TcpClient.cc
     mini/net/TcpServer.cc
     mini/net/TlsContext.cc
+    mini/net/DnsResolver.cc
 )
 
 add_library(mini_trantor::mini_trantor ALIAS mini_trantor)
