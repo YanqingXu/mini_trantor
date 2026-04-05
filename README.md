@@ -10,11 +10,26 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - Diagrams 作为架构解释
 - AI 作为受约束的实现协作者
 
-## 当前目标
-v1 分三段收口：
-- `v1-alpha`：同步 Reactor 主链路稳定
-- `v1-beta`：线程模型稳定
-- `v1-coro-preview`：协程桥接跑通
+## 当前状态
+
+### v1（已完成）
+- ✅ `v1-alpha`：同步 Reactor 主链路稳定 — Channel / Poller / EventLoop / Buffer / Acceptor / TcpConnection / TcpServer
+- ✅ `v1-beta`：线程模型稳定 — EventLoopThread / EventLoopThreadPool / 跨线程调度
+- ✅ `v1-coro-preview`：协程桥接跑通 — `Task<T>` / TcpConnection awaitables / coroutine echo server
+
+### v2（已完成）
+- ✅ `v2-alpha`：TcpClient 主链路稳定 — Connector（主动连接适配器）/ TcpClient / 可配置重连退避
+- ✅ `v2-beta`：async timer API 稳定 — `SleepAwaitable` 协程定时器桥接 / coroutine idle timeout 集成
+
+当前 28/28 测试全部通过（unit × 6 + contract × 13 + integration × 9）。
+
+## 下一阶段方向（v3）
+
+以下为 v2 完成后的候选演进方向，具体阶段边界待 intent 文档定义：
+
+- **TLS/SSL 集成**：在 TCP 连接之上叠加安全传输层，扩展 TcpConnection 和 TcpClient
+- **DNS resolver**：异步域名解析，与 EventLoop 调度语义集成
+- **结构化并发原语**：如 `whenAll` / `whenAny`，使多个 awaitable 可以组合等待
 
 ## 核心理念
 对于重要模块，不先写代码，先写：
@@ -26,13 +41,15 @@ v1 分三段收口：
 6. implementation
 
 ## 目录说明
-- `intents/`: 设计意图与模块宪法
-- `rules/`: 项目级约束规则
-- `mini/`: 当前主线实现
-- `tests/`: 按 `unit/`、`contract/`、`integration/` 分层的测试入口
+- `intents/`: 设计意图与模块宪法（architecture / modules / usecases）
+- `rules/`: 项目级约束规则（线程亲和、所有权、测试、编码、Review）
+- `mini/net/`: Reactor 核心实现（EventLoop、Channel、Poller、TcpConnection、TcpServer、TcpClient、Connector、TimerQueue 等）
+- `mini/coroutine/`: 协程桥接层（`Task.h` 协程结果对象、`SleepAwaitable.h` 定时器 awaitable）
+- `mini/base/`: 基础工具（Timestamp、noncopyable）
+- `tests/`: 按 `unit/`、`contract/`、`integration/` 分层的测试
+- `examples/`: 示例程序（echo_server、coroutine_echo_server）
 - `docs/`: 文档
 - `diagrams/`: 架构图
-- `tools/ai/`: AI 生成与校验工具
 
 ## 核心模块改动闸门
 每个核心模块 PR / 改动都必须回答这 5 个问题：
@@ -76,4 +93,7 @@ target_link_libraries(my_app PRIVATE mini_trantor::mini_trantor)
 ```cpp
 #include "mini/net/EventLoop.h"
 #include "mini/net/TcpServer.h"
+#include "mini/net/TcpClient.h"
+#include "mini/coroutine/Task.h"
+#include "mini/coroutine/SleepAwaitable.h"
 ```
