@@ -25,13 +25,16 @@ template <typename... Ts>
 struct WhenAllState {
     std::atomic<std::size_t> remaining;
     std::coroutine_handle<> parent{};
+    std::atomic<bool> exceptionCaptured{false};
     std::exception_ptr firstException{};
     std::tuple<std::optional<Ts>...> results;
 
     explicit WhenAllState(std::size_t count) : remaining(count) {}
 
     void captureException(std::exception_ptr e) {
-        if (!firstException) {
+        bool expected = false;
+        if (exceptionCaptured.compare_exchange_strong(expected, true,
+                                                      std::memory_order_acq_rel)) {
             firstException = std::move(e);
         }
     }
@@ -50,12 +53,15 @@ struct WhenAllState {
 struct WhenAllVoidState {
     std::atomic<std::size_t> remaining;
     std::coroutine_handle<> parent{};
+    std::atomic<bool> exceptionCaptured{false};
     std::exception_ptr firstException{};
 
     explicit WhenAllVoidState(std::size_t count) : remaining(count) {}
 
     void captureException(std::exception_ptr e) {
-        if (!firstException) {
+        bool expected = false;
+        if (exceptionCaptured.compare_exchange_strong(expected, true,
+                                                      std::memory_order_acq_rel)) {
             firstException = std::move(e);
         }
     }

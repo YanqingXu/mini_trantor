@@ -31,7 +31,7 @@ DnsResolver::~DnsResolver() {
 void DnsResolver::resolve(const std::string& hostname, uint16_t port,
                            EventLoop* callbackLoop, ResolveCallback cb) {
     // Check cache first.
-    if (cacheEnabled_) {
+    if (cacheEnabled_.load(std::memory_order_acquire)) {
         std::lock_guard<std::mutex> lock(cacheMutex_);
         auto it = cache_.find(hostname);
         if (it != cache_.end() &&
@@ -61,8 +61,8 @@ void DnsResolver::resolve(const std::string& hostname, uint16_t port,
 }
 
 void DnsResolver::enableCache(std::chrono::seconds ttl) {
-    cacheEnabled_ = true;
     cacheTtl_ = ttl;
+    cacheEnabled_.store(true, std::memory_order_release);
 }
 
 void DnsResolver::clearCache() {
@@ -71,7 +71,7 @@ void DnsResolver::clearCache() {
 }
 
 bool DnsResolver::cacheEnabled() const noexcept {
-    return cacheEnabled_;
+    return cacheEnabled_.load(std::memory_order_acquire);
 }
 
 std::shared_ptr<DnsResolver> DnsResolver::getShared() {
@@ -125,7 +125,7 @@ void DnsResolver::workerThread() {
         }
 
         // Update cache.
-        if (cacheEnabled_ && !cacheAddrs.empty()) {
+        if (cacheEnabled_.load(std::memory_order_acquire) && !cacheAddrs.empty()) {
             std::lock_guard<std::mutex> lock(cacheMutex_);
             cache_[req.hostname] = CacheEntry{
                 std::move(cacheAddrs),

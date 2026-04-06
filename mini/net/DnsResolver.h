@@ -7,6 +7,7 @@
 #include "mini/base/noncopyable.h"
 #include "mini/net/InetAddress.h"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <functional>
@@ -71,7 +72,7 @@ private:
     bool stopping_{false};
 
     // Cache
-    bool cacheEnabled_{false};
+    std::atomic<bool> cacheEnabled_{false};
     std::chrono::seconds cacheTtl_{60};
     mutable std::mutex cacheMutex_;
     std::unordered_map<std::string, CacheEntry> cache_;

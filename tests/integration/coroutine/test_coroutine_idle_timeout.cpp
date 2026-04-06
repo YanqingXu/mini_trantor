@@ -131,7 +131,7 @@ int main() {
 
         server.setConnectionCallback([&](const mini::net::TcpConnectionPtr& conn) {
             if (conn->connected()) {
-                echoSessionWithTimeout(conn, 100ms, &closeReason).detach();
+                echoSessionWithTimeout(conn, 300ms, &closeReason).detach();
             } else {
                 loop.quit();
             }

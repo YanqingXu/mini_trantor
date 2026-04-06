@@ -67,16 +67,16 @@ int main() {
         std::promise<std::tuple<int, int>> result;
         auto resultFuture = result.get_future();
 
-        auto task = [](mini::net::EventLoop* loop,
-                       std::promise<std::tuple<int, int>>* result) -> Task<void> {
-            auto [a, b] = co_await whenAll(
-                sleepAndReturn(loop, 10, 50ms),
-                sleepAndReturn(loop, 20, 80ms));
-            result->set_value({a, b});
-            loop->quit();
-        }(loop, &result);
-
-        loop->runInLoop([&task] { task.start(); });
+        loop->runInLoop([loop, &result] {
+            [](mini::net::EventLoop* loop,
+               std::promise<std::tuple<int, int>>* result) -> Task<void> {
+                auto [a, b] = co_await whenAll(
+                    sleepAndReturn(loop, 10, 50ms),
+                    sleepAndReturn(loop, 20, 80ms));
+                result->set_value({a, b});
+                loop->quit();
+            }(loop, &result).detach();
+        });
 
         assert(resultFuture.wait_for(3s) == std::future_status::ready);
         auto [a, b] = resultFuture.get();
@@ -94,19 +94,19 @@ int main() {
         std::promise<WhenAnyResult<int>> result;
         auto resultFuture = result.get_future();
 
-        auto task = [](mini::net::EventLoop* loop,
-                       std::promise<WhenAnyResult<int>>* result) -> Task<void> {
-            auto r = co_await whenAny(
-                sleepAndReturn(loop, 999, 500ms),  // slow — should lose
-                sleepAndReturn(loop, 42, 50ms));   // fast — should win
-            result->set_value(r);
-            // Wait for the losing sub-task's timer to fire before quitting,
-            // so its wrapper coroutine completes cleanly.
-            co_await mini::coroutine::asyncSleep(loop, 600ms);
-            loop->quit();
-        }(loop, &result);
-
-        loop->runInLoop([&task] { task.start(); });
+        loop->runInLoop([loop, &result] {
+            [](mini::net::EventLoop* loop,
+               std::promise<WhenAnyResult<int>>* result) -> Task<void> {
+                auto r = co_await whenAny(
+                    sleepAndReturn(loop, 999, 500ms),  // slow — should lose
+                    sleepAndReturn(loop, 42, 50ms));   // fast — should win
+                result->set_value(r);
+                // Wait for the losing sub-task's timer to fire before quitting,
+                // so its wrapper coroutine completes cleanly.
+                co_await mini::coroutine::asyncSleep(loop, 600ms);
+                loop->quit();
+            }(loop, &result).detach();
+        });
 
         assert(resultFuture.wait_for(3s) == std::future_status::ready);
         auto r = resultFuture.get();
@@ -122,16 +122,16 @@ int main() {
         std::promise<bool> done;
         auto doneFuture = done.get_future();
 
-        auto task = [](mini::net::EventLoop* loop,
-                       std::promise<bool>* done) -> Task<void> {
-            co_await whenAll(
-                sleepVoid(loop, 30ms),
-                sleepVoid(loop, 60ms));
-            done->set_value(true);
-            loop->quit();
-        }(loop, &done);
-
-        loop->runInLoop([&task] { task.start(); });
+        loop->runInLoop([loop, &done] {
+            [](mini::net::EventLoop* loop,
+               std::promise<bool>* done) -> Task<void> {
+                co_await whenAll(
+                    sleepVoid(loop, 30ms),
+                    sleepVoid(loop, 60ms));
+                done->set_value(true);
+                loop->quit();
+            }(loop, &done).detach();
+        });
 
         assert(doneFuture.wait_for(3s) == std::future_status::ready);
         assert(doneFuture.get() == true);
@@ -145,18 +145,18 @@ int main() {
         std::promise<std::size_t> winnerIndex;
         auto winnerFuture = winnerIndex.get_future();
 
-        auto task = [](mini::net::EventLoop* loop,
-                       std::promise<std::size_t>* winnerIndex) -> Task<void> {
-            auto r = co_await whenAny(
-                sleepVoid(loop, 500ms),  // slow
-                sleepVoid(loop, 50ms));  // fast
-            winnerIndex->set_value(r.index);
-            // Wait for the loser to complete before quitting.
-            co_await mini::coroutine::asyncSleep(loop, 600ms);
-            loop->quit();
-        }(loop, &winnerIndex);
-
-        loop->runInLoop([&task] { task.start(); });
+        loop->runInLoop([loop, &winnerIndex] {
+            [](mini::net::EventLoop* loop,
+               std::promise<std::size_t>* winnerIndex) -> Task<void> {
+                auto r = co_await whenAny(
+                    sleepVoid(loop, 500ms),  // slow
+                    sleepVoid(loop, 50ms));  // fast
+                winnerIndex->set_value(r.index);
+                // Wait for the loser to complete before quitting.
+                co_await mini::coroutine::asyncSleep(loop, 600ms);
+                loop->quit();
+            }(loop, &winnerIndex).detach();
+        });
 
         assert(winnerFuture.wait_for(3s) == std::future_status::ready);
         assert(winnerFuture.get() == 1);  // second task wins
@@ -173,23 +173,23 @@ int main() {
         std::promise<bool> done;
         auto doneFuture = done.get_future();
 
-        auto task = [](mini::net::EventLoop* loop,
-                       std::promise<bool>* done) -> Task<void> {
-            // Run several WhenAny rounds to stress cleanup
-            for (int i = 0; i < 5; ++i) {
-                auto r = co_await whenAny(
-                    sleepAndReturn(loop, i, 200ms),
-                    sleepAndReturn(loop, i + 100, 30ms));
-                assert(r.index == 1);
-                assert(r.value == i + 100);
-                // Wait for the loser's timer to fire.
-                co_await mini::coroutine::asyncSleep(loop, 250ms);
-            }
-            done->set_value(true);
-            loop->quit();
-        }(loop, &done);
-
-        loop->runInLoop([&task] { task.start(); });
+        loop->runInLoop([loop, &done] {
+            [](mini::net::EventLoop* loop,
+               std::promise<bool>* done) -> Task<void> {
+                // Run several WhenAny rounds to stress cleanup
+                for (int i = 0; i < 5; ++i) {
+                    auto r = co_await whenAny(
+                        sleepAndReturn(loop, i, 200ms),
+                        sleepAndReturn(loop, i + 100, 30ms));
+                    assert(r.index == 1);
+                    assert(r.value == i + 100);
+                    // Wait for the loser's timer to fire.
+                    co_await mini::coroutine::asyncSleep(loop, 250ms);
+                }
+                done->set_value(true);
+                loop->quit();
+            }(loop, &done).detach();
+        });
 
         assert(doneFuture.wait_for(15s) == std::future_status::ready);
         assert(doneFuture.get());
