@@ -30,6 +30,7 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - ✅ `v4-alpha`：HTTP/1.1 协议层完成 — HttpRequest（请求值对象）/ HttpResponse（响应构建器 + 序列化）/ HttpContext（per-connection 增量解析状态机）/ HttpServer（TcpServer 协议适配器 + HttpCallback）/ keep-alive + Connection: close + 400 Bad Request
 - ✅ `v4-beta`：WebSocket 支持完成 — WebSocketCodec（RFC 6455 帧编解码）/ WebSocketHandshake（HTTP Upgrade 验证 + Sec-WebSocket-Accept 计算）/ WebSocketConnection（per-connection 状态机 + auto ping/pong + close 握手）/ WebSocketServer（TcpServer 包装 + HTTP→WS 升级）
 - ✅ `v4-gamma`：RPC 支持完成 — RpcCodec（长度前缀二进制帧编解码）/ RpcChannel（per-connection 请求-响应关联 + 超时管理）/ RpcServer（TcpServer 协议适配器 + method 注册分发）/ RpcClient（TcpClient 包装 + callback 和 coroutine 双模式调用）
+- ✅ `v4-delta`：协程版 RPC 完成 — RpcServer `registerCoroMethod()`（协程返回值即响应，异常即错误）/ RpcClient `coroCall()`（返回 payload 直接，错误抛 `RpcError`）/ `dispatchCoroHandler` 安全桥接（free function 保证帧生命周期）/ 支持 handler 内 `co_await` 异步操作（SleepAwaitable 等）
 
 当前 49/49 测试全部通过（unit × 16 + contract × 18 + integration × 14 + 1 pre-existing coroutine segfault）。
 
@@ -227,7 +228,7 @@ loop.loop();
 #include "mini/coroutine/Task.h"
 #include "mini/net/EventLoop.h"
 
-// 服务端：注册方法并启动
+// 服务端：注册 callback 方法
 mini::net::EventLoop loop;
 mini::rpc::RpcServer server(&loop, mini::net::InetAddress(9090, true), "RpcServer");
 
@@ -236,6 +237,13 @@ server.registerMethod("Greet", [](std::string_view payload,
                                    std::function<void(std::string_view)> respondError) {
     respond(std::string("Hello, ") + std::string(payload) + "!");
 });
+
+// 服务端：注册 coroutine 方法（co_return = 响应，throw = 错误）
+server.registerCoroMethod("AsyncGreet",
+    [&loop](std::string payload) -> mini::coroutine::Task<std::string> {
+        co_await mini::coroutine::asyncSleep(&loop, 100ms);  // 模拟异步处理
+        co_return "Hello, " + payload + "!";
+    });
 
 server.setThreadNum(4);  // 可选：多线程
 server.start();
@@ -249,10 +257,18 @@ client.call("Greet", "World", [](const std::string& error, const std::string& pa
     }
 }, 3000);  // 3秒超时
 
-// 客户端：coroutine 模式
+// 客户端：asyncCall 模式（RpcResult 返回值）
 auto result = co_await client.asyncCall("Greet", "World", 3000);
 if (result.ok()) {
     printf("Got: %s\n", result.payload.c_str());
+}
+
+// 客户端：coroCall 模式（直接返回 payload，错误抛 RpcError）
+try {
+    std::string payload = co_await client.coroCall("AsyncGreet", "World", 3000);
+    printf("Got: %s\n", payload.c_str());
+} catch (const mini::rpc::RpcError& e) {
+    printf("Error: %s\n", e.what());
 }
 
 loop.loop();

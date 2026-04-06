@@ -1,8 +1,9 @@
 // Integration tests for RPC — full round-trip with RpcClient + RpcServer.
-// Tests: callback call, coroutine call, timeout.
+// Tests: callback call, coroutine call, timeout, coro server, coroCall.
 
 #include "mini/rpc/RpcClient.h"
 #include "mini/rpc/RpcServer.h"
+#include "mini/coroutine/SleepAwaitable.h"
 #include "mini/coroutine/Task.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/InetAddress.h"
@@ -258,6 +259,210 @@ int main() {
 
         assert(gotTimeout);
         std::printf("  PASS: RPC timeout\n");
+    }
+
+    // Integration 5: Coroutine server handler + callback client
+    {
+        const uint16_t port = allocateTestPort();
+        mini::net::EventLoop loop;
+
+        RpcServer server(&loop, mini::net::InetAddress(port, true), "coro_srv_cb_cli");
+        server.registerCoroMethod("Reverse",
+            [](std::string payload) -> mini::coroutine::Task<std::string> {
+                std::string reversed(payload.rbegin(), payload.rend());
+                co_return reversed;
+            });
+        server.start();
+
+        RpcClient client(&loop, mini::net::InetAddress(port, true), "coro_srv_cb_cli_c");
+
+        bool gotResult = false;
+        std::string resultPayload;
+
+        client.setConnectionCallback([&](const mini::net::TcpConnectionPtr& conn) {
+            if (conn->connected()) {
+                client.call("Reverse", "abcdef",
+                    [&](const std::string& error, const std::string& payload) {
+                        assert(error.empty());
+                        gotResult = true;
+                        resultPayload = payload;
+                        loop.queueInLoop([&loop] { loop.quit(); });
+                    }, 3000);
+            }
+        });
+
+        auto timerId = loop.runAfter(3s, [&loop] { loop.quit(); });
+
+        client.connect();
+        loop.loop();
+
+        assert(gotResult);
+        assert(resultPayload == "fedcba");
+        std::printf("  PASS: coroutine server handler + callback client\n");
+    }
+
+    // Integration 6: Coroutine server handler with co_await (SleepAwaitable)
+    {
+        const uint16_t port = allocateTestPort();
+        mini::net::EventLoop loop;
+
+        RpcServer server(&loop, mini::net::InetAddress(port, true), "coro_async_srv");
+        server.registerCoroMethod("SlowEcho",
+            [&loop](std::string payload) -> mini::coroutine::Task<std::string> {
+                co_await mini::coroutine::asyncSleep(&loop, 50ms);
+                co_return "slow:" + payload;
+            });
+        server.start();
+
+        RpcClient client(&loop, mini::net::InetAddress(port, true), "coro_async_cli");
+
+        bool gotResult = false;
+        std::string resultPayload;
+
+        client.setConnectionCallback([&](const mini::net::TcpConnectionPtr& conn) {
+            if (conn->connected()) {
+                client.call("SlowEcho", "data",
+                    [&](const std::string& error, const std::string& payload) {
+                        assert(error.empty());
+                        gotResult = true;
+                        resultPayload = payload;
+                        loop.queueInLoop([&loop] { loop.quit(); });
+                    }, 3000);
+            }
+        });
+
+        auto timerId = loop.runAfter(3s, [&loop] { loop.quit(); });
+
+        client.connect();
+        loop.loop();
+
+        assert(gotResult);
+        assert(resultPayload == "slow:data");
+        std::printf("  PASS: coroutine server handler with co_await\n");
+    }
+
+    // Integration 7: coroCall — success path (returns payload, no exception)
+    {
+        const uint16_t port = allocateTestPort();
+        mini::net::EventLoop loop;
+
+        RpcServer server(&loop, mini::net::InetAddress(port, true), "corocall_srv");
+        server.registerCoroMethod("Upper",
+            [](std::string payload) -> mini::coroutine::Task<std::string> {
+                for (auto& c : payload) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                co_return payload;
+            });
+        server.start();
+
+        RpcClient client(&loop, mini::net::InetAddress(port, true), "corocall_cli");
+
+        bool gotResult = false;
+        std::string resultPayload;
+
+        auto coroHandler = [&]() -> mini::coroutine::Task<void> {
+            std::string result = co_await client.coroCall("Upper", "hello", 3000);
+            gotResult = true;
+            resultPayload = result;
+            loop.queueInLoop([&loop] { loop.quit(); });
+        };
+
+        client.setConnectionCallback([&](const mini::net::TcpConnectionPtr& conn) {
+            if (conn->connected()) {
+                coroHandler().detach();
+            }
+        });
+
+        auto timerId = loop.runAfter(3s, [&loop] { loop.quit(); });
+
+        client.connect();
+        loop.loop();
+
+        assert(gotResult);
+        assert(resultPayload == "HELLO");
+        std::printf("  PASS: coroCall success path\n");
+    }
+
+    // Integration 8: coroCall — error path (throws RpcError)
+    {
+        const uint16_t port = allocateTestPort();
+        mini::net::EventLoop loop;
+
+        RpcServer server(&loop, mini::net::InetAddress(port, true), "corocall_err_srv");
+        // No methods registered — any call gets "method not found"
+        server.start();
+
+        RpcClient client(&loop, mini::net::InetAddress(port, true), "corocall_err_cli");
+
+        bool gotError = false;
+        std::string errorMsg;
+
+        auto coroHandler = [&]() -> mini::coroutine::Task<void> {
+            try {
+                co_await client.coroCall("Unknown", "data", 3000);
+                assert(false && "should have thrown");
+            } catch (const RpcError& e) {
+                gotError = true;
+                errorMsg = e.what();
+            }
+            loop.queueInLoop([&loop] { loop.quit(); });
+        };
+
+        client.setConnectionCallback([&](const mini::net::TcpConnectionPtr& conn) {
+            if (conn->connected()) {
+                coroHandler().detach();
+            }
+        });
+
+        auto timerId = loop.runAfter(3s, [&loop] { loop.quit(); });
+
+        client.connect();
+        loop.loop();
+
+        assert(gotError);
+        assert(errorMsg.find("not found") != std::string::npos);
+        std::printf("  PASS: coroCall error throws RpcError\n");
+    }
+
+    // Integration 9: Full coroutine pipeline — coro server handler + coroCall client
+    {
+        const uint16_t port = allocateTestPort();
+        mini::net::EventLoop loop;
+
+        RpcServer server(&loop, mini::net::InetAddress(port, true), "full_coro_srv");
+        server.registerCoroMethod("Transform",
+            [&loop](std::string payload) -> mini::coroutine::Task<std::string> {
+                // Simulate async work with a short sleep
+                co_await mini::coroutine::asyncSleep(&loop, 20ms);
+                co_return "transformed:" + payload;
+            });
+        server.start();
+
+        RpcClient client(&loop, mini::net::InetAddress(port, true), "full_coro_cli");
+
+        bool gotResult = false;
+        std::string resultPayload;
+
+        auto coroHandler = [&]() -> mini::coroutine::Task<void> {
+            std::string result = co_await client.coroCall("Transform", "input", 3000);
+            gotResult = true;
+            resultPayload = result;
+            loop.queueInLoop([&loop] { loop.quit(); });
+        };
+
+        client.setConnectionCallback([&](const mini::net::TcpConnectionPtr& conn) {
+            if (conn->connected()) {
+                coroHandler().detach();
+            }
+        });
+
+        auto timerId = loop.runAfter(3s, [&loop] { loop.quit(); });
+
+        client.connect();
+        loop.loop();
+
+        assert(gotResult);
+        assert(resultPayload == "transformed:input");
+        std::printf("  PASS: full coroutine pipeline (coro server + coroCall client)\n");
     }
 
     std::printf("All RPC integration tests passed.\n");

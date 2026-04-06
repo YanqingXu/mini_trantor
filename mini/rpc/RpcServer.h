@@ -6,6 +6,7 @@
 // 遵守 one-loop-per-thread 线程模型。
 
 #include "mini/rpc/RpcChannel.h"
+#include "mini/coroutine/Task.h"
 #include "mini/net/Callbacks.h"
 #include "mini/net/TcpServer.h"
 
@@ -29,6 +30,9 @@ using RpcMethodHandler = std::function<void(std::string_view payload,
                                             std::function<void(std::string_view)> respond,
                                             std::function<void(std::string_view)> respondError)>;
 
+/// Coroutine-style handler: returns response payload, throws for error.
+using RpcCoroHandler = std::function<mini::coroutine::Task<std::string>(std::string payload)>;
+
 class RpcServer {
 public:
     RpcServer(mini::net::EventLoop* loop,
@@ -36,8 +40,13 @@ public:
               std::string name,
               bool reusePort = true);
 
-    /// Register a method handler. Must be called before start().
+    /// Register a callback-style method handler. Must be called before start().
     void registerMethod(std::string method, RpcMethodHandler handler);
+
+    /// Register a coroutine-style method handler. Must be called before start().
+    /// The handler returns the response payload via co_return.
+    /// Throwing an exception sends an error response with e.what().
+    void registerCoroMethod(std::string method, RpcCoroHandler handler);
 
     void setThreadNum(int numThreads) { server_.setThreadNum(numThreads); }
 
@@ -49,6 +58,7 @@ private:
 
     mini::net::TcpServer server_;
     std::unordered_map<std::string, RpcMethodHandler> methods_;
+    std::unordered_map<std::string, RpcCoroHandler> coroMethods_;
 };
 
 }  // namespace mini::rpc

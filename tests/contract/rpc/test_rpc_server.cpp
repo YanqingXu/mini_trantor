@@ -1,8 +1,9 @@
 // Contract tests for RpcServer — method registration, dispatch, error handling.
-// Uses real TcpServer + raw socket client to verify RPC protocol contract.
+// Tests: callback handler, coroutine handler, error handling, sequential requests.
 
 #include "mini/rpc/RpcCodec.h"
 #include "mini/rpc/RpcServer.h"
+#include "mini/coroutine/Task.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/InetAddress.h"
 
@@ -307,6 +308,103 @@ int main() {
         client.join();
         timer.join();
         std::printf("  PASS: handler error response\n");
+    }
+
+    // 5. Coroutine handler: registerCoroMethod dispatches and sends response
+    {
+        const uint16_t port = allocateTestPort();
+        mini::net::EventLoop loop;
+        RpcServer server(&loop, mini::net::InetAddress(port, true), "rpc_coro_handler");
+
+        server.registerCoroMethod("CoroEcho",
+            [](std::string payload) -> mini::coroutine::Task<std::string> {
+                co_return "coro:" + payload;
+            });
+
+        std::promise<void> done;
+        auto doneFuture = done.get_future();
+
+        server.start();
+
+        std::thread client([port, &done] {
+            std::this_thread::sleep_for(50ms);
+            int fd = connectTo(port);
+
+            std::string req = codec::encodeRequest(1, "CoroEcho", "world");
+            sendAll(fd, req);
+
+            std::string respFrame = readOneFrame(fd);
+            RpcMessage msg;
+            std::size_t consumed = 0;
+            auto result = codec::decode(respFrame.data(), respFrame.size(), msg, consumed);
+            assert(result == RpcDecodeResult::kComplete);
+            assert(msg.requestId == 1);
+            assert(msg.msgType == RpcMsgType::kResponse);
+            assert(msg.payload == "coro:world");
+
+            ::close(fd);
+            done.set_value();
+        });
+
+        std::thread timer([&] {
+            assert(doneFuture.wait_for(3s) == std::future_status::ready);
+            std::this_thread::sleep_for(50ms);
+            loop.queueInLoop([&loop] { loop.quit(); });
+        });
+
+        loop.loop();
+        client.join();
+        timer.join();
+        std::printf("  PASS: coroutine handler dispatched, response returned\n");
+    }
+
+    // 6. Coroutine handler throws exception → error response
+    {
+        const uint16_t port = allocateTestPort();
+        mini::net::EventLoop loop;
+        RpcServer server(&loop, mini::net::InetAddress(port, true), "rpc_coro_error");
+
+        server.registerCoroMethod("CoroFail",
+            [](std::string) -> mini::coroutine::Task<std::string> {
+                throw std::runtime_error("coro handler error");
+                co_return "";  // unreachable, needed for coroutine
+            });
+
+        std::promise<void> done;
+        auto doneFuture = done.get_future();
+
+        server.start();
+
+        std::thread client([port, &done] {
+            std::this_thread::sleep_for(50ms);
+            int fd = connectTo(port);
+
+            std::string req = codec::encodeRequest(1, "CoroFail", "");
+            sendAll(fd, req);
+
+            std::string respFrame = readOneFrame(fd);
+            RpcMessage msg;
+            std::size_t consumed = 0;
+            auto result = codec::decode(respFrame.data(), respFrame.size(), msg, consumed);
+            assert(result == RpcDecodeResult::kComplete);
+            assert(msg.requestId == 1);
+            assert(msg.msgType == RpcMsgType::kError);
+            assert(msg.payload == "coro handler error");
+
+            ::close(fd);
+            done.set_value();
+        });
+
+        std::thread timer([&] {
+            assert(doneFuture.wait_for(3s) == std::future_status::ready);
+            std::this_thread::sleep_for(50ms);
+            loop.queueInLoop([&loop] { loop.quit(); });
+        });
+
+        loop.loop();
+        client.join();
+        timer.join();
+        std::printf("  PASS: coroutine handler exception → error response\n");
     }
 
     std::printf("All RpcServer contract tests passed.\n");

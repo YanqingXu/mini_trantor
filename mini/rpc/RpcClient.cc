@@ -122,4 +122,14 @@ RpcClient::CallAwaitable RpcClient::asyncCall(std::string method,
     return CallAwaitable(this, std::move(method), std::move(payload), timeoutMs);
 }
 
+mini::coroutine::Task<std::string> RpcClient::coroCall(std::string method,
+                                                        std::string payload,
+                                                        int timeoutMs) {
+    auto result = co_await asyncCall(std::move(method), std::move(payload), timeoutMs);
+    if (!result.ok()) {
+        throw RpcError(result.error);
+    }
+    co_return std::move(result.payload);
+}
+
 }  // namespace mini::rpc

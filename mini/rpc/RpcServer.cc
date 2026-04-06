@@ -6,6 +6,26 @@
 #include <any>
 #include <utility>
 
+namespace {
+
+// Free function (not lambda) to avoid dangling-capture-in-coroutine issues.
+// All parameters are safely stored in the coroutine frame by value.
+mini::coroutine::Task<void> dispatchCoroHandler(
+    mini::rpc::RpcCoroHandler handler,
+    std::string payload,
+    std::function<void(std::string_view)> respond,
+    std::function<void(std::string_view)> respondError) {
+    try {
+        auto task = handler(std::move(payload));
+        std::string result = co_await std::move(task);
+        respond(result);
+    } catch (const std::exception& e) {
+        respondError(e.what());
+    }
+}
+
+}  // namespace
+
 namespace mini::rpc {
 
 RpcServer::RpcServer(mini::net::EventLoop* loop,
@@ -25,6 +45,10 @@ void RpcServer::registerMethod(std::string method, RpcMethodHandler handler) {
     methods_.emplace(std::move(method), std::move(handler));
 }
 
+void RpcServer::registerCoroMethod(std::string method, RpcCoroHandler handler) {
+    coroMethods_.emplace(std::move(method), std::move(handler));
+}
+
 void RpcServer::start() {
     server_.start();
 }
@@ -39,6 +63,16 @@ void RpcServer::onConnection(const mini::net::TcpConnectionPtr& conn) {
                    std::string_view payload,
                    std::function<void(std::string_view)> respond,
                    std::function<void(std::string_view)> respondError) {
+                // Check coroutine handlers first.
+                auto coroIt = coroMethods_.find(std::string(method));
+                if (coroIt != coroMethods_.end()) {
+                    dispatchCoroHandler(coroIt->second,
+                                        std::string(payload),
+                                        std::move(respond),
+                                        std::move(respondError)).detach();
+                    return;
+                }
+                // Then check callback handlers.
                 auto it = methods_.find(std::string(method));
                 if (it != methods_.end()) {
                     it->second(payload, std::move(respond), std::move(respondError));

@@ -8,10 +8,14 @@ TcpServer / TcpClient infrastructure. It consists of four components:
   with `[totalLen | requestId | msgType | serviceMethod | payload]` framing
 - **RpcChannel**: per-connection RPC state that maps in-flight requests to pending
   continuations (callback or coroutine), dispatches responses, and handles timeouts
-- **RpcServer**: thin wrapper around TcpServer that registers service methods,
-  decodes incoming requests, invokes handlers, and sends back responses
-- **RpcClient**: thin wrapper around TcpClient that provides `call()` (callback)
-  and coroutine `co_await asyncCall()` interfaces with per-request timeout
+- **RpcServer**: thin wrapper around TcpServer that registers service methods
+  (callback-style and coroutine-style), decodes incoming requests, invokes handlers,
+  and sends back responses. Coroutine handlers return `Task<std::string>` and throw
+  for errors; a `dispatchCoroHandler` wrapper bridges them to the callback-based
+  request dispatch path.
+- **RpcClient**: thin wrapper around TcpClient that provides `call()` (callback),
+  `co_await asyncCall()` (returns `RpcResult`), and `co_await coroCall()` (returns
+  payload directly, throws `RpcError` on error/timeout) interfaces
 
 The RPC layer is a protocol adapter — it does not own or modify the Reactor core.
 
@@ -24,6 +28,9 @@ The RPC layer is a protocol adapter — it does not own or modify the Reactor co
 - support per-request timeout via TimerQueue integration
 - support callback-based RPC calls (`call(method, payload, callback)`)
 - support coroutine-based RPC calls (`co_await asyncCall(method, payload, timeout)`)
+- support exception-based coroutine calls (`co_await coroCall(method, payload, timeout)`)
+- support coroutine-style server handlers (`registerCoroMethod` with `Task<std::string>` return)
+- dispatch coroutine handlers via `detach()`ed wrapper coroutine
 - dispatch incoming requests to registered method handlers on the server side
 - handle malformed frames gracefully (close connection)
 - resume coroutines / invoke callbacks on the connection's owner loop thread
@@ -50,6 +57,9 @@ The RPC layer is a protocol adapter — it does not own or modify the Reactor co
 - response without matching pending request is silently discarded
 - frame exceeding max size (default 64KB) causes connection close
 - server handler receives (request payload, response callback) — must call response exactly once
+- coroutine handler return value is sent as response; thrown exception is sent as error
+- `dispatchCoroHandler` is a free function (not lambda) to avoid dangling captures
+- `coroCall()` throws `RpcError` on error/timeout; returns payload string on success
 
 ---
 
@@ -117,6 +127,12 @@ The RPC layer is a protocol adapter — it does not own or modify the Reactor co
 - full RPC round-trip: client call → server handler → client callback
 - coroutine round-trip: `co_await asyncCall()` returns response
 - coroutine timeout: `co_await asyncCall()` throws on timeout
+- coroutine server handler: `registerCoroMethod` handler's return value sent as response
+- coroutine server handler error: thrown exception sent as error response
+- coroutine server handler with async: handler can `co_await` and still respond correctly
+- `coroCall()` returns payload directly on success
+- `coroCall()` throws `RpcError` on error or timeout
+- full coroutine pipeline: coroutine server handler + `coroCall()` client
 
 ---
 
@@ -125,6 +141,8 @@ The RPC layer is a protocol adapter — it does not own or modify the Reactor co
 - Can pending map leak entries (timeout + response race)?
 - Does requestId wrap safely (uint64 — effectively never)?
 - Is response sent exactly once per request on the server side?
+- Does `dispatchCoroHandler` safely own all captured state in the coroutine frame?
+- Does `coroCall()` propagate the error message correctly in `RpcError`?
 - Are all pending callbacks invoked on connection close (no leaked continuations)?
 - Does the server handle back-to-back requests on the same connection?
 - Is max frame size enforced before allocating payload memory?

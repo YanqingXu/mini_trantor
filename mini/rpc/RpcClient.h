@@ -5,6 +5,7 @@
 // 所有 RPC 状态在连接的 owner loop 线程上管理。
 
 #include "mini/rpc/RpcChannel.h"
+#include "mini/coroutine/Task.h"
 #include "mini/net/Callbacks.h"
 #include "mini/net/TcpClient.h"
 
@@ -22,6 +23,12 @@ class InetAddress;
 }  // namespace mini::net
 
 namespace mini::rpc {
+
+/// Exception thrown by coroCall() on RPC error or timeout.
+class RpcError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 
 /// Result of an RPC call.
 struct RpcResult {
@@ -73,6 +80,12 @@ public:
     CallAwaitable asyncCall(std::string method,
                             std::string payload,
                             int timeoutMs = 3000);
+
+    /// Coroutine-style RPC call that returns payload directly.
+    /// Throws RpcError on error or timeout.
+    mini::coroutine::Task<std::string> coroCall(std::string method,
+                                                std::string payload,
+                                                int timeoutMs = 3000);
 
     void setConnectionCallback(mini::net::ConnectionCallback cb) {
         userConnectionCallback_ = std::move(cb);
