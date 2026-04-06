@@ -39,6 +39,10 @@ add_library(mini_trantor
     mini/ws/WebSocketHandshake.cc
     mini/ws/WebSocketConnection.cc
     mini/ws/WebSocketServer.cc
+    mini/rpc/RpcCodec.cc
+    mini/rpc/RpcChannel.cc
+    mini/rpc/RpcServer.cc
+    mini/rpc/RpcClient.cc
 )
 
 add_library(mini_trantor::mini_trantor ALIAS mini_trantor)

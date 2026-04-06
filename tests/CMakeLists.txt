@@ -123,6 +123,11 @@ add_mini_test(unit ws ${CMAKE_CURRENT_SOURCE_DIR}/unit/ws/test_ws_handshake.cpp)
 add_mini_test(contract ws ${CMAKE_CURRENT_SOURCE_DIR}/contract/ws/test_ws_server.cpp)
 add_mini_test(integration ws ${CMAKE_CURRENT_SOURCE_DIR}/integration/ws/test_ws_server.cpp)
 
+# --- RPC tests ---
+add_mini_test(unit rpc ${CMAKE_CURRENT_SOURCE_DIR}/unit/rpc/test_rpc_codec.cpp)
+add_mini_test(contract rpc ${CMAKE_CURRENT_SOURCE_DIR}/contract/rpc/test_rpc_server.cpp)
+add_mini_test(integration rpc ${CMAKE_CURRENT_SOURCE_DIR}/integration/rpc/test_rpc.cpp)
+
 get_property(unit_targets GLOBAL PROPERTY MINI_UNIT_TEST_TARGETS)
 get_property(contract_targets GLOBAL PROPERTY MINI_CONTRACT_TEST_TARGETS)
 get_property(integration_targets GLOBAL PROPERTY MINI_INTEGRATION_TEST_TARGETS)

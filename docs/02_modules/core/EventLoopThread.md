@@ -4,7 +4,7 @@
 
 * **角色**：后台线程中**单个 EventLoop 的生命周期管理者**
 * **层级**：线程层（在 EventLoop 之上，在 EventLoopThreadPool 之下）
-* 每个 EventLoopThread 管理一个 `std::thread` 和一个 `EventLoop`，前者拥有后者的栈帧
+* 每个 EventLoopThread 管理一个 `std::jthread` 和一个 `EventLoop`，前者拥有后者的栈帧
 
 ```
   creator thread (base loop)

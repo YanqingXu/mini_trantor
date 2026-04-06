@@ -29,8 +29,9 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 ### v4（进行中）
 - ✅ `v4-alpha`：HTTP/1.1 协议层完成 — HttpRequest（请求值对象）/ HttpResponse（响应构建器 + 序列化）/ HttpContext（per-connection 增量解析状态机）/ HttpServer（TcpServer 协议适配器 + HttpCallback）/ keep-alive + Connection: close + 400 Bad Request
 - ✅ `v4-beta`：WebSocket 支持完成 — WebSocketCodec（RFC 6455 帧编解码）/ WebSocketHandshake（HTTP Upgrade 验证 + Sec-WebSocket-Accept 计算）/ WebSocketConnection（per-connection 状态机 + auto ping/pong + close 握手）/ WebSocketServer（TcpServer 包装 + HTTP→WS 升级）
+- ✅ `v4-gamma`：RPC 支持完成 — RpcCodec（长度前缀二进制帧编解码）/ RpcChannel（per-connection 请求-响应关联 + 超时管理）/ RpcServer（TcpServer 协议适配器 + method 注册分发）/ RpcClient（TcpClient 包装 + callback 和 coroutine 双模式调用）
 
-当前 46/46 测试全部通过（unit × 15 + contract × 17 + integration × 13 + 1 pre-existing coroutine segfault）。
+当前 49/49 测试全部通过（unit × 16 + contract × 18 + integration × 14 + 1 pre-existing coroutine segfault）。
 
 ## 下一阶段方向
 
@@ -39,6 +40,7 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - **WebSocket 支持**：~~HTTP Upgrade 握手 + WebSocket 帧编解码~~ ✅ 已完成
 - **信号处理**：SIGINT/SIGTERM 的 EventLoop 集成，优雅关闭
 - **HTTP 客户端**：基于 TcpClient 的 HTTP/1.1 请求发送与响应解析
+- **RPC 生态**：protobuf codegen / 服务发现 / 连接池 / 重试策略
 
 ## 核心理念
 对于重要模块，不先写代码，先写：
@@ -55,6 +57,7 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - `mini/net/`: Reactor 核心实现（EventLoop、Channel、Poller、TcpConnection、TcpServer、TcpClient、Connector、TimerQueue、TlsContext、DnsResolver 等）
 - `mini/http/`: HTTP/1.1 协议层（HttpRequest、HttpResponse、HttpContext、HttpServer）
 - `mini/ws/`: WebSocket 协议层（WebSocketCodec、WebSocketHandshake、WebSocketConnection、WebSocketServer）
+- `mini/rpc/`: RPC 协议层（RpcCodec、RpcChannel、RpcServer、RpcClient）
 - `mini/coroutine/`: 协程桥接层（`Task.h` 协程结果对象、`SleepAwaitable.h` 定时器 awaitable、`ResolveAwaitable.h` DNS 解析 awaitable）
 - `mini/base/`: 基础工具（Timestamp、noncopyable）
 - `tests/`: 按 `unit/`、`contract/`、`integration/` 分层的测试
@@ -112,6 +115,8 @@ target_link_libraries(my_app PRIVATE mini_trantor::mini_trantor)
 #include "mini/coroutine/ResolveAwaitable.h"
 #include "mini/http/HttpServer.h"
 #include "mini/ws/WebSocketServer.h"
+#include "mini/rpc/RpcServer.h"
+#include "mini/rpc/RpcClient.h"
 ```
 
 ### TLS/SSL 使用示例
@@ -211,5 +216,44 @@ server.setCloseCallback([](const mini::net::TcpConnectionPtr& conn,
 });
 
 server.start();
+loop.loop();
+```
+
+### RPC 使用示例
+
+```cpp
+#include "mini/rpc/RpcServer.h"
+#include "mini/rpc/RpcClient.h"
+#include "mini/coroutine/Task.h"
+#include "mini/net/EventLoop.h"
+
+// 服务端：注册方法并启动
+mini::net::EventLoop loop;
+mini::rpc::RpcServer server(&loop, mini::net::InetAddress(9090, true), "RpcServer");
+
+server.registerMethod("Greet", [](std::string_view payload,
+                                   std::function<void(std::string_view)> respond,
+                                   std::function<void(std::string_view)> respondError) {
+    respond(std::string("Hello, ") + std::string(payload) + "!");
+});
+
+server.setThreadNum(4);  // 可选：多线程
+server.start();
+
+// 客户端：callback 模式
+mini::rpc::RpcClient client(&loop, mini::net::InetAddress(9090, true), "RpcClient");
+client.connect();
+client.call("Greet", "World", [](const std::string& error, const std::string& payload) {
+    if (error.empty()) {
+        printf("Got: %s\n", payload.c_str());  // "Hello, World!"
+    }
+}, 3000);  // 3秒超时
+
+// 客户端：coroutine 模式
+auto result = co_await client.asyncCall("Greet", "World", 3000);
+if (result.ok()) {
+    printf("Got: %s\n", result.payload.c_str());
+}
+
 loop.loop();
 ```
