@@ -1,19 +1,16 @@
 #include "mini/net/TcpConnection.h"
 
+#include "mini/base/Logger.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/SocketsOps.h"
 #include "mini/net/TlsContext.h"
+#include "mini/net/detail/ConnectionAwaiterRegistry.h"
+#include "mini/net/detail/ConnectionBackpressureController.h"
+#include "mini/net/detail/ConnectionCallbackDispatcher.h"
+#include "mini/net/detail/ConnectionTransport.h"
 
-#include "mini/base/Logger.h"
-
-#include <cerrno>
-#include <cstring>
 #include <stdexcept>
 #include <utility>
-#include <unistd.h>
-
-#include <openssl/err.h>
-#include <openssl/ssl.h>
 
 namespace mini::net {
 
@@ -30,22 +27,17 @@ TcpConnection::TcpConnection(
       channel_(std::make_unique<Channel>(loop, sockfd)),
       localAddr_(localAddr),
       peerAddr_(peerAddr),
-      highWaterMark_(0),
-      backpressureHighWaterMark_(0),
-      backpressureLowWaterMark_(0),
-      reading_(true) {
+      callbacks_(std::make_unique<detail::ConnectionCallbackDispatcher>()),
+      backpressure_(std::make_unique<detail::ConnectionBackpressureController>(loop)),
+      awaiters_(std::make_unique<detail::ConnectionAwaiterRegistry>(loop)),
+      transport_(std::make_unique<detail::ConnectionTransport>()) {
     channel_->setReadCallback([this](mini::base::Timestamp receiveTime) { handleRead(receiveTime); });
     channel_->setWriteCallback([this] { handleWrite(); });
     channel_->setCloseCallback([this] { handleClose(); });
     channel_->setErrorCallback([this] { handleError(); });
 }
 
-TcpConnection::~TcpConnection() {
-    if (ssl_) {
-        SSL_free(ssl_);
-        ssl_ = nullptr;
-    }
-}
+TcpConnection::~TcpConnection() = default;
 
 EventLoop* TcpConnection::getLoop() const noexcept {
     return loop_;
@@ -112,13 +104,7 @@ void TcpConnection::setTcpNoDelay(bool on) {
 }
 
 void TcpConnection::setBackpressurePolicy(std::size_t highWaterMark, std::size_t lowWaterMark) {
-    if (highWaterMark == 0) {
-        if (lowWaterMark != 0) {
-            throw std::invalid_argument("backpressure low water mark requires a non-zero high water mark");
-        }
-    } else if (lowWaterMark >= highWaterMark) {
-        throw std::invalid_argument("backpressure low water mark must be smaller than high water mark");
-    }
+    detail::ConnectionBackpressureController::validateThresholds(highWaterMark, lowWaterMark);
 
     if (loop_->isInLoopThread()) {
         setBackpressurePolicyInLoop(highWaterMark, lowWaterMark);
@@ -133,76 +119,52 @@ void TcpConnection::setBackpressurePolicy(std::size_t highWaterMark, std::size_t
 
 void TcpConnection::startTls(std::shared_ptr<TlsContext> ctx, bool isServer, const std::string& hostname) {
     loop_->assertInLoopThread();
-    tlsContext_ = std::move(ctx);
-    ssl_ = SSL_new(tlsContext_->nativeHandle());
-    if (!ssl_) {
-        LOG_ERROR << "TcpConnection::startTls: SSL_new failed";
-        return;
-    }
-    SSL_set_fd(ssl_, socket_->fd());
-
-    if (isServer) {
-        SSL_set_accept_state(ssl_);
-    } else {
-        SSL_set_connect_state(ssl_);
-        if (!hostname.empty()) {
-            SSL_set_tlsext_host_name(ssl_, hostname.c_str());
-        }
-    }
-    tlsState_ = kTlsHandshaking;
+    transport_->enableTls(socket_->fd(), std::move(ctx), isServer, hostname);
 }
 
 bool TcpConnection::isTlsEstablished() const noexcept {
-    return tlsState_ == kTlsEstablished;
+    return transport_->isTlsEstablished();
 }
 
 void TcpConnection::setConnectionCallback(ConnectionCallback cb) {
-    connectionCallback_ = std::move(cb);
+    callbacks_->setConnectionCallback(std::move(cb));
 }
 
 void TcpConnection::setMessageCallback(MessageCallback cb) {
-    messageCallback_ = std::move(cb);
+    callbacks_->setMessageCallback(std::move(cb));
 }
 
 void TcpConnection::setHighWaterMarkCallback(HighWaterMarkCallback cb, std::size_t highWaterMark) {
-    highWaterMarkCallback_ = std::move(cb);
-    highWaterMark_ = highWaterMark;
+    callbacks_->setHighWaterMarkCallback(std::move(cb), highWaterMark);
 }
 
 void TcpConnection::setWriteCompleteCallback(WriteCompleteCallback cb) {
-    writeCompleteCallback_ = std::move(cb);
+    callbacks_->setWriteCompleteCallback(std::move(cb));
 }
 
 void TcpConnection::setCloseCallback(CloseCallback cb) {
-    closeCallback_ = std::move(cb);
+    callbacks_->setCloseCallback(std::move(cb));
 }
 
 void TcpConnection::connectEstablished() {
     loop_->assertInLoopThread();
     setState(kConnected);
     channel_->tie(shared_from_this());
-    reading_ = true;
     channel_->enableReading();
-    applyBackpressurePolicy();
+    backpressure_->onConnectionEstablished(outputBuffer_.readableBytes(), *channel_);
 
-    if (ssl_ && tlsState_ == kTlsHandshaking) {
-        doTlsHandshake();
-    } else {
-        if (connectionCallback_) {
-            connectionCallback_(shared_from_this());
-        }
+    if (transport_->handshakePending()) {
+        advanceTransportHandshake();
+        return;
     }
+
+    notifyConnected(shared_from_this());
 }
 
 void TcpConnection::connectDestroyed() {
     loop_->assertInLoopThread();
     if (state_ == kConnected) {
-        setState(kDisconnected);
-        reading_ = false;
-        channel_->disableAll();
-        if (connectionCallback_) {
-            connectionCallback_(shared_from_this());
-        }
+        runCloseSequence(shared_from_this(), false);
     }
     channel_->remove();
 }
@@ -284,40 +246,36 @@ void TcpConnection::handleRead(mini::base::Timestamp receiveTime) {
     (void)receiveTime;
     loop_->assertInLoopThread();
 
-    if (ssl_ && tlsState_ == kTlsHandshaking) {
-        doTlsHandshake();
+    if (transport_->handshakePending()) {
+        advanceTransportHandshake();
         return;
     }
 
-    const bool hasReadWaiter = readWaiter_.active;
+    const bool hasReadWaiter = awaiters_->hasReadWaiter();
+    const auto result = transport_->readInto(inputBuffer_, *channel_);
 
-    int savedErrno = 0;
-    ssize_t n;
-    if (ssl_) {
-        n = sslReadIntoBuffer(&savedErrno);
-    } else {
-        n = inputBuffer_.readFd(channel_->fd(), &savedErrno);
+    if (result.status == detail::ConnectionTransport::Status::kOk) {
+        auto self = shared_from_this();
+        awaiters_->resumeReadWaiterIfSatisfied(inputBuffer_.readableBytes());
+        callbacks_->notifyMessage(self, &inputBuffer_, hasReadWaiter);
+        return;
     }
 
-    if (n > 0) {
-        resumeReadWaiterIfNeeded();
-        if (messageCallback_ && !hasReadWaiter) {
-            messageCallback_(shared_from_this(), &inputBuffer_);
-        }
-    } else if (n == 0) {
+    if (result.status == detail::ConnectionTransport::Status::kPeerClosed) {
         handleClose();
-    } else if (n == -2) {
-        // SSL_ERROR_WANT_READ: no data available yet, do nothing
-    } else {
-        handleError(savedErrno);
+        return;
+    }
+
+    if (result.status == detail::ConnectionTransport::Status::kError) {
+        handleError(result.savedErrno);
     }
 }
 
 void TcpConnection::handleWrite() {
     loop_->assertInLoopThread();
 
-    if (ssl_ && tlsState_ == kTlsHandshaking) {
-        doTlsHandshake();
+    if (transport_->handshakePending()) {
+        advanceTransportHandshake();
         return;
     }
 
@@ -325,35 +283,18 @@ void TcpConnection::handleWrite() {
         return;
     }
 
-    int savedErrno = 0;
-    ssize_t n;
-    if (ssl_) {
-        n = sslWriteFromBuffer(&savedErrno);
-    } else {
-        n = outputBuffer_.writeFd(channel_->fd(), &savedErrno);
-    }
-
-    if (n > 0) {
-        if (!ssl_) {
-            outputBuffer_.retrieve(static_cast<std::size_t>(n));
-        }
-        applyBackpressurePolicy();
-        if (outputBuffer_.readableBytes() == 0) {
-            channel_->disableWriting();
-            if (writeCompleteCallback_) {
-                auto self = shared_from_this();
-                loop_->queueInLoop([self, cb = writeCompleteCallback_] { cb(self); });
-            }
-            resumeWriteWaiterIfNeeded();
-            if (state_ == kDisconnecting) {
-                shutdownInLoop();
-            }
-        }
+    const auto result = transport_->writeFromBuffer(outputBuffer_, *channel_);
+    if (result.status == detail::ConnectionTransport::Status::kError) {
+        handleError(result.savedErrno);
         return;
     }
 
-    if (savedErrno != EWOULDBLOCK && savedErrno != EAGAIN) {
-        handleError(savedErrno);
+    if (result.status == detail::ConnectionTransport::Status::kOk) {
+        applyBackpressurePolicy();
+        if (outputBuffer_.readableBytes() == 0) {
+            channel_->disableWriting();
+            finishPendingWrite(shared_from_this());
+        }
     }
 }
 
@@ -362,23 +303,13 @@ void TcpConnection::handleClose() {
     if (state_ == kDisconnected) {
         return;
     }
-    setState(kDisconnected);
-    reading_ = false;
-    channel_->disableAll();
-    auto guardThis = shared_from_this();
-    resumeAllWaitersOnClose();
-    if (connectionCallback_) {
-        connectionCallback_(guardThis);
-    }
-    if (closeCallback_) {
-        closeCallback_(guardThis);
-    }
+    runCloseSequence(shared_from_this(), true);
 }
 
 void TcpConnection::handleError(int savedErrno) {
     loop_->assertInLoopThread();
     const int err = savedErrno != 0 ? savedErrno : sockets::getSocketError(channel_->fd());
-    LOG_ERROR << "TcpConnection error on " << name_ << ": " << err << " (" << std::strerror(err) << ")";
+    LOG_ERROR << "TcpConnection error on " << name_ << ": " << err;
     if (state_ != kDisconnected) {
         handleClose();
     }
@@ -391,63 +322,31 @@ void TcpConnection::sendInLoop(const char* data, std::size_t len) {
     }
 
     std::size_t remaining = len;
-    ssize_t nwrote = 0;
-    bool faultError = false;
+    std::size_t nwrote = 0;
 
     if (!channel_->isWriting() && outputBuffer_.readableBytes() == 0) {
-        if (ssl_) {
-            ERR_clear_error();
-            const int n = SSL_write(ssl_, data, static_cast<int>(len));
-            if (n > 0) {
-                nwrote = n;
-                remaining = len - static_cast<std::size_t>(n);
-            } else {
-                const int err = SSL_get_error(ssl_, n);
-                if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ) {
-                    nwrote = 0;
-                } else {
-                    nwrote = 0;
-                    faultError = true;
-                }
-            }
-        } else {
-            nwrote = ::write(channel_->fd(), data, len);
-            if (nwrote >= 0) {
-                remaining = len - static_cast<std::size_t>(nwrote);
-            } else {
-                nwrote = 0;
-                if (errno != EWOULDBLOCK && errno != EAGAIN) {
-                    faultError = true;
-                }
-            }
+        const auto result = transport_->writeRaw(std::string_view(data, len), *channel_);
+        if (result.status == detail::ConnectionTransport::Status::kError) {
+            handleError(result.savedErrno);
+            return;
         }
 
-        if (!faultError && remaining == 0) {
-            if (writeCompleteCallback_) {
-                auto self = shared_from_this();
-                loop_->queueInLoop([self, cb = writeCompleteCallback_] { cb(self); });
-            }
-            resumeWriteWaiterIfNeeded();
+        nwrote = result.bytes;
+        remaining = len - nwrote;
+        if (remaining == 0) {
+            finishPendingWrite(shared_from_this());
             return;
         }
     }
 
-    if (faultError) {
-        handleError(errno);
-        return;
-    }
-
-    if (!faultError && remaining > 0) {
+    if (remaining > 0) {
         const auto oldLen = outputBuffer_.readableBytes();
         outputBuffer_.append(data + nwrote, remaining);
         if (!channel_->isWriting()) {
             channel_->enableWriting();
         }
         const auto newLen = outputBuffer_.readableBytes();
-        if (highWaterMarkCallback_ && highWaterMark_ > 0 && oldLen < highWaterMark_ && newLen >= highWaterMark_) {
-            auto self = shared_from_this();
-            loop_->queueInLoop([self, cb = highWaterMarkCallback_, newLen] { cb(self, newLen); });
-        }
+        maybeQueueHighWaterMark(shared_from_this(), oldLen, newLen);
         applyBackpressurePolicy();
     }
 }
@@ -455,12 +354,7 @@ void TcpConnection::sendInLoop(const char* data, std::size_t len) {
 void TcpConnection::shutdownInLoop() {
     loop_->assertInLoopThread();
     if (!channel_->isWriting()) {
-        if (ssl_ && tlsState_ == kTlsEstablished) {
-            tlsState_ = kTlsShuttingDown;
-            ERR_clear_error();
-            SSL_shutdown(ssl_);
-        }
-        socket_->shutdownWrite();
+        transport_->shutdownWrite(*socket_);
     }
 }
 
@@ -473,40 +367,66 @@ void TcpConnection::forceCloseInLoop() {
 
 void TcpConnection::setBackpressurePolicyInLoop(std::size_t highWaterMark, std::size_t lowWaterMark) {
     loop_->assertInLoopThread();
-    backpressureHighWaterMark_ = highWaterMark;
-    backpressureLowWaterMark_ = lowWaterMark;
-    applyBackpressurePolicy();
+    backpressure_->configure(
+        highWaterMark,
+        lowWaterMark,
+        outputBuffer_.readableBytes(),
+        *channel_);
 }
 
 void TcpConnection::applyBackpressurePolicy() {
-    loop_->assertInLoopThread();
-    if (state_ != kConnected && state_ != kDisconnecting) {
-        return;
-    }
-
-    if (backpressureHighWaterMark_ == 0) {
-        if (!reading_) {
-            reading_ = true;
-            channel_->enableReading();
-        }
-        return;
-    }
-
-    const auto bufferedBytes = outputBuffer_.readableBytes();
-    if (reading_ && bufferedBytes >= backpressureHighWaterMark_) {
-        reading_ = false;
-        channel_->disableReading();
-        return;
-    }
-
-    if (!reading_ && bufferedBytes <= backpressureLowWaterMark_) {
-        reading_ = true;
-        channel_->enableReading();
-    }
+    backpressure_->onBufferedBytesChanged(outputBuffer_.readableBytes(), *channel_);
 }
 
 void TcpConnection::setState(StateE state) noexcept {
     state_ = state;
+}
+
+void TcpConnection::advanceTransportHandshake() {
+    loop_->assertInLoopThread();
+    const auto result = transport_->advanceHandshake(*channel_);
+    if (result.failed) {
+        handleError(result.savedErrno);
+        return;
+    }
+    if (result.completed) {
+        notifyConnected(shared_from_this());
+    }
+}
+
+void TcpConnection::runCloseSequence(const TcpConnectionPtr& connection, bool notifyCloseCallback) {
+    loop_->assertInLoopThread();
+    setState(kDisconnected);
+    backpressure_->onClosed();
+    channel_->disableAll();
+    awaiters_->resumeAllOnClose();
+    notifyDisconnected(connection);
+    if (notifyCloseCallback) {
+        callbacks_->notifyClose(connection);
+    }
+}
+
+void TcpConnection::notifyConnected(const TcpConnectionPtr& connection) {
+    callbacks_->notifyConnected(connection);
+}
+
+void TcpConnection::notifyDisconnected(const TcpConnectionPtr& connection) {
+    callbacks_->notifyDisconnected(connection);
+}
+
+void TcpConnection::finishPendingWrite(const TcpConnectionPtr& connection) {
+    callbacks_->queueWriteComplete(*loop_, connection);
+    awaiters_->resumeWriteWaiterIfNeeded();
+    if (state_ == kDisconnecting) {
+        shutdownInLoop();
+    }
+}
+
+void TcpConnection::maybeQueueHighWaterMark(
+    const TcpConnectionPtr& connection,
+    std::size_t oldLen,
+    std::size_t newLen) {
+    callbacks_->queueHighWaterMark(*loop_, connection, oldLen, newLen);
 }
 
 bool TcpConnection::canReadImmediately(std::size_t minBytes) const noexcept {
@@ -528,14 +448,7 @@ void TcpConnection::armReadWaiter(std::coroutine_handle<> handle, std::size_t mi
     auto self = shared_from_this();
     auto action = [self, handle, minBytes] {
         self->loop_->assertInLoopThread();
-        if (self->readWaiter_.active) {
-            throw std::logic_error("only one read waiter is allowed per TcpConnection");
-        }
-        if (self->canReadImmediately(minBytes)) {
-            self->queueResume(handle);
-            return;
-        }
-        self->readWaiter_ = {.handle = handle, .minBytes = minBytes, .active = true};
+        self->awaiters_->armReadWaiter(handle, minBytes, self->canReadImmediately(minBytes));
     };
 
     if (loop_->isInLoopThread()) {
@@ -549,17 +462,14 @@ void TcpConnection::armWriteWaiter(std::coroutine_handle<> handle, std::string d
     auto self = shared_from_this();
     auto action = [self, handle, data = std::move(data)]() mutable {
         self->loop_->assertInLoopThread();
-        if (self->writeWaiter_.active) {
-            throw std::logic_error("only one write waiter is allowed per TcpConnection");
-        }
+        self->awaiters_->armWriteWaiter(handle, data.empty() || self->state_ == kDisconnected);
         if (data.empty() || self->state_ == kDisconnected) {
-            self->queueResume(handle);
             return;
         }
-        self->writeWaiter_ = {.handle = handle, .active = true};
+
         self->sendInLoop(data.data(), data.size());
         if (!self->channel_->isWriting() && self->outputBuffer_.readableBytes() == 0) {
-            self->resumeWriteWaiterIfNeeded();
+            self->awaiters_->resumeWriteWaiterIfNeeded();
         }
     };
 
@@ -574,14 +484,7 @@ void TcpConnection::armCloseWaiter(std::coroutine_handle<> handle) {
     auto self = shared_from_this();
     auto action = [self, handle] {
         self->loop_->assertInLoopThread();
-        if (self->closeWaiter_.active) {
-            throw std::logic_error("only one close waiter is allowed per TcpConnection");
-        }
-        if (self->state_ == kDisconnected) {
-            self->queueResume(handle);
-            return;
-        }
-        self->closeWaiter_ = {.handle = handle, .active = true};
+        self->awaiters_->armCloseWaiter(handle, self->state_ == kDisconnected);
     };
 
     if (loop_->isInLoopThread()) {
@@ -589,148 +492,6 @@ void TcpConnection::armCloseWaiter(std::coroutine_handle<> handle) {
     } else {
         loop_->queueInLoop(std::move(action));
     }
-}
-
-void TcpConnection::queueResume(std::coroutine_handle<> handle) {
-    if (!handle) {
-        return;
-    }
-    loop_->queueInLoop([handle] { handle.resume(); });
-}
-
-void TcpConnection::resumeReadWaiterIfNeeded() {
-    if (!readWaiter_.active) {
-        return;
-    }
-    if (inputBuffer_.readableBytes() < readWaiter_.minBytes && state_ == kConnected) {
-        return;
-    }
-    auto handle = readWaiter_.handle;
-    readWaiter_ = {};
-    queueResume(handle);
-}
-
-void TcpConnection::resumeWriteWaiterIfNeeded() {
-    if (!writeWaiter_.active) {
-        return;
-    }
-    auto handle = writeWaiter_.handle;
-    writeWaiter_ = {};
-    queueResume(handle);
-}
-
-void TcpConnection::resumeAllWaitersOnClose() {
-    if (readWaiter_.active) {
-        auto handle = readWaiter_.handle;
-        readWaiter_ = {};
-        queueResume(handle);
-    }
-    if (writeWaiter_.active) {
-        auto handle = writeWaiter_.handle;
-        writeWaiter_ = {};
-        queueResume(handle);
-    }
-    if (closeWaiter_.active) {
-        auto handle = closeWaiter_.handle;
-        closeWaiter_ = {};
-        queueResume(handle);
-    }
-}
-
-void TcpConnection::doTlsHandshake() {
-    loop_->assertInLoopThread();
-
-    ERR_clear_error();
-    const int ret = SSL_do_handshake(ssl_);
-    if (ret == 1) {
-        // Handshake completed
-        tlsState_ = kTlsEstablished;
-        channel_->disableWriting();
-        if (connectionCallback_) {
-            connectionCallback_(shared_from_this());
-        }
-        return;
-    }
-
-    const int err = SSL_get_error(ssl_, ret);
-    if (err == SSL_ERROR_WANT_READ) {
-        if (!channel_->isReading()) {
-            channel_->enableReading();
-        }
-    } else if (err == SSL_ERROR_WANT_WRITE) {
-        channel_->enableWriting();
-    } else {
-        LOG_ERROR << "TcpConnection TLS handshake failed on " << name_ << ": SSL error " << err;
-        handleError(errno);
-    }
-}
-
-ssize_t TcpConnection::sslReadIntoBuffer(int* savedErrno) {
-    // SSL_read into a stack buffer, then append to inputBuffer_
-    ssize_t totalRead = 0;
-    char buf[16384];
-
-    while (true) {
-        ERR_clear_error();
-        const int n = SSL_read(ssl_, buf, sizeof(buf));
-        if (n > 0) {
-            inputBuffer_.append(buf, static_cast<std::size_t>(n));
-            totalRead += n;
-        } else {
-            const int err = SSL_get_error(ssl_, n);
-            if (err == SSL_ERROR_WANT_READ) {
-                break;
-            } else if (err == SSL_ERROR_WANT_WRITE) {
-                channel_->enableWriting();
-                break;
-            } else if (err == SSL_ERROR_ZERO_RETURN) {
-                // Peer sent close_notify
-                if (totalRead > 0) {
-                    break;
-                }
-                return 0;  // Signal EOF
-            } else {
-                *savedErrno = errno;
-                if (totalRead > 0) {
-                    break;
-                }
-                return -1;
-            }
-        }
-    }
-
-    return totalRead > 0 ? totalRead : -2;  // -2: no data yet (WANT_READ)
-}
-
-ssize_t TcpConnection::sslWriteFromBuffer(int* savedErrno) {
-    ssize_t totalWritten = 0;
-
-    while (outputBuffer_.readableBytes() > 0) {
-        ERR_clear_error();
-        const int n = SSL_write(ssl_,
-                                outputBuffer_.peek(),
-                                static_cast<int>(outputBuffer_.readableBytes()));
-        if (n > 0) {
-            outputBuffer_.retrieve(static_cast<std::size_t>(n));
-            totalWritten += n;
-        } else {
-            const int err = SSL_get_error(ssl_, n);
-            if (err == SSL_ERROR_WANT_WRITE) {
-                break;
-            } else if (err == SSL_ERROR_WANT_READ) {
-                channel_->enableReading();
-                break;
-            } else {
-                *savedErrno = errno;
-                if (totalWritten > 0) {
-                    break;
-                }
-                return -1;
-            }
-        }
-    }
-
-    return totalWritten > 0 ? totalWritten : 0;
 }
 
 }  // namespace mini::net

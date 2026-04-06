@@ -19,13 +19,17 @@
 #include <string>
 #include <string_view>
 
-// Forward declarations for OpenSSL types
-typedef struct ssl_st SSL;
-
 namespace mini::net {
 
 class EventLoop;
 class TlsContext;
+
+namespace detail {
+class ConnectionCallbackDispatcher;
+class ConnectionTransport;
+class ConnectionAwaiterRegistry;
+class ConnectionBackpressureController;
+}
 
 class TcpConnection : public std::enable_shared_from_this<TcpConnection>, private mini::base::noncopyable {
 public:
@@ -57,13 +61,7 @@ public:
     const std::any& getContext() const noexcept { return context_; }
     std::any& getContext() noexcept { return context_; }
 
-    /// Enable TLS on this connection. Must be called before connectEstablished().
-    /// @param ctx TLS context (shared across connections)
-    /// @param isServer true for server-side (SSL_accept), false for client-side (SSL_connect)
-    /// @param hostname SNI hostname for client connections (empty to skip SNI)
     void startTls(std::shared_ptr<TlsContext> ctx, bool isServer, const std::string& hostname = "");
-
-    /// Returns true if TLS handshake has completed.
     bool isTlsEstablished() const noexcept;
 
     void setConnectionCallback(ConnectionCallback cb);
@@ -118,22 +116,6 @@ public:
     CloseAwaitable waitClosed();
 
 private:
-    struct ReadAwaiterState {
-        std::coroutine_handle<> handle{};
-        std::size_t minBytes{1};
-        bool active{false};
-    };
-
-    struct WriteAwaiterState {
-        std::coroutine_handle<> handle{};
-        bool active{false};
-    };
-
-    struct CloseAwaiterState {
-        std::coroutine_handle<> handle{};
-        bool active{false};
-    };
-
     void handleRead(mini::base::Timestamp receiveTime);
     void handleWrite();
     void handleClose();
@@ -145,22 +127,18 @@ private:
     void setBackpressurePolicyInLoop(std::size_t highWaterMark, std::size_t lowWaterMark);
     void applyBackpressurePolicy();
     void setState(StateE state) noexcept;
-
-    // TLS internal methods
-    enum TlsState { kTlsNone, kTlsHandshaking, kTlsEstablished, kTlsShuttingDown };
-    void doTlsHandshake();
-    ssize_t sslReadIntoBuffer(int* savedErrno);
-    ssize_t sslWriteFromBuffer(int* savedErrno);
+    void advanceTransportHandshake();
+    void runCloseSequence(const TcpConnectionPtr& connection, bool notifyCloseCallback);
+    void notifyConnected(const TcpConnectionPtr& connection);
+    void notifyDisconnected(const TcpConnectionPtr& connection);
+    void finishPendingWrite(const TcpConnectionPtr& connection);
+    void maybeQueueHighWaterMark(const TcpConnectionPtr& connection, std::size_t oldLen, std::size_t newLen);
 
     bool canReadImmediately(std::size_t minBytes) const noexcept;
     std::string consumeReadableBytes(std::size_t minBytes);
     void armReadWaiter(std::coroutine_handle<> handle, std::size_t minBytes);
     void armWriteWaiter(std::coroutine_handle<> handle, std::string data);
     void armCloseWaiter(std::coroutine_handle<> handle);
-    void queueResume(std::coroutine_handle<> handle);
-    void resumeReadWaiterIfNeeded();
-    void resumeWriteWaiterIfNeeded();
-    void resumeAllWaitersOnClose();
 
     EventLoop* loop_;
     std::string name_;
@@ -171,25 +149,10 @@ private:
     InetAddress peerAddr_;
     Buffer inputBuffer_;
     Buffer outputBuffer_;
-    ConnectionCallback connectionCallback_;
-    MessageCallback messageCallback_;
-    HighWaterMarkCallback highWaterMarkCallback_;
-    WriteCompleteCallback writeCompleteCallback_;
-    CloseCallback closeCallback_;
-    std::size_t highWaterMark_;
-    std::size_t backpressureHighWaterMark_;
-    std::size_t backpressureLowWaterMark_;
-    bool reading_;
-    ReadAwaiterState readWaiter_;
-    WriteAwaiterState writeWaiter_;
-    CloseAwaiterState closeWaiter_;
-
-    // TLS state
-    std::shared_ptr<TlsContext> tlsContext_;
-    SSL* ssl_ = nullptr;
-    TlsState tlsState_ = kTlsNone;
-
-    // User context (e.g., HttpContext for HTTP protocol layer)
+    std::unique_ptr<detail::ConnectionCallbackDispatcher> callbacks_;
+    std::unique_ptr<detail::ConnectionBackpressureController> backpressure_;
+    std::unique_ptr<detail::ConnectionAwaiterRegistry> awaiters_;
+    std::unique_ptr<detail::ConnectionTransport> transport_;
     std::any context_;
 };
 

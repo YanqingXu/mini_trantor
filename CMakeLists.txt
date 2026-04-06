@@ -28,6 +28,10 @@ add_library(mini_trantor
     mini/net/EventLoopThread.cc
     mini/net/EventLoopThreadPool.cc
     mini/net/TcpConnection.cc
+    mini/net/detail/ConnectionCallbackDispatcher.cc
+    mini/net/detail/ConnectionAwaiterRegistry.cc
+    mini/net/detail/ConnectionBackpressureController.cc
+    mini/net/detail/ConnectionTransport.cc
     mini/net/TcpClient.cc
     mini/net/TcpServer.cc
     mini/net/TlsContext.cc
