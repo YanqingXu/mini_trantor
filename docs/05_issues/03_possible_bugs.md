@@ -6,69 +6,29 @@
 
 ## 高风险
 
-### 1. WhenAllState::firstException 的竞态写入
+### 1. ~~WhenAllState::firstException 的竞态写入~~ ✅ 已修复
 
 **位置**: `mini/coroutine/WhenAll.h` — `WhenAllState::captureException`
 
-```cpp
-void captureException(std::exception_ptr e) {
-    if (!firstException) {          // 非 atomic 读
-        firstException = std::move(e);  // 非 atomic 写
-    }
-}
-```
+**修复方案**: 引入 `std::atomic<bool> exceptionCaptured{false}`，在 `captureException()` 中使用 `compare_exchange_strong`（memory order `acq_rel`）保证只有第一个异常被捕获。`WhenAllState` 和 `WhenAllVoidState` 均采用此模式。`remaining` 计数器也改为 `std::atomic<std::size_t>`。
 
-**问题**: 如果多个 wrapper 协程在不同 EventLoop 线程并发完成并抛异常，
-两个线程可能同时进入 if 分支 → 数据竞争
+**状态**: 已修复，无数据竞争风险。
 
-**触发条件**: 多个子任务在不同线程执行且同时抛异常
-
-**修复建议**:
-```cpp
-void captureException(std::exception_ptr e) {
-    std::exception_ptr expected{nullptr};
-    std::atomic_compare_exchange_strong(&firstException, &expected, std::move(e));
-}
-```
-
-或者使用 `std::atomic_flag` 做 guard。
-
-### 2. DnsResolver::cacheEnabled_ 数据竞争
+### 2. ~~DnsResolver::cacheEnabled_ 数据竞争~~ ✅ 已修复
 
 **位置**: `mini/net/DnsResolver.h` / `DnsResolver.cc`
 
-```cpp
-bool cacheEnabled_{false};  // 非 atomic
+**修复方案**: `cacheEnabled_` 已改为 `std::atomic<bool> cacheEnabled_{false}`，跨线程读写安全。
 
-// 主线程写:
-void enableCache(seconds ttl) { cacheEnabled_ = true; ... }
+**状态**: 已修复，无数据竞争风险。
 
-// 工作线程读:
-void workerThread() {
-    if (cacheEnabled_ && !cacheAddrs.empty()) { ... }  // 数据竞争
-}
-
-// 任意线程读:
-void resolve(...) {
-    if (cacheEnabled_) { ... }  // 数据竞争
-}
-```
-
-**修复建议**: 改为 `std::atomic<bool> cacheEnabled_{false}`
-
-### 3. 协程双 waiter 无运行时保护
+### 3. ~~协程双 waiter 无运行时保护~~ ✅ 已修复
 
 **位置**: `TcpConnection` 的 `readAwaiter_` / `writeAwaiter_` / `closeAwaiter_`
 
-```cpp
-// 如果两个协程同时 co_await conn->asyncReadSome():
-// 第二个 await_suspend 会覆盖 readAwaiter_.handle
-// 第一个协程的 handle 丢失 → 协程帧泄漏 + 永远不会被 resume
-```
+**修复方案**: `ReadAwaiterState`、`WriteAwaiterState`、`CloseAwaiterState` 中均添加了 `bool active{false}` 标志。`armReadWaiter`、`armWriteWaiter`、`armCloseWaiter` 在 arm 时检查该标志，若已有等待者则抛出 `std::logic_error`。所有检查在 owning EventLoop 线程上执行（通过 `assertInLoopThread()` 保证），无需 atomic。
 
-**触发条件**: 用户错误使用，同一连接上同时两个协程读
-
-**建议**: 在 await_suspend 中检查 `readAwaiter_.active`，如果已有等待者则 throw 或 assert
+**状态**: 已修复，重复 await 将抛出明确异常。
 
 ## 中等风险
 
@@ -184,8 +144,8 @@ struct SleepState {
 
 ## 总结
 
-| 风险等级 | 数量 | 需要立即修复 |
-|----------|------|-------------|
-| 高 | 3 | WhenAll exception race, cacheEnabled_ race, double waiter |
+| 风险等级 | 数量 | 状态 |
+|----------|------|------|
+| 高 | 3 | ✅ 全部已修复（WhenAll atomic CAS, cacheEnabled_ atomic, double waiter throw） |
 | 中 | 3 | 可接受，但应在 v2 修复 |
 | 低 | 3 | 当前实现正确，但值得防御性加固 |
