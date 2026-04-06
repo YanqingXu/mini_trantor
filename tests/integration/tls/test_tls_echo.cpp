@@ -1,4 +1,5 @@
 #include "mini/coroutine/Task.h"
+#include "mini/net/Buffer.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/InetAddress.h"
 #include "mini/net/TcpClient.h"

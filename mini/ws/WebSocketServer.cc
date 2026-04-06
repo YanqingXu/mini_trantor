@@ -2,6 +2,7 @@
 
 #include "mini/http/HttpContext.h"
 #include "mini/http/HttpResponse.h"
+#include "mini/net/Buffer.h"
 #include "mini/net/TcpConnection.h"
 #include "mini/ws/WebSocketHandshake.h"
 

@@ -5,12 +5,10 @@
 // 可选支持 TLS：通过 startTls() 激活后，read/write 透明走 SSL 路径。
 
 #include "mini/base/noncopyable.h"
-#include "mini/net/Buffer.h"
+#include "mini/base/Timestamp.h"
 #include "mini/net/Callbacks.h"
-#include "mini/net/Channel.h"
 #include "mini/net/InetAddress.h"
 #include "mini/net/NetError.h"
-#include "mini/net/Socket.h"
 
 #include <any>
 #include <coroutine>
@@ -23,13 +21,6 @@ namespace mini::net {
 
 class EventLoop;
 class TlsContext;
-
-namespace detail {
-class ConnectionCallbackDispatcher;
-class ConnectionTransport;
-class ConnectionAwaiterRegistry;
-class ConnectionBackpressureController;
-}
 
 class TcpConnection : public std::enable_shared_from_this<TcpConnection>, private mini::base::noncopyable {
 public:
@@ -57,9 +48,9 @@ public:
     void setTcpNoDelay(bool on);
     void setBackpressurePolicy(std::size_t highWaterMark, std::size_t lowWaterMark);
 
-    void setContext(std::any context) { context_ = std::move(context); }
-    const std::any& getContext() const noexcept { return context_; }
-    std::any& getContext() noexcept { return context_; }
+    void setContext(std::any context);
+    const std::any& getContext() const noexcept;
+    std::any& getContext() noexcept;
 
     void startTls(std::shared_ptr<TlsContext> ctx, bool isServer, const std::string& hostname = "");
     bool isTlsEstablished() const noexcept;
@@ -116,6 +107,8 @@ public:
     CloseAwaitable waitClosed();
 
 private:
+    struct Impl;
+
     void handleRead(mini::base::Timestamp receiveTime);
     void handleWrite();
     void handleClose();
@@ -139,21 +132,14 @@ private:
     void armReadWaiter(std::coroutine_handle<> handle, std::size_t minBytes);
     void armWriteWaiter(std::coroutine_handle<> handle, std::string data);
     void armCloseWaiter(std::coroutine_handle<> handle);
+    bool isReadAwaitReady(std::size_t minBytes) const noexcept;
+    bool isWriteAwaitReady(std::string_view data) const noexcept;
+    bool isCloseAwaitReady() const noexcept;
+    Expected<std::string> resumeReadAwait(std::size_t minBytes);
+    Expected<void> resumeWriteAwait() const;
+    void resumeCloseAwait() const noexcept;
 
-    EventLoop* loop_;
-    std::string name_;
-    StateE state_;
-    std::unique_ptr<Socket> socket_;
-    std::unique_ptr<Channel> channel_;
-    InetAddress localAddr_;
-    InetAddress peerAddr_;
-    Buffer inputBuffer_;
-    Buffer outputBuffer_;
-    std::unique_ptr<detail::ConnectionCallbackDispatcher> callbacks_;
-    std::unique_ptr<detail::ConnectionBackpressureController> backpressure_;
-    std::unique_ptr<detail::ConnectionAwaiterRegistry> awaiters_;
-    std::unique_ptr<detail::ConnectionTransport> transport_;
-    std::any context_;
+    std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace mini::net

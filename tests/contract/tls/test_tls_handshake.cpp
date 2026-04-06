@@ -1,5 +1,6 @@
 #include "mini/net/EventLoop.h"
 #include "mini/net/InetAddress.h"
+#include "mini/net/Buffer.h"
 #include "mini/net/TcpClient.h"
 #include "mini/net/TcpConnection.h"
 #include "mini/net/TcpServer.h"

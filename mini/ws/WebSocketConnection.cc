@@ -1,5 +1,6 @@
 #include "mini/ws/WebSocketConnection.h"
 
+#include "mini/net/Buffer.h"
 #include "mini/net/TcpConnection.h"
 
 namespace mini::ws {
