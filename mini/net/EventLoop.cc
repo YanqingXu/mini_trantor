@@ -4,9 +4,9 @@
 #include "mini/net/Poller.h"
 #include "mini/net/TimerQueue.h"
 
+#include "mini/base/Logger.h"
+
 #include <cerrno>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 
@@ -22,8 +22,7 @@ thread_local EventLoop* t_loopInThisThread = nullptr;
 int createEventfd() {
     const int eventfd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (eventfd < 0) {
-        std::perror("eventfd");
-        std::abort();
+        LOG_SYSFATAL << "eventfd: " << std::strerror(errno);
     }
     return eventfd;
 }
@@ -52,12 +51,10 @@ EventLoop::EventLoop()
 
 EventLoop::~EventLoop() {
     if (!isInLoopThread()) {
-        std::fputs("EventLoop destroyed from non-owner thread\n", stderr);
-        std::abort();
+        LOG_FATAL << "EventLoop destroyed from non-owner thread";
     }
     if (looping_) {
-        std::fputs("EventLoop destroyed while loop() is still running\n", stderr);
-        std::abort();
+        LOG_FATAL << "EventLoop destroyed while loop() is still running";
     }
     wakeupChannel_->disableAll();
     wakeupChannel_->remove();
@@ -151,7 +148,7 @@ void EventLoop::wakeup() {
     const uint64_t one = 1;
     const ssize_t written = ::write(wakeupFd_, &one, sizeof(one));
     if (written != static_cast<ssize_t>(sizeof(one)) && errno != EAGAIN) {
-        std::perror("EventLoop::wakeup");
+        LOG_SYSERR << "EventLoop::wakeup: " << std::strerror(errno);
     }
 }
 
@@ -185,7 +182,7 @@ void EventLoop::handleRead(mini::base::Timestamp receiveTime) {
     uint64_t one = 0;
     const ssize_t n = ::read(wakeupFd_, &one, sizeof(one));
     if (n != static_cast<ssize_t>(sizeof(one)) && errno != EAGAIN) {
-        std::perror("EventLoop::handleRead");
+        LOG_SYSERR << "EventLoop::handleRead: " << std::strerror(errno);
     }
 }
 

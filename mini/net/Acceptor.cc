@@ -3,9 +3,9 @@
 #include "mini/net/EventLoop.h"
 #include "mini/net/SocketsOps.h"
 
+#include "mini/base/Logger.h"
+
 #include <cerrno>
-#include <cstdio>
-#include <cstdlib>
 
 namespace mini::net {
 
@@ -22,8 +22,7 @@ Acceptor::Acceptor(EventLoop* loop, const InetAddress& listenAddr, bool reusePor
 
 Acceptor::~Acceptor() {
     if (!loop_->isInLoopThread()) {
-        std::fputs("Acceptor destroyed from non-owner thread\n", stderr);
-        std::abort();
+        LOG_FATAL << "Acceptor destroyed from non-owner thread";
     }
     if (listening_) {
         acceptChannel_.disableAll();

@@ -13,6 +13,7 @@ find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 add_library(mini_trantor
+    mini/base/Logger.cc
     mini/net/InetAddress.cc
     mini/net/Buffer.cc
     mini/net/SocketsOps.cc

@@ -4,8 +4,9 @@
 #include "mini/net/SocketsOps.h"
 #include "mini/net/TlsContext.h"
 
+#include "mini/base/Logger.h"
+
 #include <cerrno>
-#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <utility>
@@ -135,7 +136,7 @@ void TcpConnection::startTls(std::shared_ptr<TlsContext> ctx, bool isServer, con
     tlsContext_ = std::move(ctx);
     ssl_ = SSL_new(tlsContext_->nativeHandle());
     if (!ssl_) {
-        std::fprintf(stderr, "TcpConnection::startTls: SSL_new failed\n");
+        LOG_ERROR << "TcpConnection::startTls: SSL_new failed";
         return;
     }
     SSL_set_fd(ssl_, socket_->fd());
@@ -377,7 +378,7 @@ void TcpConnection::handleClose() {
 void TcpConnection::handleError(int savedErrno) {
     loop_->assertInLoopThread();
     const int err = savedErrno != 0 ? savedErrno : sockets::getSocketError(channel_->fd());
-    std::fprintf(stderr, "TcpConnection error on %s: %d (%s)\n", name_.c_str(), err, std::strerror(err));
+    LOG_ERROR << "TcpConnection error on " << name_ << ": " << err << " (" << std::strerror(err) << ")";
     if (state_ != kDisconnected) {
         handleClose();
     }
@@ -659,7 +660,7 @@ void TcpConnection::doTlsHandshake() {
     } else if (err == SSL_ERROR_WANT_WRITE) {
         channel_->enableWriting();
     } else {
-        std::fprintf(stderr, "TcpConnection TLS handshake failed on %s: SSL error %d\n", name_.c_str(), err);
+        LOG_ERROR << "TcpConnection TLS handshake failed on " << name_ << ": SSL error " << err;
         handleError(errno);
     }
 }

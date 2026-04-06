@@ -1,8 +1,8 @@
 #include "mini/net/SocketsOps.h"
 
+#include "mini/base/Logger.h"
+
 #include <cerrno>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <stdexcept>
@@ -14,8 +14,8 @@ namespace mini::net::sockets {
 namespace {
 
 [[noreturn]] void die(const char* what) {
-    std::perror(what);
-    std::abort();
+    LOG_SYSFATAL << what << ": " << std::strerror(errno);
+    __builtin_unreachable();
 }
 
 }  // namespace
@@ -56,13 +56,13 @@ int accept(int sockfd, sockaddr_in* addr) {
 
 void close(int sockfd) {
     if (::close(sockfd) < 0) {
-        std::perror("close");
+        LOG_SYSERR << "close: " << std::strerror(errno);
     }
 }
 
 void shutdownWrite(int sockfd) {
     if (::shutdown(sockfd, SHUT_WR) < 0) {
-        std::perror("shutdown");
+        LOG_SYSERR << "shutdown: " << std::strerror(errno);
     }
 }
 

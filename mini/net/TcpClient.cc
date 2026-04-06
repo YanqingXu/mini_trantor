@@ -7,8 +7,9 @@
 #include "mini/net/TcpConnection.h"
 #include "mini/net/TlsContext.h"
 
+#include "mini/base/Logger.h"
+
 #include <cassert>
-#include <cstdio>
 #include <utility>
 
 namespace mini::net {
@@ -191,8 +192,7 @@ void TcpClient::resolveAndConnect() {
             if (!*guard) return;  // TcpClient was destroyed
             if (!connect_) return;  // stop() was called
             if (addrs.empty()) {
-                std::fprintf(stderr, "TcpClient: DNS resolution failed for '%s'\n",
-                             hostname_.c_str());
+                LOG_ERROR << "TcpClient: DNS resolution failed for '" << hostname_ << "'";
                 return;
             }
             initConnector(addrs[0]);

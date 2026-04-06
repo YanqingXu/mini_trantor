@@ -2,8 +2,8 @@
 
 #include "mini/net/EventLoop.h"
 
-#include <cstdio>
-#include <cstdlib>
+#include "mini/base/Logger.h"
+
 #include <stdexcept>
 
 namespace mini::net {
@@ -21,12 +21,10 @@ Channel::Channel(EventLoop* loop, int fd)
 
 Channel::~Channel() {
     if (eventHandling_) {
-        std::fputs("Channel destroyed while handling events\n", stderr);
-        std::abort();
+        LOG_FATAL << "Channel destroyed while handling events";
     }
     if (addedToLoop_) {
-        std::fputs("Channel destroyed without remove-before-destroy\n", stderr);
-        std::abort();
+        LOG_FATAL << "Channel destroyed without remove-before-destroy";
     }
 }
 

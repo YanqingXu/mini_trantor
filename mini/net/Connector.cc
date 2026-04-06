@@ -4,9 +4,10 @@
 #include "mini/net/EventLoop.h"
 #include "mini/net/SocketsOps.h"
 
+#include "mini/base/Logger.h"
+
 #include <cassert>
 #include <cerrno>
-#include <cstdio>
 #include <cstring>
 #include <sys/socket.h>
 
@@ -119,7 +120,7 @@ void Connector::connect() {
         case EFAULT:
         case ENOTSOCK:
         default:
-            std::fprintf(stderr, "Connector::connect error: %s\n", std::strerror(savedErrno));
+            LOG_ERROR << "Connector::connect error: " << std::strerror(savedErrno);
             sockets::close(sockfd);
             break;
     }
@@ -144,7 +145,7 @@ void Connector::handleWrite() {
 
     const int err = sockets::getSocketError(sockfd);
     if (err != 0) {
-        std::fprintf(stderr, "Connector::handleWrite SO_ERROR = %d: %s\n", err, std::strerror(err));
+        LOG_ERROR << "Connector::handleWrite SO_ERROR = " << err << ": " << std::strerror(err);
         retry(sockfd);
         return;
     }
@@ -154,7 +155,7 @@ void Connector::handleWrite() {
     const sockaddr_in peerAddr = sockets::getPeerAddr(sockfd);
     if (localAddr.sin_port == peerAddr.sin_port &&
         localAddr.sin_addr.s_addr == peerAddr.sin_addr.s_addr) {
-        std::fputs("Connector::handleWrite self-connect detected, retrying\n", stderr);
+        LOG_WARN << "Connector::handleWrite self-connect detected, retrying";
         retry(sockfd);
         return;
     }
@@ -173,7 +174,7 @@ void Connector::handleError() {
     }
     const int sockfd = removeAndResetChannel();
     const int err = sockets::getSocketError(sockfd);
-    std::fprintf(stderr, "Connector::handleError SO_ERROR = %d: %s\n", err, std::strerror(err));
+    LOG_ERROR << "Connector::handleError SO_ERROR = " << err << ": " << std::strerror(err);
     retry(sockfd);
 }
 

@@ -3,9 +3,9 @@
 #include "mini/base/Timestamp.h"
 #include "mini/net/Channel.h"
 
+#include "mini/base/Logger.h"
+
 #include <cerrno>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <unistd.h>
 
@@ -14,8 +14,8 @@ namespace mini::net {
 namespace {
 
 [[noreturn]] void epollDie(const char* what) {
-    std::perror(what);
-    std::abort();
+    LOG_SYSFATAL << what << ": " << std::strerror(errno);
+    __builtin_unreachable();
 }
 
 }  // namespace

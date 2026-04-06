@@ -3,9 +3,9 @@
 #include "mini/net/Channel.h"
 #include "mini/net/EventLoop.h"
 
+#include "mini/base/Logger.h"
+
 #include <cerrno>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -20,8 +20,7 @@ namespace {
 int createTimerfd() {
     const int timerfd = ::timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
     if (timerfd < 0) {
-        std::perror("timerfd_create");
-        std::abort();
+        LOG_SYSFATAL << "timerfd_create: " << std::strerror(errno);
     }
     return timerfd;
 }
@@ -48,8 +47,7 @@ void readTimerfdOrDie(int timerfd) {
     if (n == static_cast<ssize_t>(sizeof(expirations)) || errno == EAGAIN) {
         return;
     }
-    std::perror("TimerQueue::handleRead");
-    std::abort();
+    LOG_SYSFATAL << "TimerQueue::handleRead: " << std::strerror(errno);
 }
 
 }  // namespace
@@ -194,16 +192,14 @@ void TimerQueue::resetTimerfd(mini::base::Timestamp expiration) const {
     newValue.it_value = toTimespec(delay);
 
     if (::timerfd_settime(timerfd_, 0, &newValue, nullptr) < 0) {
-        std::perror("TimerQueue::resetTimerfd");
-        std::abort();
+        LOG_SYSFATAL << "TimerQueue::resetTimerfd: " << std::strerror(errno);
     }
 }
 
 void TimerQueue::disarmTimerfd() const {
     const itimerspec disarmed{};
     if (::timerfd_settime(timerfd_, 0, &disarmed, nullptr) < 0) {
-        std::perror("TimerQueue::disarmTimerfd");
-        std::abort();
+        LOG_SYSFATAL << "TimerQueue::disarmTimerfd: " << std::strerror(errno);
     }
 }
 

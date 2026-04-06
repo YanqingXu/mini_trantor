@@ -1,8 +1,8 @@
 #include "mini/net/DnsResolver.h"
 
+#include "mini/base/Logger.h"
 #include "mini/net/EventLoop.h"
 
-#include <cstdio>
 #include <cstring>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -120,8 +120,7 @@ void DnsResolver::workerThread() {
             }
             ::freeaddrinfo(res);
         } else {
-            std::fprintf(stderr, "DnsResolver: getaddrinfo failed for '%s': %s\n",
-                         req.hostname.c_str(), ::gai_strerror(ret));
+            LOG_ERROR << "DnsResolver: getaddrinfo failed for '" << req.hostname << "': " << ::gai_strerror(ret);
         }
 
         // Update cache.
