@@ -9,6 +9,7 @@
 #include "mini/net/Callbacks.h"
 #include "mini/net/Channel.h"
 #include "mini/net/InetAddress.h"
+#include "mini/net/NetError.h"
 #include "mini/net/Socket.h"
 
 #include <any>
@@ -80,7 +81,7 @@ public:
 
         bool await_ready() const noexcept;
         void await_suspend(std::coroutine_handle<> handle);
-        std::string await_resume();
+        Expected<std::string> await_resume();
 
     private:
         TcpConnectionPtr connection_;
@@ -93,7 +94,7 @@ public:
 
         bool await_ready() const noexcept;
         void await_suspend(std::coroutine_handle<> handle);
-        void await_resume() const;
+        Expected<void> await_resume() const;
 
     private:
         TcpConnectionPtr connection_;

@@ -55,17 +55,17 @@ mini::coroutine::Task<void> echoSessionWithTimeout(
             }
         });
 
-        std::string message = co_await connection->asyncReadSome();
+        auto result = co_await connection->asyncReadSome();
 
         // Cancel the idle timer (data arrived or connection closed).
         loop->cancel(timer);
 
-        if (message.empty()) {
+        if (!result || result->empty()) {
             closeReason->set_value("eof_or_close");
             co_return;
         }
 
-        co_await connection->asyncWrite(std::move(message));
+        co_await connection->asyncWrite(std::move(*result));
     }
 
     closeReason->set_value("disconnected");

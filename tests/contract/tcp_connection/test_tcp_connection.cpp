@@ -47,8 +47,8 @@ mini::coroutine::Task<void> readUntilResume(
     TcpConnectionPtr connection,
     std::promise<std::string>* message,
     std::promise<std::thread::id>* resumedOn) {
-    std::string payload = co_await connection->asyncReadSome();
-    message->set_value(std::move(payload));
+    auto result = co_await connection->asyncReadSome();
+    message->set_value(result ? std::move(*result) : std::string{});
     resumedOn->set_value(std::this_thread::get_id());
 }
 
@@ -73,8 +73,8 @@ mini::coroutine::Task<void> writeThenShutdown(
 }
 
 mini::coroutine::Task<void> suspendedRead(TcpConnectionPtr connection, bool* resumed) {
-    std::string payload = co_await connection->asyncReadSome();
-    assert(payload.empty());
+    auto result = co_await connection->asyncReadSome();
+    assert(!result);  // PeerClosed
     *resumed = true;
 }
 

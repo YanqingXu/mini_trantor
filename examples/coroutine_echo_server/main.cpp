@@ -12,11 +12,14 @@ namespace {
 
 mini::coroutine::Task<void> echoSession(mini::net::TcpConnectionPtr connection) {
     while (connection->connected()) {
-        std::string message = co_await connection->asyncReadSome();
-        if (message.empty()) {
+        auto result = co_await connection->asyncReadSome();
+        if (!result) {
             break;
         }
-        co_await connection->asyncWrite(std::move(message));
+        auto writeResult = co_await connection->asyncWrite(std::move(*result));
+        if (!writeResult) {
+            break;
+        }
     }
 }
 

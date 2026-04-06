@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(mini_trantor VERSION 0.1.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -53,7 +53,7 @@ target_include_directories(
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
-target_compile_features(mini_trantor PUBLIC cxx_std_20)
+target_compile_features(mini_trantor PUBLIC cxx_std_23)
 target_link_libraries(mini_trantor PUBLIC Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
 
 add_executable(echo_server examples/echo_server/main.cpp)

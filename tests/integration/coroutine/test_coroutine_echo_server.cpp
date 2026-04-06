@@ -46,10 +46,10 @@ mini::coroutine::Task<void> echoSession(
     mini::net::TcpConnectionPtr connection,
     std::promise<std::thread::id>* readResumedOn,
     std::promise<std::thread::id>* closeResumedOn) {
-    std::string message = co_await connection->asyncReadSome();
+    auto result = co_await connection->asyncReadSome();
     readResumedOn->set_value(std::this_thread::get_id());
-    if (!message.empty()) {
-        co_await connection->asyncWrite(std::move(message));
+    if (result && !result->empty()) {
+        co_await connection->asyncWrite(std::move(*result));
     }
     co_await connection->waitClosed();
     closeResumedOn->set_value(std::this_thread::get_id());

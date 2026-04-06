@@ -94,9 +94,9 @@ void testTlsEchoRoundTrip() {
 
 // ── Integration: Coroutine TLS echo path ──
 Task<void> tlsEchoSession(TcpConnectionPtr conn) {
-    std::string msg = co_await conn->asyncReadSome();
-    if (!msg.empty()) {
-        co_await conn->asyncWrite(std::move(msg));
+    auto result = co_await conn->asyncReadSome();
+    if (result && !result->empty()) {
+        co_await conn->asyncWrite(std::move(*result));
     }
     co_await conn->waitClosed();
 }

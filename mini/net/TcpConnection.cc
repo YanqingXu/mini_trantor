@@ -219,9 +219,12 @@ void TcpConnection::ReadAwaitable::await_suspend(std::coroutine_handle<> handle)
     connection_->armReadWaiter(handle, minBytes_);
 }
 
-std::string TcpConnection::ReadAwaitable::await_resume() {
+Expected<std::string> TcpConnection::ReadAwaitable::await_resume() {
     if (!connection_) {
-        return {};
+        return std::unexpected(NetError::NotConnected);
+    }
+    if (connection_->disconnected() && connection_->inputBuffer_.readableBytes() == 0) {
+        return std::unexpected(NetError::PeerClosed);
     }
     return connection_->consumeReadableBytes(minBytes_);
 }
@@ -239,7 +242,14 @@ void TcpConnection::WriteAwaitable::await_suspend(std::coroutine_handle<> handle
     connection_->armWriteWaiter(handle, std::move(data_));
 }
 
-void TcpConnection::WriteAwaitable::await_resume() const {
+Expected<void> TcpConnection::WriteAwaitable::await_resume() const {
+    if (!connection_) {
+        return std::unexpected(NetError::NotConnected);
+    }
+    if (connection_->disconnected()) {
+        return std::unexpected(NetError::PeerClosed);
+    }
+    return {};
 }
 
 TcpConnection::CloseAwaitable::CloseAwaitable(TcpConnectionPtr connection) : connection_(std::move(connection)) {
