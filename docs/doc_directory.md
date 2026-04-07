@@ -28,6 +28,7 @@ docs/
 │   ├── net/
 │   │   ├── TcpServer.md
 │   │   ├── TcpConnection.md
+│   │   ├── TcpConnectionDetailHelpers.md
 │   │   ├── Acceptor.md
 │   │   ├── Connector.md
 │   │   ├── TcpClient.md
