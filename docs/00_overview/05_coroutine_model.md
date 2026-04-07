@@ -42,28 +42,30 @@ Task 的实现要点：
 ```cpp
 Task<void> example(EventLoop* loop) {
     auto completed = co_await asyncSleep(loop, 100ms);
-    // completed == true: 正常超时
-    // completed == false: 被 cancel()
+    // completed.has_value(): 正常到期
+    // completed.error() == NetError::Cancelled: 被取消
 }
 ```
 
 实现原理：
 1. `await_suspend` 时注册 `EventLoop::runAfter()` 定时器
-2. 定时器到期时在 loop 线程 `handle.resume()`
-3. cancel 时取消定时器并立即恢复协程
+2. 定时器到期时在 loop 线程恢复协程
+3. cancel 时取消定时器并在 owner loop 恢复协程，返回 `NetError::Cancelled`
 
 ### TcpConnection Awaitables —— I/O 桥接
 
 ```cpp
 Task<void> handleConnection(TcpConnectionPtr conn) {
     // 异步读
-    std::string data = co_await conn->asyncReadSome(1);
+    auto data = co_await conn->asyncReadSome(1);
+    if (!data) co_return;
 
     // 异步写（等待写完成）
-    co_await conn->asyncWrite("response");
+    auto wrote = co_await conn->asyncWrite("response");
+    if (!wrote) co_return;
 
     // 等待连接关闭
-    co_await conn->waitClosed();
+    (void)co_await conn->waitClosed();
 }
 ```
 
@@ -102,19 +104,39 @@ Task<void> parallel(EventLoop* loop) {
 
 ```cpp
 Task<void> raceExample(EventLoop* loop) {
-    auto [index, result] = co_await whenAny(
-        asyncSleep(loop, 100ms),
-        asyncSleep(loop, 200ms)
+    auto result = co_await whenAny(
+        taskA(),
+        taskB()
     );
-    // index: 首个完成的任务索引
-    // result: variant<bool, bool> 结果
+    // result.index: 首个完成的任务索引
+    // result.value: 获胜任务的返回值
 }
 ```
 
 实现原理：
 1. 共享 `WhenAnyState`，包含 `atomic<bool> done`
-2. 首个完成的子任务设置 `done = true` 并恢复父协程
-3. 后续完成的子任务发现 `done == true`，不做任何操作
+2. 首个完成的子任务设置 `done = true`、取消败者并恢复父协程
+3. 败者在自己的挂起点观察 token，完成清理后退出
+
+### Timeout —— 将竞速语义收敛为统一错误面
+
+```cpp
+Task<void> timeoutExample(EventLoop* loop, TcpConnectionPtr conn) {
+    // readExpected(conn) 表示一个返回 Task<Expected<std::string>> 的薄包装。
+    auto result = co_await withTimeout(loop, readExpected(conn), 200ms);
+    if (!result && result.error() == mini::net::NetError::TimedOut) {
+        // 显式 timeout
+    }
+}
+```
+
+`withTimeout()` 的本质仍是 `WhenAny(asyncOp, asyncSleep(...))`，
+但它把“timer 分支获胜”的结果收敛成统一的 `NetError::TimedOut`，
+从而让调用者区分：
+- `TimedOut`
+- `Cancelled`
+- `PeerClosed` / `ConnectionReset`
+- 其他显式错误
 
 ## 协程与回调的共存
 

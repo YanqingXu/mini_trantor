@@ -77,8 +77,8 @@ mini-trantor 目前已经具备一个“小而完整”的网络库骨架：
 ### v5-alpha：统一取消与错误语义
 
 当前状态（截至 2026-04-07）：
-- 进行中，核心骨架已落地，主要缺口已缩小到 timeout 统一语义和专项 race coverage
-- 现状判断：取消原语、`SleepAwaitable`、`TcpConnection` awaitable、`WhenAny` loser cancel、DNS resolve cancellation、显式 `NetError` 已经进入主线；timeout 错误面收敛、专项 integration coverage 和文档对齐仍未完成
+- 进行中，timeout 统一语义与专项 race coverage 已补齐，剩余工作主要集中在文档与阶段状态对齐
+- 现状判断：取消原语、`SleepAwaitable`、`TcpConnection` awaitable、`WhenAny` loser cancel、DNS resolve cancellation、显式 `NetError`、`TimedOut` 统一 error surface 与 timeout race integration 已进入主线；文档对齐仍未完成
 
 目标：
 - 建立全库一致的 cancellation 和 error surface
@@ -98,7 +98,8 @@ mini-trantor 目前已经具备一个“小而完整”的网络库骨架：
 
 已完成项：
 - [已完成] 新增 [mini/coroutine/CancellationToken.h](/home/xyq/mini-trantor/mini/coroutine/CancellationToken.h)，其中同时提供 `CancellationToken` / `CancellationSource` / `CancellationRegistration`
-- [已完成] [mini/net/NetError.h](/home/xyq/mini-trantor/mini/net/NetError.h) 建立显式错误面，当前已覆盖 `PeerClosed` / `ConnectionReset` / `NotConnected` / `Cancelled` / `ResolveFailed`
+- [已完成] [mini/net/NetError.h](/home/xyq/mini-trantor/mini/net/NetError.h) 建立显式错误面，当前已覆盖 `PeerClosed` / `ConnectionReset` / `NotConnected` / `Cancelled` / `TimedOut` / `ResolveFailed`
+- [已完成] 新增 [mini/coroutine/Timeout.h](/home/xyq/mini-trantor/mini/coroutine/Timeout.h)，将 `WhenAny(asyncOp, asyncSleep(...))` 的常见 timeout race 收敛为统一 `NetError::TimedOut`
 - [已完成] [mini/coroutine/SleepAwaitable.h](/home/xyq/mini-trantor/mini/coroutine/SleepAwaitable.h) 接入 token cancel，并将取消映射为 `NetError::Cancelled`
 - [已完成] [mini/net/TcpConnection.h](/home/xyq/mini-trantor/mini/net/TcpConnection.h) / [mini/net/TcpConnection.cc](/home/xyq/mini-trantor/mini/net/TcpConnection.cc) 的 `asyncReadSome` / `asyncWrite` / `waitClosed` 已接入 token，并返回 `Expected<...>`
 - [已完成] [mini/net/detail/ConnectionAwaiterRegistry.h](/home/xyq/mini-trantor/mini/net/detail/ConnectionAwaiterRegistry.h) 具备 cancel waiter 路径，恢复仍通过 owner loop `queueInLoop()`
@@ -108,9 +109,6 @@ mini-trantor 目前已经具备一个“小而完整”的网络库骨架：
 - [已完成] [mini/net/DnsResolver.h](/home/xyq/mini-trantor/mini/net/DnsResolver.h) / [mini/coroutine/ResolveAwaitable.h](/home/xyq/mini-trantor/mini/coroutine/ResolveAwaitable.h) 已接入 `CancellationToken`，取消结果显式映射为 `NetError::Cancelled`
 
 未完成项：
-- [未完成] timeout 还没有收敛成统一 error surface；当前主要依赖 `WhenAny(asyncOp, asyncSleep(...))` 的 winner/index 语义，而不是显式 timeout error
-- [未完成] roadmap 期望的“调用者可区分 peer close、timeout、主动 cancel、I/O error”目前只剩 timeout 未统一
-- [未完成] 专项 integration 测试 `tests/integration/coroutine/test_timeout_race.cpp` 尚不存在
 - [未完成] 文档尚未完全跟上实现：部分说明仍把 `WhenAny` 写成“败者不取消”，与当前代码不一致
 
 建议新增模块（按当前实现调整）：
@@ -127,31 +125,34 @@ mini-trantor 目前已经具备一个“小而完整”的网络库骨架：
 建议新增测试：
 - [已完成] [tests/unit/coroutine/test_cancellation_token.cpp](/home/xyq/mini-trantor/tests/unit/coroutine/test_cancellation_token.cpp)
 - [已完成] [tests/contract/coroutine/test_cancellation_contract.cpp](/home/xyq/mini-trantor/tests/contract/coroutine/test_cancellation_contract.cpp)
-- [未完成] `tests/integration/coroutine/test_timeout_race.cpp`
+- [已完成] [tests/contract/coroutine/test_timeout_contract.cpp](/home/xyq/mini-trantor/tests/contract/coroutine/test_timeout_contract.cpp)
+- [已完成] [tests/integration/coroutine/test_timeout_race.cpp](/home/xyq/mini-trantor/tests/integration/coroutine/test_timeout_race.cpp)
 
 当前测试状态：
 - 已接入 CTest 的相关用例包括：
   - [tests/unit/coroutine/test_cancellation_token.cpp](/home/xyq/mini-trantor/tests/unit/coroutine/test_cancellation_token.cpp)
   - [tests/contract/coroutine/test_cancellation_contract.cpp](/home/xyq/mini-trantor/tests/contract/coroutine/test_cancellation_contract.cpp)
   - [tests/contract/coroutine/test_combinator_contract.cpp](/home/xyq/mini-trantor/tests/contract/coroutine/test_combinator_contract.cpp)
+  - [tests/contract/coroutine/test_timeout_contract.cpp](/home/xyq/mini-trantor/tests/contract/coroutine/test_timeout_contract.cpp)
   - [tests/contract/dns/test_dns_contract.cpp](/home/xyq/mini-trantor/tests/contract/dns/test_dns_contract.cpp)
   - [tests/contract/tcp_connection/test_tcp_connection.cpp](/home/xyq/mini-trantor/tests/contract/tcp_connection/test_tcp_connection.cpp)
+  - [tests/integration/coroutine/test_timeout_race.cpp](/home/xyq/mini-trantor/tests/integration/coroutine/test_timeout_race.cpp)
 - 截至 2026-04-07 的定向验证结果：
   - `unit.coroutine.test_cancellation_token` 通过
   - `contract.coroutine.test_cancellation_contract` 通过
   - `contract.coroutine.test_combinator_contract` 通过
+  - `contract.coroutine.test_timeout_contract` 通过
   - `contract.dns.test_dns_contract` 通过
   - `unit.dns.test_dns_resolver` 通过
   - `integration.dns.test_dns_client` 通过
   - `contract.tcp_connection.test_tcp_connection` 通过
-- 当前结论：`TcpConnection` 与 DNS cancel 子线已恢复为绿，但 v5-alpha 仍未退出，主要缺口集中在 timeout 统一语义和专项 integration coverage
+  - `integration.coroutine.test_timeout_race` 通过
+- 当前结论：`TcpConnection`、DNS cancel 子线和 timeout 统一语义已恢复为绿，但 v5-alpha 仍未退出，主要缺口集中在文档与阶段状态对齐
 
 继续推进清单：
-1. 决定 timeout 的统一表示方式：
-   - 方案 A：新增 `NetError::TimedOut`
-   - 方案 B：保持 race-combinator 风格，但在 contract/docs 中明确 timeout 不是底层 awaitable error，而是上层组合语义
-2. 补齐 `tests/integration/coroutine/test_timeout_race.cpp`，验证 timeout / close / cancel 竞态下无 double-resume、无句柄泄漏
-3. 同步修正文档漂移，至少更新 `WhenAny` 相关文档说明和 README 的阶段状态
+1. 同步修正文档漂移，至少更新 `WhenAny` 相关文档说明和 README 的阶段状态
+2. 复核是否还需要把 `withTimeout()` 上推到更多上层模块（如未来 HTTP client / handshake timeout）
+3. 继续围绕关闭路径与 timeout/cancel 交错补充更高层集成 coverage（若后续模块引入新的 awaitable）
 
 退出信号：
 - `asyncReadSome`、`asyncWrite`、`asyncSleep`、DNS resolve、`WhenAny` 共享一致取消模型

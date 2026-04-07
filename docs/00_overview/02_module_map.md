@@ -8,7 +8,8 @@ mini/
 ├── net/            ← Reactor 核心 + 网络层 + 高级组件
 ├── coroutine/      ← 协程桥接层
 ├── http/           ← HTTP/1.1 协议层
-└── ws/             ← WebSocket 协议层
+├── ws/             ← WebSocket 协议层
+└── rpc/            ← RPC 协议层
 ```
 
 ## 模块详情
@@ -68,12 +69,14 @@ mini/
 | 类 | 文件 | 职责 | 地位 |
 |----|------|------|------|
 | `Task<T>` | `mini/coroutine/Task.h` | 协程结果对象 | 核心 |
+| `CancellationToken` | `mini/coroutine/CancellationToken.h` | 协作式取消原语 | 核心 |
 | `SleepAwaitable` | `mini/coroutine/SleepAwaitable.h` | 定时器等待桥接 | 桥接 |
+| `Timeout` | `mini/coroutine/Timeout.h` | 统一 timeout 语义包装 | 桥接 |
 | `WhenAll` | `mini/coroutine/WhenAll.h` | 并发等待全部完成 | 组合 |
 | `WhenAny` | `mini/coroutine/WhenAny.h` | 竞争等待首个完成 | 组合 |
 | `ResolveAwaitable` | `mini/coroutine/ResolveAwaitable.h` | DNS 解析协程桥接 | 桥接 |
 
-**依赖关系**：`SleepAwaitable` → `EventLoop::runAfter`；`WhenAll`/`WhenAny` → `Task<T>`
+**依赖关系**：`SleepAwaitable` → `EventLoop::runAfter`；`Timeout` → `WhenAny` + `SleepAwaitable`；`WhenAll`/`WhenAny` → `Task<T>`
 
 **为什么需要这个模块**：让用户用 `co_await` 线性风格编写异步代码，同时保持 Reactor 语义。
 
@@ -95,7 +98,16 @@ mini/
 | `WebSocketHandshake` | `mini/ws/WebSocketHandshake.h/cc` | Upgrade 验证 + Accept 计算 | 支撑 |
 | `WebSocketConnection` | `mini/ws/WebSocketConnection.h/cc` | per-connection 状态机 + ping/pong | 核心 |
 
-### 8. Advanced —— 高级组件
+### 8. RPC —— 远程调用协议层
+
+| 类 | 文件 | 职责 | 地位 |
+|----|------|------|------|
+| `RpcCodec` | `mini/rpc/RpcCodec.h/cc` | 长度前缀二进制帧编解码 | 核心 |
+| `RpcChannel` | `mini/rpc/RpcChannel.h/cc` | per-connection 请求/响应关联 + timeout 管理 | 核心 |
+| `RpcServer` | `mini/rpc/RpcServer.h/cc` | TcpServer 协议适配器 + method 分发 | 核心 |
+| `RpcClient` | `mini/rpc/RpcClient.h/cc` | TcpClient 包装 + callback/coroutine 双模式调用 | 核心 |
+
+### 9. Advanced —— 高级组件
 
 | 类 | 文件 | 职责 | 地位 |
 |----|------|------|------|
@@ -106,7 +118,7 @@ mini/
 
 ```
               ┌──────────┐
-              │ Protocol │  (HTTP, WebSocket)
+              │ Protocol │  (HTTP, WebSocket, RPC)
               │  Layer   │
               └────┬─────┘
                    │ uses
@@ -143,4 +155,5 @@ Timestamp → noncopyable → InetAddress → Socket
   → TlsContext → DnsResolver
   → HttpContext → HttpServer
   → WebSocketCodec → WebSocketServer
+  → RpcCodec → RpcChannel → RpcServer / RpcClient
 ```

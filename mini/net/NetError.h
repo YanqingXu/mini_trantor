@@ -19,6 +19,8 @@ enum class NetError {
     NotConnected,
     /// The pending async operation was actively cancelled.
     Cancelled,
+    /// The operation did not complete before its timeout budget expired.
+    TimedOut,
     /// Asynchronous hostname resolution failed.
     ResolveFailed,
 };
@@ -29,6 +31,7 @@ constexpr std::string_view netErrorMessage(NetError e) noexcept {
         case NetError::ConnectionReset: return "connection reset";
         case NetError::NotConnected: return "not connected";
         case NetError::Cancelled: return "operation cancelled";
+        case NetError::TimedOut: return "operation timed out";
         case NetError::ResolveFailed: return "hostname resolution failed";
     }
     return "unknown error";

@@ -164,7 +164,7 @@ try {
 ```
 
 * **约束**: 所有子 Task 必须是同一类型 T（编译期检查 `same_as<T, Rest> && ...`）
-* **与 WhenAll 区别**: WhenAny 只要一个完成就恢复，败者继续运行但结果被丢弃
+* **与 WhenAll 区别**: WhenAny 只要一个完成就恢复；当前实现会向败者发出协作式取消请求，败者在自己的挂起点观察取消并完成清理
 
 ## 7. 关键设计点
 
@@ -201,10 +201,10 @@ struct WhenAnyState {
 
 ### 7.3 败者的命运
 
-* 败者协程继续运行直到完成
-* tryWin 返回 false，结果被丢弃
-* 协程帧通过 detach 模式由 FinalAwaiter 自动销毁
-* **注意**: 败者不会被中断/取消（如需取消需外部机制如 SleepAwaitable::cancel()）
+* 赢家确定后，WhenAny 会向败者发出协作式取消请求
+* 如果败者 awaitable 支持当前 token（如 `SleepAwaitable`、`TcpConnection` awaitable），会尽快以显式取消结果恢复
+* 如果败者已经完成或尚未消费 token，取消请求是安全 no-op，最终结果仍会被丢弃
+* 协程帧通过 detach 模式由 FinalAwaiter 自动销毁，shared state 负责把 wrapper 活到清理完成
 
 ### 7.4 同类型约束
 

@@ -56,6 +56,7 @@ add_mini_test(contract tcp_client ${CMAKE_CURRENT_SOURCE_DIR}/contract/tcp_clien
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_sleep_awaitable.cpp)
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_combinator_contract.cpp)
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_cancellation_contract.cpp)
+add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_timeout_contract.cpp)
 add_mini_test(contract dns ${CMAKE_CURRENT_SOURCE_DIR}/contract/dns/test_dns_contract.cpp)
 
 add_mini_test(integration tcp_server ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_server/test_tcp_server.cpp)
@@ -88,6 +89,11 @@ add_mini_test(
     integration
     coroutine
     ${CMAKE_CURRENT_SOURCE_DIR}/integration/coroutine/test_coroutine_idle_timeout.cpp
+)
+add_mini_test(
+    integration
+    coroutine
+    ${CMAKE_CURRENT_SOURCE_DIR}/integration/coroutine/test_timeout_race.cpp
 )
 add_mini_test(
     integration

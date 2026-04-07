@@ -32,7 +32,11 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - ✅ `v4-gamma`：RPC 支持完成 — RpcCodec（长度前缀二进制帧编解码）/ RpcChannel（per-connection 请求-响应关联 + 超时管理）/ RpcServer（TcpServer 协议适配器 + method 注册分发）/ RpcClient（TcpClient 包装 + callback 和 coroutine 双模式调用）
 - ✅ `v4-delta`：协程版 RPC 完成 — RpcServer `registerCoroMethod()`（协程返回值即响应，异常即错误）/ RpcClient `coroCall()`（返回 payload 直接，错误抛 `RpcError`）/ `dispatchCoroHandler` 安全桥接（free function 保证帧生命周期）/ 支持 handler 内 `co_await` 异步操作（SleepAwaitable 等）
 
-当前 49/49 测试全部通过（unit × 16 + contract × 18 + integration × 14 + 1 pre-existing coroutine segfault）。
+当前 build 树中 56/56 测试全部通过（unit × 20 + contract × 21 + integration × 15）。
+
+`v5-alpha` 当前状态：
+- 统一取消原语、`WhenAny` loser cancel、DNS cancel、显式 `NetError`、`NetError::TimedOut` 与 `withTimeout()` 已进入主线
+- 当前剩余工作主要是 README / overview / 深入文档之间的状态对齐
 
 ## 下一阶段方向
 
@@ -82,7 +86,7 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - `mini/http/`: HTTP/1.1 协议层（HttpRequest、HttpResponse、HttpContext、HttpServer）
 - `mini/ws/`: WebSocket 协议层（WebSocketCodec、WebSocketHandshake、WebSocketConnection、WebSocketServer）
 - `mini/rpc/`: RPC 协议层（RpcCodec、RpcChannel、RpcServer、RpcClient）
-- `mini/coroutine/`: 协程桥接层（`Task.h` 协程结果对象、`SleepAwaitable.h` 定时器 awaitable、`ResolveAwaitable.h` DNS 解析 awaitable）
+- `mini/coroutine/`: 协程桥接层（`Task.h` 协程结果对象、`CancellationToken.h` 取消原语、`SleepAwaitable.h` 定时器 awaitable、`Timeout.h` 统一 timeout 包装、`ResolveAwaitable.h` DNS 解析 awaitable）
 - `mini/base/`: 基础工具（Timestamp、noncopyable）
 - `tests/`: 按 `unit/`、`contract/`、`integration/` 分层的测试
 - `examples/`: 示例程序（echo_server、coroutine_echo_server）
@@ -133,7 +137,9 @@ target_link_libraries(my_app PRIVATE mini_trantor::mini_trantor)
 #include "mini/net/TcpServer.h"
 #include "mini/net/TcpClient.h"
 #include "mini/coroutine/Task.h"
+#include "mini/coroutine/CancellationToken.h"
 #include "mini/coroutine/SleepAwaitable.h"
+#include "mini/coroutine/Timeout.h"
 #include "mini/net/TlsContext.h"
 #include "mini/net/DnsResolver.h"
 #include "mini/coroutine/ResolveAwaitable.h"

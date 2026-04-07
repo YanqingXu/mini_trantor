@@ -5,21 +5,25 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Application Layer                         │
-│  (echo_server, coroutine_echo_server, HttpServer, WsServer)     │
+│  (echo_server, coroutine_echo_server, HttpServer, WsServer,     │
+│   RpcServer/RpcClient-based apps)                               │
 ├─────────────────────────────────────────────────────────────────┤
 │                       Protocol Layer                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │ HTTP/1.1     │  │ WebSocket    │  │ User Protocol ...     │  │
-│  │ HttpServer   │  │ WsServer     │  │ (via Callbacks)       │  │
-│  │ HttpContext   │  │ WsCodec      │  │                       │  │
-│  │ HttpRequest   │  │ WsHandshake  │  │                       │  │
-│  │ HttpResponse  │  │ WsConnection │  │                       │  │
-│  └──────────────┘  └──────────────┘  └──────────────────────┘  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
+│  │ HTTP/1.1     │  │ WebSocket    │  │ RPC          │         │
+│  │ HttpServer   │  │ WsServer     │  │ RpcServer    │         │
+│  │ HttpContext  │  │ WsCodec      │  │ RpcClient    │         │
+│  │ HttpRequest  │  │ WsHandshake  │  │ RpcChannel   │         │
+│  │ HttpResponse │  │ WsConnection │  │ RpcCodec     │         │
+│  └──────────────┘  └──────────────┘  └──────────────┘         │
 ├─────────────────────────────────────────────────────────────────┤
 │                     Coroutine Bridge Layer                        │
-│  ┌────────────┐  ┌────────────────┐  ┌───────┐  ┌───────────┐ │
-│  │ Task<T>    │  │ SleepAwaitable │  │WhenAll│  │ WhenAny   │ │
-│  └────────────┘  └────────────────┘  └───────┘  └───────────┘ │
+│  ┌────────────┐  ┌───────────────────┐  ┌────────────────┐     │
+│  │ Task<T>    │  │ CancellationToken │  │ SleepAwaitable │     │
+│  └────────────┘  └───────────────────┘  └────────────────┘     │
+│  ┌────────────┐  ┌───────────┐  ┌──────────────┐              │
+│  │ WhenAll    │  │ WhenAny   │  │ Timeout      │              │
+│  └────────────┘  └───────────┘  └──────────────┘              │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │ TcpConnection::ReadAwaitable / WriteAwaitable / Close... │  │
 │  └──────────────────────────────────────────────────────────┘  │
@@ -104,8 +108,10 @@ TCP 连接的完整生命周期管理：
 将 C++20 协程与 Reactor 调度语义融合：
 
 - **Task\<T\>**：最小可组合的 coroutine 结果对象，支持 `co_await` / `start()` / `detach()`。
-- **SleepAwaitable**：基于 TimerQueue 的协程定时等待。
-- **WhenAll / WhenAny**：结构化并发原语 —— 等待全部完成 / 等待首个完成。
+- **CancellationToken**：协作式取消原语，贯穿 `SleepAwaitable`、`TcpConnection` awaitable、DNS resolve 与 `WhenAny` loser cancel。
+- **SleepAwaitable**：基于 TimerQueue 的协程定时等待，返回显式 `Expected<void, NetError>`。
+- **WhenAll / WhenAny**：结构化并发原语 —— 等待全部完成 / 等待首个完成；`WhenAny` 会向败者发出协作式取消请求。
+- **Timeout**：将常见的 `operation vs timer` 竞态收敛为统一 `NetError::TimedOut`。
 - **ReadAwaitable / WriteAwaitable / CloseAwaitable**：TcpConnection 内置的协程 I/O 挂起点。
 
 ### 6. Protocol Layer（协议层）
@@ -114,6 +120,7 @@ TCP 连接的完整生命周期管理：
 
 - **HTTP/1.1**：增量解析状态机 + TcpServer 协议适配器。
 - **WebSocket**：RFC 6455 帧编解码 + HTTP Upgrade 握手 + 自动 ping/pong。
+- **RPC**：长度前缀帧编解码 + 请求关联 + callback/coroutine 双模式调用。
 
 ### 7. Advanced Layer（高级组件层）
 

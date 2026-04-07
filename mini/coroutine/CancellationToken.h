@@ -10,6 +10,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace mini::coroutine {
 
@@ -156,5 +157,35 @@ public:
 private:
     std::shared_ptr<detail::CancellationState> state_;
 };
+
+namespace detail {
+
+class LinkedCancellation {
+public:
+    void link(const CancellationToken& token) {
+        if (!token) {
+            return;
+        }
+        linked_ = true;
+        registrations_.push_back(token.registerCallback([source = source_] {
+            source.cancel();
+        }));
+    }
+
+    CancellationToken token() const noexcept {
+        return source_.token();
+    }
+
+    bool linked() const noexcept {
+        return linked_;
+    }
+
+private:
+    CancellationSource source_{};
+    bool linked_{false};
+    std::vector<CancellationRegistration> registrations_{};
+};
+
+}  // namespace detail
 
 }  // namespace mini::coroutine

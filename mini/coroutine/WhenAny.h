@@ -47,6 +47,7 @@ struct WhenAnyState {
     std::optional<T> winnerValue{};
     std::exception_ptr winnerException{};
     std::array<CancellationSource, N> cancellationSources{};
+    std::array<LinkedCancellation, N> linkedCancellations{};
     Task<void> wrappers[N];
 
     bool tryWin(std::size_t index) {
@@ -82,6 +83,7 @@ struct WhenAnyVoidState {
     std::size_t winnerIndex{0};
     std::exception_ptr winnerException{};
     std::array<CancellationSource, N> cancellationSources{};
+    std::array<LinkedCancellation, N> linkedCancellations{};
     Task<void> wrappers[N];
 
     bool tryWin(std::size_t index) {
@@ -160,7 +162,9 @@ public:
         : state_(std::make_shared<WhenAnyState<T, N>>()) {
         static_assert(sizeof...(Tasks) == N);
         std::size_t i = 0;
-        ((tasks.setCancellationToken(state_->cancellationSources[i].token()),
+        ((state_->linkedCancellations[i].link(tasks.cancellationToken()),
+          state_->linkedCancellations[i].link(state_->cancellationSources[i].token()),
+          tasks.setCancellationToken(state_->linkedCancellations[i].token()),
           state_->wrappers[i] = whenAnyValueWrapper<T, N>(std::move(tasks), i, state_),
           ++i),
          ...);
@@ -197,7 +201,9 @@ public:
         : state_(std::make_shared<WhenAnyVoidState<N>>()) {
         static_assert(sizeof...(Vs) == N);
         std::size_t i = 0;
-        ((tasks.setCancellationToken(state_->cancellationSources[i].token()),
+        ((state_->linkedCancellations[i].link(tasks.cancellationToken()),
+          state_->linkedCancellations[i].link(state_->cancellationSources[i].token()),
+          tasks.setCancellationToken(state_->linkedCancellations[i].token()),
           state_->wrappers[i] = whenAnyVoidWrapper<N>(std::move(tasks), i, state_),
           ++i),
          ...);
