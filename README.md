@@ -178,16 +178,16 @@ client.connect();  // 内部自动 DNS 解析
 // 方式二：手动异步解析
 auto resolver = mini::net::DnsResolver::getShared();
 resolver->resolve("example.com", 8080, &loop,
-    [](const std::vector<mini::net::InetAddress>& addrs) {
-        if (!addrs.empty()) {
-            // 使用 addrs[0] 建立连接
+    [](mini::net::Expected<std::vector<mini::net::InetAddress>> addrs) {
+        if (addrs) {
+            // 使用 (*addrs)[0] 建立连接
         }
     });
 
 // 方式三：协程 awaitable
 auto addrs = co_await mini::coroutine::asyncResolve(resolver, &loop, "example.com", 8080);
-if (!addrs.empty()) {
-    mini::net::TcpClient client(&loop, addrs[0], "MyClient");
+if (addrs) {
+    mini::net::TcpClient client(&loop, (*addrs)[0], "MyClient");
     client.connect();
 }
 ```

@@ -6,6 +6,7 @@
 
 #include "mini/base/noncopyable.h"
 #include "mini/net/InetAddress.h"
+#include "mini/net/NetError.h"
 
 #include <atomic>
 #include <chrono>
@@ -25,15 +26,16 @@ class EventLoop;
 
 class DnsResolver : private mini::base::noncopyable {
 public:
-    using ResolveCallback = std::function<void(const std::vector<InetAddress>&)>;
+    using ResolveResult = Expected<std::vector<InetAddress>>;
+    using ResolveCallback = std::function<void(ResolveResult)>;
 
     /// Create a resolver with the given number of worker threads.
     explicit DnsResolver(size_t numThreads = 2);
     ~DnsResolver();
 
     /// Resolve hostname asynchronously.
-    /// Callback is delivered on callbackLoop's thread with resolved addresses.
-    /// Empty vector indicates resolution failure.
+    /// Callback is delivered on callbackLoop's thread with either resolved
+    /// addresses or an explicit ResolveFailed error.
     void resolve(const std::string& hostname, uint16_t port,
                  EventLoop* callbackLoop, ResolveCallback cb);
 

@@ -4,7 +4,7 @@
 
 * **角色**: 高级功能模块（Advanced）
 * **层级**: Net 层辅助设施，连接 EventLoop 和系统 DNS
-* DnsResolver 是 **异步域名解析器**——用独立工作线程池执行阻塞的 `getaddrinfo`，通过 `runInLoop` 将结果投递回请求方线程
+* DnsResolver 是 **异步域名解析器**——用独立工作线程池执行阻塞的 `getaddrinfo`，通过 `runInLoop` 将显式解析结果投递回请求方线程
 
 ## 2. 解决的问题
 
@@ -48,7 +48,7 @@ ResolveRequest
 ├── hostname: string
 ├── port: uint16_t
 ├── callbackLoop: EventLoop*      // 结果投递的目标 loop
-├── callback: ResolveCallback     // 用户回调
+├── callback: ResolveCallback     // 用户回调（显式成功/失败结果）
 ```
 
 ### CacheEntry
@@ -71,7 +71,7 @@ CacheEntry
   │       lock cacheMutex_
   │       if (cache hit && not expired):
   │         → 构造 InetAddress vector（设置 port）
-  │         → callbackLoop->runInLoop(cb(result))
+  │         → callbackLoop->runInLoop(cb(Expected<vector<InetAddress>>(result)))
   │         → return（缓存命中，不入队）
   │     }
   │
@@ -96,7 +96,7 @@ CacheEntry
   │       → cache_[hostname] = {addrs_with_port0, now + ttl}
   │
   └─ 6. 投递结果:
-        → callbackLoop->runInLoop(cb(addresses))
+        → callbackLoop->runInLoop(cb(resolveResult))
         // 回调在请求方 EventLoop 线程执行
 ```
 
@@ -174,7 +174,7 @@ static shared_ptr<DnsResolver> getShared() {
 
 | 问题 | 描述 | 严重程度 |
 |------|------|----------|
-| cacheEnabled_ 非 atomic | 主线程 enableCache + 工作线程 read → 数据竞争 | 中 |
+| 回调语义若用空 vector 代表失败会产生歧义 | 当前已改为显式 error result | 已缓解 |
 | 缓存不区分 IPv4/IPv6 | hints.ai_family = AF_INET，只缓存 IPv4 | 低（设计选择） |
 | 无解析超时 | getaddrinfo 可能阻塞很久（30s+） | 中 |
 | 全局实例生命周期 | static 对象的销毁顺序与 EventLoop 可能冲突 | 低 |

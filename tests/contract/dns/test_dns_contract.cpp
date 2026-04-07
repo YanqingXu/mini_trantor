@@ -14,6 +14,7 @@
 #include "mini/net/EventLoop.h"
 #include "mini/net/EventLoopThread.h"
 #include "mini/net/InetAddress.h"
+#include "mini/net/NetError.h"
 
 #include <cassert>
 #include <chrono>
@@ -36,8 +37,8 @@ int main() {
 
         loop->runInLoop([&] {
             resolver.resolve("localhost", 80, loop,
-                [&](const std::vector<mini::net::InetAddress>&) {
-                    promise.set_value(loop->isInLoopThread());
+                [&](mini::net::DnsResolver::ResolveResult result) {
+                    promise.set_value(loop->isInLoopThread() && result.has_value());
                 });
         });
 
@@ -48,7 +49,7 @@ int main() {
         std::printf("  PASS: callback delivered on requesting EventLoop thread\n");
     }
 
-    // Contract 2: failed resolution delivers empty vector (not crash or hang)
+    // Contract 2: failed resolution delivers explicit error (not crash or hang)
     {
         mini::net::EventLoopThread loopThread;
         mini::net::EventLoop* loop = loopThread.startLoop();
@@ -60,8 +61,9 @@ int main() {
         loop->runInLoop([&] {
             // Empty hostname is always rejected by getaddrinfo.
             resolver.resolve("", 80, loop,
-                [&](const std::vector<mini::net::InetAddress>& addrs) {
-                    promise.set_value(addrs.empty());
+                [&](mini::net::DnsResolver::ResolveResult addrs) {
+                    promise.set_value(!addrs &&
+                                      addrs.error() == mini::net::NetError::ResolveFailed);
                 });
         });
 
@@ -69,7 +71,7 @@ int main() {
         assert(future.get() == true);
 
         loop->runInLoop([loop] { loop->quit(); });
-        std::printf("  PASS: failed resolution delivers empty vector\n");
+        std::printf("  PASS: failed resolution delivers explicit error\n");
     }
 
     // Contract 3: multiple concurrent resolutions complete correctly
@@ -86,9 +88,9 @@ int main() {
         loop->runInLoop([&, count] {
             for (int i = 0; i < kNumRequests; ++i) {
                 resolver.resolve("localhost", static_cast<uint16_t>(8000 + i), loop,
-                    [&, count, i](const std::vector<mini::net::InetAddress>& addrs) {
-                        assert(!addrs.empty());
-                        assert(addrs[0].port() == static_cast<uint16_t>(8000 + i));
+                    [&, count, i](mini::net::DnsResolver::ResolveResult addrs) {
+                        assert(addrs);
+                        assert((*addrs)[0].port() == static_cast<uint16_t>(8000 + i));
                         if (++(*count) == kNumRequests) {
                             promise.set_value(*count);
                         }
@@ -114,9 +116,9 @@ int main() {
 
         // Call resolve from main thread (not the loop thread).
         resolver.resolve("localhost", 80, loop,
-            [&](const std::vector<mini::net::InetAddress>& addrs) {
+            [&](mini::net::DnsResolver::ResolveResult addrs) {
                 // Callback must still be on the loop thread.
-                promise.set_value(loop->isInLoopThread() && !addrs.empty());
+                promise.set_value(loop->isInLoopThread() && addrs.has_value());
             });
 
         assert(future.wait_for(5s) == std::future_status::ready);
@@ -137,7 +139,8 @@ int main() {
         std::promise<void> p1;
         loop->runInLoop([&] {
             resolver.resolve("localhost", 80, loop,
-                [&](const std::vector<mini::net::InetAddress>&) {
+                [&](mini::net::DnsResolver::ResolveResult result) {
+                    assert(result);
                     p1.set_value();
                 });
         });
@@ -148,8 +151,8 @@ int main() {
         auto f2 = p2.get_future();
         loop->runInLoop([&] {
             resolver.resolve("localhost", 80, loop,
-                [&](const std::vector<mini::net::InetAddress>& addrs) {
-                    p2.set_value(loop->isInLoopThread() && !addrs.empty());
+                [&](mini::net::DnsResolver::ResolveResult addrs) {
+                    p2.set_value(loop->isInLoopThread() && addrs.has_value());
                 });
         });
 

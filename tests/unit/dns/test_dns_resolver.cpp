@@ -7,6 +7,7 @@
 #include "mini/net/EventLoop.h"
 #include "mini/net/EventLoopThread.h"
 #include "mini/net/InetAddress.h"
+#include "mini/net/NetError.h"
 
 #include <cassert>
 #include <chrono>
@@ -25,47 +26,49 @@ int main() {
         mini::net::EventLoop* loop = loopThread.startLoop();
         mini::net::DnsResolver resolver(1);
 
-        std::promise<std::vector<mini::net::InetAddress>> promise;
+        std::promise<mini::net::DnsResolver::ResolveResult> promise;
         auto future = promise.get_future();
 
         loop->runInLoop([&] {
             resolver.resolve("localhost", 8080, loop,
-                [&](const std::vector<mini::net::InetAddress>& addrs) {
-                    promise.set_value(addrs);
+                [&](mini::net::DnsResolver::ResolveResult addrs) {
+                    promise.set_value(std::move(addrs));
                 });
         });
 
         auto addrs = future.get();
-        assert(!addrs.empty());
-        assert(addrs[0].toIp() == "127.0.0.1");
-        assert(addrs[0].port() == 8080);
+        assert(addrs);
+        assert(!addrs->empty());
+        assert((*addrs)[0].toIp() == "127.0.0.1");
+        assert((*addrs)[0].port() == 8080);
 
         loop->runInLoop([loop] { loop->quit(); });
         std::printf("  PASS: resolve localhost returns 127.0.0.1\n");
     }
 
-    // Unit 2: resolve invalid hostname returns empty vector
+    // Unit 2: resolve invalid hostname returns explicit ResolveFailed
     {
         mini::net::EventLoopThread loopThread;
         mini::net::EventLoop* loop = loopThread.startLoop();
         mini::net::DnsResolver resolver(1);
 
-        std::promise<std::vector<mini::net::InetAddress>> promise;
+        std::promise<mini::net::DnsResolver::ResolveResult> promise;
         auto future = promise.get_future();
 
         loop->runInLoop([&] {
             // Empty hostname is always rejected by getaddrinfo.
             resolver.resolve("", 80, loop,
-                [&](const std::vector<mini::net::InetAddress>& addrs) {
-                    promise.set_value(addrs);
+                [&](mini::net::DnsResolver::ResolveResult addrs) {
+                    promise.set_value(std::move(addrs));
                 });
         });
 
         auto addrs = future.get();
-        assert(addrs.empty());
+        assert(!addrs);
+        assert(addrs.error() == mini::net::NetError::ResolveFailed);
 
         loop->runInLoop([loop] { loop->quit(); });
-        std::printf("  PASS: resolve invalid hostname returns empty\n");
+        std::printf("  PASS: resolve invalid hostname returns explicit error\n");
     }
 
     // Unit 3: cache stores results — second resolve is served from cache
@@ -76,30 +79,32 @@ int main() {
         resolver.enableCache(60s);
 
         // First resolve: populates cache.
-        std::promise<std::vector<mini::net::InetAddress>> p1;
+        std::promise<mini::net::DnsResolver::ResolveResult> p1;
         auto f1 = p1.get_future();
         loop->runInLoop([&] {
             resolver.resolve("localhost", 9090, loop,
-                [&](const std::vector<mini::net::InetAddress>& addrs) {
-                    p1.set_value(addrs);
+                [&](mini::net::DnsResolver::ResolveResult addrs) {
+                    p1.set_value(std::move(addrs));
                 });
         });
         auto addrs1 = f1.get();
-        assert(!addrs1.empty());
+        assert(addrs1);
+        assert(!addrs1->empty());
 
         // Second resolve: should hit cache (different port to verify port is applied).
-        std::promise<std::vector<mini::net::InetAddress>> p2;
+        std::promise<mini::net::DnsResolver::ResolveResult> p2;
         auto f2 = p2.get_future();
         loop->runInLoop([&] {
             resolver.resolve("localhost", 7070, loop,
-                [&](const std::vector<mini::net::InetAddress>& addrs) {
-                    p2.set_value(addrs);
+                [&](mini::net::DnsResolver::ResolveResult addrs) {
+                    p2.set_value(std::move(addrs));
                 });
         });
         auto addrs2 = f2.get();
-        assert(!addrs2.empty());
-        assert(addrs2[0].toIp() == "127.0.0.1");
-        assert(addrs2[0].port() == 7070);
+        assert(addrs2);
+        assert(!addrs2->empty());
+        assert((*addrs2)[0].toIp() == "127.0.0.1");
+        assert((*addrs2)[0].port() == 7070);
 
         loop->runInLoop([loop] { loop->quit(); });
         std::printf("  PASS: cache stores and serves results\n");
@@ -116,7 +121,8 @@ int main() {
         std::promise<void> p1;
         loop->runInLoop([&] {
             resolver.resolve("localhost", 80, loop,
-                [&](const std::vector<mini::net::InetAddress>&) {
+                [&](mini::net::DnsResolver::ResolveResult result) {
+                    assert(result);
                     p1.set_value();
                 });
         });
@@ -126,16 +132,17 @@ int main() {
         resolver.clearCache();
 
         // Resolve again after clear — must still work (goes to worker thread).
-        std::promise<std::vector<mini::net::InetAddress>> p2;
+        std::promise<mini::net::DnsResolver::ResolveResult> p2;
         auto f2 = p2.get_future();
         loop->runInLoop([&] {
             resolver.resolve("localhost", 80, loop,
-                [&](const std::vector<mini::net::InetAddress>& addrs) {
-                    p2.set_value(addrs);
+                [&](mini::net::DnsResolver::ResolveResult addrs) {
+                    p2.set_value(std::move(addrs));
                 });
         });
         auto addrs = f2.get();
-        assert(!addrs.empty());
+        assert(addrs);
+        assert(!addrs->empty());
 
         loop->runInLoop([loop] { loop->quit(); });
         std::printf("  PASS: clearCache works\n");
@@ -147,20 +154,21 @@ int main() {
         mini::net::EventLoop* loop = loopThread.startLoop();
         mini::net::DnsResolver resolver(1);
 
-        std::promise<std::vector<mini::net::InetAddress>> promise;
+        std::promise<mini::net::DnsResolver::ResolveResult> promise;
         auto future = promise.get_future();
 
         loop->runInLoop([&] {
             resolver.resolve("127.0.0.1", 5000, loop,
-                [&](const std::vector<mini::net::InetAddress>& addrs) {
-                    promise.set_value(addrs);
+                [&](mini::net::DnsResolver::ResolveResult addrs) {
+                    promise.set_value(std::move(addrs));
                 });
         });
 
         auto addrs = future.get();
-        assert(!addrs.empty());
-        assert(addrs[0].toIp() == "127.0.0.1");
-        assert(addrs[0].port() == 5000);
+        assert(addrs);
+        assert(!addrs->empty());
+        assert((*addrs)[0].toIp() == "127.0.0.1");
+        assert((*addrs)[0].port() == 5000);
 
         loop->runInLoop([loop] { loop->quit(); });
         std::printf("  PASS: resolve IP literal works\n");

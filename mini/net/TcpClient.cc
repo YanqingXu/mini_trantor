@@ -187,15 +187,15 @@ void TcpClient::initConnector(const InetAddress& serverAddr) {
 void TcpClient::resolveAndConnect() {
     auto guard = resolveGuard_;
     resolver_->resolve(hostname_, port_, loop_,
-        [this, guard](const std::vector<InetAddress>& addrs) {
+        [this, guard](DnsResolver::ResolveResult addrs) mutable {
             // Delivered on owner loop thread.
             if (!*guard) return;  // TcpClient was destroyed
             if (!connect_) return;  // stop() was called
-            if (addrs.empty()) {
+            if (!addrs) {
                 LOG_ERROR << "TcpClient: DNS resolution failed for '" << hostname_ << "'";
                 return;
             }
-            initConnector(addrs[0]);
+            initConnector((*addrs)[0]);
             connector_->start();
         });
 }

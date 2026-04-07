@@ -15,8 +15,7 @@ ever blocking an EventLoop thread.
 ## 2. Responsibilities
 - accept a hostname + port + callback + target EventLoop
 - perform blocking `getaddrinfo` on a worker thread (never on an EventLoop thread)
-- deliver resolved addresses (or empty on failure) to the requesting
-  EventLoop via `runInLoop`
+- deliver an explicit resolve result to the requesting EventLoop via `runInLoop`
 - optionally cache resolved addresses with configurable TTL
 - provide a global shared instance for convenience
 - provide a coroutine awaitable wrapper (`ResolveAwaitable`) for coroutine use
@@ -37,7 +36,7 @@ ever blocking an EventLoop thread.
 - DNS resolution never blocks an EventLoop thread
 - the resolve callback is delivered on the requesting EventLoop thread
   (guaranteed by `runInLoop`)
-- empty result vector indicates resolution failure
+- resolution failure is explicit, not encoded as an empty result vector
 - cache entries expire after TTL; stale entries are never returned
 - the worker thread pool is properly joined on DnsResolver destruction
 - DnsResolver is thread-safe: `resolve()` may be called from any thread
@@ -77,8 +76,8 @@ ever blocking an EventLoop thread.
 ---
 
 ## 8. Failure Semantics
-- unresolvable hostname: callback receives empty vector, no crash or hang
-- `getaddrinfo` error: logged to stderr, callback receives empty vector
+- unresolvable hostname: callback receives explicit `ResolveFailed`, no crash or hang
+- `getaddrinfo` error: logged to stderr, callback receives explicit `ResolveFailed`
 - EventLoop destroyed before callback delivery: same as any pending
   `runInLoop` — undefined if loop is gone; caller must ensure loop outlives
   pending resolve
@@ -100,7 +99,7 @@ ever blocking an EventLoop thread.
 
 ## 10. Test Contracts
 - resolve "localhost" returns non-empty result with 127.0.0.1
-- resolve invalid hostname returns empty vector
+- resolve invalid hostname returns explicit error
 - callback is delivered on the specified EventLoop thread
 - cache hit returns result without blocking on worker thread
 - cache TTL expiry causes re-resolution
@@ -117,5 +116,5 @@ ever blocking an EventLoop thread.
 - Is the cache properly synchronized?
 - Can the worker thread pool leak threads on destruction?
 - Are all `getaddrinfo` results properly freed with `freeaddrinfo`?
-- Does empty result consistently indicate failure?
+- Does callback-layer failure remain explicit rather than sentinel-based?
 - Is the global shared instance properly initialized and torn down?

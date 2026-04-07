@@ -21,7 +21,7 @@ namespace mini::coroutine {
 struct ResolveState {
     mini::net::EventLoop* loop{nullptr};
     std::coroutine_handle<> handle{};
-    std::vector<mini::net::InetAddress> result;
+    mini::net::DnsResolver::ResolveResult result = std::unexpected(mini::net::NetError::ResolveFailed);
     bool resumed{false};
 };
 
@@ -45,21 +45,18 @@ public:
         state_->handle = handle;
         auto state = state_;
         resolver_->resolve(hostname_, port_, state_->loop,
-            [state](const std::vector<mini::net::InetAddress>& addrs) {
+            [state](mini::net::DnsResolver::ResolveResult addrs) mutable {
                 // Delivered on owner loop thread by DnsResolver.
                 if (!state->resumed) {
                     state->resumed = true;
-                    state->result = addrs;
+                    state->result = std::move(addrs);
                     state->handle.resume();
                 }
             });
     }
 
-    /// Returns resolved addresses, or ResolveFailed on resolution failure.
+    /// Returns the explicit result produced by DnsResolver.
     mini::net::Expected<std::vector<mini::net::InetAddress>> await_resume() {
-        if (state_->result.empty()) {
-            return std::unexpected(mini::net::NetError::ResolveFailed);
-        }
         return std::move(state_->result);
     }
 

@@ -37,16 +37,16 @@ void DnsResolver::resolve(const std::string& hostname, uint16_t port,
         if (it != cache_.end() &&
             it->second.expiry > std::chrono::steady_clock::now()) {
             // Cache hit — apply requested port and deliver immediately.
-            std::vector<InetAddress> result;
-            result.reserve(it->second.addresses.size());
+            std::vector<InetAddress> addresses;
+            addresses.reserve(it->second.addresses.size());
             for (const auto& sa : it->second.addresses) {
                 sockaddr_in addr = sa;
                 addr.sin_port = htons(port);
-                result.emplace_back(addr);
+                addresses.emplace_back(addr);
             }
             callbackLoop->runInLoop(
-                [cb = std::move(cb), result = std::move(result)]() mutable {
-                    cb(result);
+                [cb = std::move(cb), result = ResolveResult(std::move(addresses))]() mutable {
+                    cb(std::move(result));
                 });
             return;
         }
@@ -102,8 +102,9 @@ void DnsResolver::workerThread() {
         const int ret = ::getaddrinfo(req.hostname.c_str(), portStr.c_str(),
                                       &hints, &res);
 
-        std::vector<InetAddress> addresses;
+        ResolveResult result = std::unexpected(NetError::ResolveFailed);
         std::vector<sockaddr_in> cacheAddrs;
+        std::vector<InetAddress> addresses;
 
         if (ret == 0 && res != nullptr) {
             for (const addrinfo* p = res; p != nullptr; p = p->ai_next) {
@@ -119,6 +120,9 @@ void DnsResolver::workerThread() {
                 }
             }
             ::freeaddrinfo(res);
+            if (!addresses.empty()) {
+                result = std::move(addresses);
+            }
         } else {
             LOG_ERROR << "DnsResolver: getaddrinfo failed for '" << req.hostname << "': " << ::gai_strerror(ret);
         }
@@ -134,8 +138,8 @@ void DnsResolver::workerThread() {
 
         // Deliver result on the requesting EventLoop thread.
         req.callbackLoop->runInLoop(
-            [cb = std::move(req.callback), addrs = std::move(addresses)]() mutable {
-                cb(addrs);
+            [cb = std::move(req.callback), result = std::move(result)]() mutable {
+                cb(std::move(result));
             });
     }
 }
