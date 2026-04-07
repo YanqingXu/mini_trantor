@@ -36,12 +36,35 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 
 ## 下一阶段方向
 
-以下为候选演进方向，具体阶段边界待 intent 文档定义：
+下一阶段不再以零散候选项维护，而是统一收敛到路线图文档：
 
-- **WebSocket 支持**：~~HTTP Upgrade 握手 + WebSocket 帧编解码~~ ✅ 已完成
-- **信号处理**：SIGINT/SIGTERM 的 EventLoop 集成，优雅关闭
-- **HTTP 客户端**：基于 TcpClient 的 HTTP/1.1 请求发送与响应解析
-- **RPC 生态**：protobuf codegen / 服务发现 / 连接池 / 重试策略
+- 详细规划见 [docs/roadmap.md](docs/roadmap.md)
+- 阶段边界见 `intents/architecture/v5_stages.intent.md` 与 `intents/architecture/v6_stages.intent.md`
+
+当前推荐的推进顺序为：
+
+- **G0**：文档与 Intent 对齐
+  - 收敛 README / docs / intent / 目录说明之间的漂移
+- **v5-alpha**：统一取消与错误语义
+  - 为 coroutine、TcpConnection、DNS 等异步接口建立一致的 cancellation / error surface
+- **v5-beta**：优雅关闭与信号集成
+  - 补齐 SIGINT/SIGTERM、server drain、worker loop 退出等生命周期闭环
+- **v5-gamma**：IPv6 与地址模型补全
+  - 将当前偏 IPv4-only 的地址抽象升级为双栈可用
+- **v5-delta**：配置体系与可观测性
+  - 让重连、DNS、背压、超时等关键行为可配置、可观测
+- **v5-epsilon**：协议层与传输层进一步解耦
+  - 为后续 HTTP client 和更多协议扩展清理抽象边界
+- **v5-zeta**：工程护栏补齐
+  - 引入 CI、sanitizer、fuzz、benchmark、install 校验
+- **v6-alpha**：客户端生态与上层复用能力
+  - 重点推进 HTTP client、RPC 连接池、服务发现等 client-side 复用能力
+
+如果只优先做最关键的三件事，建议顺序是：
+
+1. `v5-alpha`：统一取消与错误语义
+2. `v5-beta`：优雅关闭与信号集成
+3. `v5-gamma`：IPv6 与地址模型补全
 
 ## 核心理念
 对于重要模块，不先写代码，先写：
