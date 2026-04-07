@@ -92,6 +92,39 @@ void ConnectionAwaiterRegistry::resumeAllOnClose() {
     }
 }
 
+bool ConnectionAwaiterRegistry::cancelReadWaiter(std::coroutine_handle<> handle) {
+    loop_->assertInLoopThread();
+    if (!readWaiter_.active || readWaiter_.handle != handle) {
+        return false;
+    }
+    auto waiter = readWaiter_.handle;
+    readWaiter_ = {};
+    queueResume(waiter);
+    return true;
+}
+
+bool ConnectionAwaiterRegistry::cancelWriteWaiter(std::coroutine_handle<> handle) {
+    loop_->assertInLoopThread();
+    if (!writeWaiter_.active || writeWaiter_.handle != handle) {
+        return false;
+    }
+    auto waiter = writeWaiter_.handle;
+    writeWaiter_ = {};
+    queueResume(waiter);
+    return true;
+}
+
+bool ConnectionAwaiterRegistry::cancelCloseWaiter(std::coroutine_handle<> handle) {
+    loop_->assertInLoopThread();
+    if (!closeWaiter_.active || closeWaiter_.handle != handle) {
+        return false;
+    }
+    auto waiter = closeWaiter_.handle;
+    closeWaiter_ = {};
+    queueResume(waiter);
+    return true;
+}
+
 void ConnectionAwaiterRegistry::queueResume(std::coroutine_handle<> handle) {
     if (!handle) {
         return;

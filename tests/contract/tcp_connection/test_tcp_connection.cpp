@@ -1,3 +1,4 @@
+#include "mini/coroutine/CancellationToken.h"
 #include "mini/coroutine/Task.h"
 #include "mini/net/Buffer.h"
 #include "mini/net/EventLoop.h"
@@ -116,6 +117,37 @@ mini::coroutine::Task<void> writeUntilError(
     auto result = co_await connection->asyncWrite(std::move(payload));
     assert(!result);
     error->set_value(result.error());
+}
+
+mini::coroutine::Task<void> readUntilCancelled(
+    TcpConnectionPtr connection,
+    mini::net::EventLoop* loop,
+    std::promise<mini::net::NetError>* error) {
+    auto result = co_await connection->asyncReadSome();
+    assert(!result);
+    error->set_value(result.error());
+    loop->quit();
+}
+
+mini::coroutine::Task<void> writeUntilCancelled(
+    TcpConnectionPtr connection,
+    mini::net::EventLoop* loop,
+    std::promise<mini::net::NetError>* error) {
+    std::string payload(1 << 20, 'x');
+    auto result = co_await connection->asyncWrite(std::move(payload));
+    assert(!result);
+    error->set_value(result.error());
+    loop->quit();
+}
+
+mini::coroutine::Task<void> waitClosedUntilCancelled(
+    TcpConnectionPtr connection,
+    mini::net::EventLoop* loop,
+    std::promise<mini::net::NetError>* error) {
+    auto result = co_await connection->waitClosed();
+    assert(!result);
+    error->set_value(result.error());
+    loop->quit();
 }
 
 void testBackpressurePolicyRejectsInvalidThresholds() {
@@ -767,6 +799,136 @@ void testReadAwaiterReportsConnectionResetOnTcpReset() {
     destroyConnectionOnLoop(loop, connection);
 }
 
+void testReadAwaiterCancellationResumesWithCancelled() {
+    auto sockets = makeSocketPair();
+
+    mini::net::EventLoop loop;
+    auto connection = std::make_shared<mini::net::TcpConnection>(
+        &loop,
+        "socketpair#read-cancel",
+        sockets[0],
+        mini::net::InetAddress(),
+        mini::net::InetAddress());
+
+    mini::coroutine::CancellationSource source;
+    std::promise<mini::net::NetError> errorPromise;
+    auto errorFuture = errorPromise.get_future();
+
+    auto task = readUntilCancelled(connection, &loop, &errorPromise);
+    task.setCancellationToken(source.token());
+
+    loop.runInLoop([&] {
+        connection->connectEstablished();
+        task.start();
+    });
+
+    std::thread canceller([source] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        source.cancel();
+    });
+
+    loop.loop();
+    canceller.join();
+
+    assert(errorFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
+    assert(errorFuture.get() == mini::net::NetError::Cancelled);
+    assert(connection->connected());
+
+    destroyConnectionOnLoop(loop, connection);
+    ::close(sockets[1]);
+}
+
+void testWriteAwaiterCancellationResumesWithCancelled() {
+    auto sockets = makeSocketPair();
+
+    const int flags = ::fcntl(sockets[0], F_GETFL, 0);
+    assert(flags >= 0);
+    assert(::fcntl(sockets[0], F_SETFL, flags | O_NONBLOCK) == 0);
+
+    const int sendBufferSize = 4096;
+    const int rc = ::setsockopt(
+        sockets[0],
+        SOL_SOCKET,
+        SO_SNDBUF,
+        &sendBufferSize,
+        static_cast<socklen_t>(sizeof(sendBufferSize)));
+    assert(rc == 0);
+
+    mini::net::EventLoop loop;
+    auto connection = std::make_shared<mini::net::TcpConnection>(
+        &loop,
+        "socketpair#write-cancel",
+        sockets[0],
+        mini::net::InetAddress(),
+        mini::net::InetAddress());
+
+    mini::coroutine::CancellationSource source;
+    std::promise<mini::net::NetError> errorPromise;
+    auto errorFuture = errorPromise.get_future();
+
+    auto task = writeUntilCancelled(connection, &loop, &errorPromise);
+    task.setCancellationToken(source.token());
+
+    loop.runInLoop([&] {
+        connection->connectEstablished();
+        task.start();
+    });
+
+    std::thread canceller([source] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        source.cancel();
+    });
+
+    loop.loop();
+    canceller.join();
+
+    assert(errorFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
+    assert(errorFuture.get() == mini::net::NetError::Cancelled);
+    assert(connection->connected());
+
+    destroyConnectionOnLoop(loop, connection);
+    ::close(sockets[1]);
+}
+
+void testCloseAwaiterCancellationResumesWithCancelled() {
+    auto sockets = makeSocketPair();
+
+    mini::net::EventLoop loop;
+    auto connection = std::make_shared<mini::net::TcpConnection>(
+        &loop,
+        "socketpair#close-cancel",
+        sockets[0],
+        mini::net::InetAddress(),
+        mini::net::InetAddress());
+
+    mini::coroutine::CancellationSource source;
+    std::promise<mini::net::NetError> errorPromise;
+    auto errorFuture = errorPromise.get_future();
+
+    auto task = waitClosedUntilCancelled(connection, &loop, &errorPromise);
+    task.setCancellationToken(source.token());
+
+    loop.runInLoop([&] {
+        connection->connectEstablished();
+        task.start();
+    });
+
+    std::thread canceller([source] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        source.cancel();
+    });
+
+    loop.loop();
+    canceller.join();
+
+    assert(errorFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
+    assert(errorFuture.get() == mini::net::NetError::Cancelled);
+    assert(connection->connected());
+
+    destroyConnectionOnLoop(loop, connection);
+    ::close(sockets[1]);
+}
+
 }  // namespace
 
 int main() {
@@ -782,5 +944,8 @@ int main() {
     testSecondReadWaiterIsRejected();
     testWriteAwaiterReportsConnectionResetOnWriteError();
     testReadAwaiterReportsConnectionResetOnTcpReset();
+    testReadAwaiterCancellationResumesWithCancelled();
+    testWriteAwaiterCancellationResumesWithCancelled();
+    testCloseAwaiterCancellationResumesWithCancelled();
     return 0;
 }

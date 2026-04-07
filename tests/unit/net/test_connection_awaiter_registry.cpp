@@ -124,5 +124,43 @@ int main() {
     assert(duplicateDrainedFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
     duplicateFirst.result();
 
+    std::coroutine_handle<> storedHandle{};
+    std::promise<std::thread::id> cancelledResumePromise;
+    auto cancelledResumeFuture = cancelledResumePromise.get_future();
+
+    struct Probe {
+        mini::net::detail::ConnectionAwaiterRegistry* registry;
+        std::coroutine_handle<>* outHandle;
+
+        bool await_ready() const noexcept { return false; }
+        void await_suspend(std::coroutine_handle<> handle) {
+            *outHandle = handle;
+            registry->armReadWaiter(handle, 1, false);
+        }
+        void await_resume() const noexcept {}
+    };
+
+    auto cancelledTask = [&]() -> mini::coroutine::Task<void> {
+        co_await Probe{&registry, &storedHandle};
+        cancelledResumePromise.set_value(std::this_thread::get_id());
+    }();
+
+    std::promise<void> cancelledStarted;
+    auto cancelledStartedFuture = cancelledStarted.get_future();
+    loop->runInLoop([&] {
+        cancelledTask.start();
+        cancelledStarted.set_value();
+    });
+    assert(cancelledStartedFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    assert(storedHandle);
+    loop->runInLoop([&] {
+        assert(!registry.cancelReadWaiter(std::noop_coroutine()));
+        assert(registry.cancelReadWaiter(storedHandle));
+    });
+    assert(cancelledResumeFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+    assert(cancelledResumeFuture.get() == ownerThread);
+    cancelledTask.result();
+
     return 0;
 }

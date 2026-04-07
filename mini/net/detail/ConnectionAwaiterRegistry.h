@@ -20,6 +20,9 @@ public:
     void resumeReadWaiterIfSatisfied(std::size_t readableBytes);
     void resumeWriteWaiterIfNeeded();
     void resumeAllOnClose();
+    bool cancelReadWaiter(std::coroutine_handle<> handle);
+    bool cancelWriteWaiter(std::coroutine_handle<> handle);
+    bool cancelCloseWaiter(std::coroutine_handle<> handle);
 
 private:
     struct ReadAwaiterState {

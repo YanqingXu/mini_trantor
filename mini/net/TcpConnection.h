@@ -5,6 +5,7 @@
 // 可选支持 TLS：通过 startTls() 激活后，read/write 透明走 SSL 路径。
 
 #include "mini/base/noncopyable.h"
+#include "mini/coroutine/CancellationToken.h"
 #include "mini/base/Timestamp.h"
 #include "mini/net/Callbacks.h"
 #include "mini/net/InetAddress.h"
@@ -14,6 +15,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -25,6 +27,7 @@ class TlsContext;
 class TcpConnection : public std::enable_shared_from_this<TcpConnection>, private mini::base::noncopyable {
 public:
     enum StateE { kConnecting, kConnected, kDisconnecting, kDisconnected };
+    struct AwaitCancellationState;
 
     TcpConnection(
         EventLoop* loop,
@@ -66,45 +69,66 @@ public:
 
     class ReadAwaitable {
     public:
-        ReadAwaitable(TcpConnectionPtr connection, std::size_t minBytes);
+        ReadAwaitable(
+            TcpConnectionPtr connection,
+            std::size_t minBytes,
+            mini::coroutine::CancellationToken token = {});
 
         bool await_ready() const noexcept;
-        void await_suspend(std::coroutine_handle<> handle);
+        template <typename Promise>
+        void await_suspend(std::coroutine_handle<Promise> handle);
         Expected<std::string> await_resume();
 
     private:
         TcpConnectionPtr connection_;
         std::size_t minBytes_;
+        std::shared_ptr<AwaitCancellationState> cancellationState_;
+        mini::coroutine::CancellationToken token_;
     };
 
     class WriteAwaitable {
     public:
-        WriteAwaitable(TcpConnectionPtr connection, std::string data);
+        WriteAwaitable(
+            TcpConnectionPtr connection,
+            std::string data,
+            mini::coroutine::CancellationToken token = {});
 
         bool await_ready() const noexcept;
-        void await_suspend(std::coroutine_handle<> handle);
+        template <typename Promise>
+        void await_suspend(std::coroutine_handle<Promise> handle);
         Expected<void> await_resume() const;
 
     private:
         TcpConnectionPtr connection_;
         std::string data_;
+        std::shared_ptr<AwaitCancellationState> cancellationState_;
+        mini::coroutine::CancellationToken token_;
     };
 
     class CloseAwaitable {
     public:
-        explicit CloseAwaitable(TcpConnectionPtr connection);
+        explicit CloseAwaitable(
+            TcpConnectionPtr connection,
+            mini::coroutine::CancellationToken token = {});
 
         bool await_ready() const noexcept;
-        void await_suspend(std::coroutine_handle<> handle);
-        void await_resume() const noexcept;
+        template <typename Promise>
+        void await_suspend(std::coroutine_handle<Promise> handle);
+        Expected<void> await_resume() const noexcept;
 
     private:
         TcpConnectionPtr connection_;
+        std::shared_ptr<AwaitCancellationState> cancellationState_;
+        mini::coroutine::CancellationToken token_;
     };
 
-    ReadAwaitable asyncReadSome(std::size_t minBytes = 1);
-    WriteAwaitable asyncWrite(std::string data);
-    CloseAwaitable waitClosed();
+    ReadAwaitable asyncReadSome(
+        std::size_t minBytes = 1,
+        mini::coroutine::CancellationToken token = {});
+    WriteAwaitable asyncWrite(
+        std::string data,
+        mini::coroutine::CancellationToken token = {});
+    CloseAwaitable waitClosed(mini::coroutine::CancellationToken token = {});
 
 private:
     struct Impl;
@@ -137,9 +161,75 @@ private:
     bool isCloseAwaitReady() const noexcept;
     Expected<std::string> resumeReadAwait(std::size_t minBytes);
     Expected<void> resumeWriteAwait() const;
-    void resumeCloseAwait() const noexcept;
+    Expected<void> resumeCloseAwait() const noexcept;
+    void cancelReadWaiter(
+        std::coroutine_handle<> handle,
+        const std::shared_ptr<AwaitCancellationState>& cancellationState);
+    void cancelWriteWaiter(
+        std::coroutine_handle<> handle,
+        const std::shared_ptr<AwaitCancellationState>& cancellationState);
+    void cancelCloseWaiter(
+        std::coroutine_handle<> handle,
+        const std::shared_ptr<AwaitCancellationState>& cancellationState);
 
     std::unique_ptr<Impl> impl_;
 };
+
+template <typename Promise>
+void TcpConnection::ReadAwaitable::await_suspend(std::coroutine_handle<Promise> handle) {
+    connection_->armReadWaiter(handle, minBytes_);
+
+    auto token = token_;
+    if (!token) {
+        if constexpr (requires(const Promise& promise) { promise.cancellationToken(); }) {
+            token = handle.promise().cancellationToken();
+        }
+    }
+    if (token && connection_) {
+        auto state = cancellationState_;
+        auto connection = connection_;
+        state->registration.emplace(token.registerCallback([connection, state, handle] {
+            connection->cancelReadWaiter(handle, state);
+        }));
+    }
+}
+
+template <typename Promise>
+void TcpConnection::WriteAwaitable::await_suspend(std::coroutine_handle<Promise> handle) {
+    connection_->armWriteWaiter(handle, std::move(data_));
+
+    auto token = token_;
+    if (!token) {
+        if constexpr (requires(const Promise& promise) { promise.cancellationToken(); }) {
+            token = handle.promise().cancellationToken();
+        }
+    }
+    if (token && connection_) {
+        auto state = cancellationState_;
+        auto connection = connection_;
+        state->registration.emplace(token.registerCallback([connection, state, handle] {
+            connection->cancelWriteWaiter(handle, state);
+        }));
+    }
+}
+
+template <typename Promise>
+void TcpConnection::CloseAwaitable::await_suspend(std::coroutine_handle<Promise> handle) {
+    connection_->armCloseWaiter(handle);
+
+    auto token = token_;
+    if (!token) {
+        if constexpr (requires(const Promise& promise) { promise.cancellationToken(); }) {
+            token = handle.promise().cancellationToken();
+        }
+    }
+    if (token && connection_) {
+        auto state = cancellationState_;
+        auto connection = connection_;
+        state->registration.emplace(token.registerCallback([connection, state, handle] {
+            connection->cancelCloseWaiter(handle, state);
+        }));
+    }
+}
 
 }  // namespace mini::net

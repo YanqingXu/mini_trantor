@@ -11,19 +11,25 @@
 //    counter uses atomic operations. Parent resumes on last/first completing thread.
 // 5. Test file? — This file.
 
+#include "mini/coroutine/CancellationToken.h"
 #include "mini/coroutine/SleepAwaitable.h"
 #include "mini/coroutine/Task.h"
 #include "mini/coroutine/WhenAll.h"
 #include "mini/coroutine/WhenAny.h"
+#include "mini/net/NetError.h"
+#include "mini/net/TcpConnection.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/EventLoopThread.h"
 
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <chrono>
 #include <future>
 #include <string>
+#include <sys/socket.h>
 #include <thread>
+#include <unistd.h>
 
 using namespace std::chrono_literals;
 using mini::coroutine::Task;
@@ -54,6 +60,24 @@ Task<int> recordThread(mini::net::EventLoop* loop, int value,
     co_await mini::coroutine::asyncSleep(loop, delay);
     *threadOut = std::this_thread::get_id();
     co_return value;
+}
+
+std::array<int, 2> makeSocketPair() {
+    std::array<int, 2> sockets{};
+    const int rc = ::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data());
+    assert(rc == 0);
+    return sockets;
+}
+
+Task<int> readLengthOrCancelled(
+    mini::net::TcpConnectionPtr connection,
+    std::promise<mini::net::NetError>* loserCancelled) {
+    auto result = co_await connection->asyncReadSome();
+    if (!result) {
+        loserCancelled->set_value(result.error());
+        co_return -1;
+    }
+    co_return static_cast<int>(result->size());
 }
 
 }  // namespace
@@ -193,6 +217,48 @@ int main() {
 
         assert(doneFuture.wait_for(15s) == std::future_status::ready);
         assert(doneFuture.get());
+    }
+
+    // Contract 6: WhenAny(asyncReadSome, asyncSleep) cancels read loser explicitly
+    {
+        auto sockets = makeSocketPair();
+        mini::net::EventLoopThread loopThread;
+        mini::net::EventLoop* loop = loopThread.startLoop();
+
+        auto connection = std::make_shared<mini::net::TcpConnection>(
+            loop,
+            "socketpair#whenany-timeout",
+            sockets[0],
+            mini::net::InetAddress(),
+            mini::net::InetAddress());
+
+        std::promise<WhenAnyResult<int>> winner;
+        auto winnerFuture = winner.get_future();
+        std::promise<mini::net::NetError> loserCancelled;
+        auto loserCancelledFuture = loserCancelled.get_future();
+
+        loop->runInLoop([loop, connection, &winner, &loserCancelled] {
+            connection->connectEstablished();
+            [loop, connection, &winner, &loserCancelled]() -> Task<void> {
+                auto result = co_await whenAny(
+                    readLengthOrCancelled(connection, &loserCancelled),
+                    sleepAndReturn(loop, 7, 50ms));
+                winner->set_value(result);
+                co_await mini::coroutine::asyncSleep(loop, 50ms);
+                connection->forceClose();
+                connection->connectDestroyed();
+                loop->quit();
+            }().detach();
+        });
+
+        assert(winnerFuture.wait_for(3s) == std::future_status::ready);
+        assert(loserCancelledFuture.wait_for(3s) == std::future_status::ready);
+        auto result = winnerFuture.get();
+        assert(result.index == 1);
+        assert(result.value == 7);
+        assert(loserCancelledFuture.get() == mini::net::NetError::Cancelled);
+
+        ::close(sockets[1]);
     }
 
     return 0;
