@@ -18,6 +18,12 @@
 namespace mini::net {
 
 struct TcpConnection::Impl {
+    enum class CloseReason {
+        kNone,
+        kPeerClosed,
+        kError,
+    };
+
     Impl(
         EventLoop* loop,
         std::string connName,
@@ -34,7 +40,8 @@ struct TcpConnection::Impl {
           callbacks(std::make_unique<detail::ConnectionCallbackDispatcher>()),
           backpressure(std::make_unique<detail::ConnectionBackpressureController>(loop)),
           awaiters(std::make_unique<detail::ConnectionAwaiterRegistry>(loop)),
-          transport(std::make_unique<detail::ConnectionTransport>()) {
+          transport(std::make_unique<detail::ConnectionTransport>()),
+          closeReason(CloseReason::kNone) {
     }
 
     EventLoop* loop;
@@ -50,6 +57,7 @@ struct TcpConnection::Impl {
     std::unique_ptr<detail::ConnectionBackpressureController> backpressure;
     std::unique_ptr<detail::ConnectionAwaiterRegistry> awaiters;
     std::unique_ptr<detail::ConnectionTransport> transport;
+    CloseReason closeReason;
     std::any context;
 };
 
@@ -190,6 +198,7 @@ void TcpConnection::setCloseCallback(CloseCallback cb) {
 void TcpConnection::connectEstablished() {
     impl_->loop->assertInLoopThread();
     setState(kConnected);
+    impl_->closeReason = Impl::CloseReason::kNone;
     impl_->channel->tie(shared_from_this());
     impl_->channel->enableReading();
     impl_->backpressure->onConnectionEstablished(impl_->outputBuffer.readableBytes(), *impl_->channel);
@@ -205,6 +214,9 @@ void TcpConnection::connectEstablished() {
 void TcpConnection::connectDestroyed() {
     impl_->loop->assertInLoopThread();
     if (impl_->state == kConnected) {
+        if (impl_->closeReason == Impl::CloseReason::kNone) {
+            impl_->closeReason = Impl::CloseReason::kPeerClosed;
+        }
         runCloseSequence(shared_from_this(), false);
     }
     impl_->channel->remove();
@@ -332,6 +344,9 @@ void TcpConnection::handleClose() {
     if (impl_->state == kDisconnected) {
         return;
     }
+    if (impl_->closeReason == Impl::CloseReason::kNone) {
+        impl_->closeReason = Impl::CloseReason::kPeerClosed;
+    }
     runCloseSequence(shared_from_this(), true);
 }
 
@@ -339,6 +354,7 @@ void TcpConnection::handleError(int savedErrno) {
     impl_->loop->assertInLoopThread();
     const int err = savedErrno != 0 ? savedErrno : sockets::getSocketError(impl_->channel->fd());
     LOG_ERROR << "TcpConnection error on " << impl_->name << ": " << err;
+    impl_->closeReason = Impl::CloseReason::kError;
     if (impl_->state != kDisconnected) {
         handleClose();
     }
@@ -487,14 +503,20 @@ std::string TcpConnection::consumeReadableBytes(std::size_t minBytes) {
 
 Expected<std::string> TcpConnection::resumeReadAwait(std::size_t minBytes) {
     if (disconnected() && impl_->inputBuffer.readableBytes() == 0) {
-        return std::unexpected(NetError::PeerClosed);
+        const auto error = impl_->closeReason == Impl::CloseReason::kError
+            ? NetError::ConnectionReset
+            : NetError::PeerClosed;
+        return std::unexpected(error);
     }
     return consumeReadableBytes(minBytes);
 }
 
 Expected<void> TcpConnection::resumeWriteAwait() const {
     if (disconnected()) {
-        return std::unexpected(NetError::PeerClosed);
+        const auto error = impl_->closeReason == Impl::CloseReason::kError
+            ? NetError::ConnectionReset
+            : NetError::PeerClosed;
+        return std::unexpected(error);
     }
     return {};
 }

@@ -2,6 +2,7 @@
 #include "mini/net/Buffer.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/EventLoopThread.h"
+#include "mini/net/NetError.h"
 #include "mini/net/TcpConnection.h"
 
 #include <array>
@@ -14,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
@@ -41,6 +43,27 @@ void destroyConnectionOnLoop(mini::net::EventLoop& loop, TcpConnectionPtr& conne
 
     connection.reset();
     assert(destroyedFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+}
+
+uint16_t allocateTestPort() {
+    const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
+    assert(fd >= 0);
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(0);
+
+    const int bound = ::bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr));
+    assert(bound == 0);
+
+    socklen_t len = static_cast<socklen_t>(sizeof(addr));
+    const int named = ::getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len);
+    assert(named == 0);
+
+    const uint16_t port = ntohs(addr.sin_port);
+    ::close(fd);
+    return port;
 }
 
 mini::coroutine::Task<void> readUntilResume(
@@ -76,6 +99,23 @@ mini::coroutine::Task<void> suspendedRead(TcpConnectionPtr connection, bool* res
     auto result = co_await connection->asyncReadSome();
     assert(!result);  // PeerClosed
     *resumed = true;
+}
+
+mini::coroutine::Task<void> readUntilError(
+    TcpConnectionPtr connection,
+    std::promise<mini::net::NetError>* error) {
+    auto result = co_await connection->asyncReadSome();
+    assert(!result);
+    error->set_value(result.error());
+}
+
+mini::coroutine::Task<void> writeUntilError(
+    TcpConnectionPtr connection,
+    std::string payload,
+    std::promise<mini::net::NetError>* error) {
+    auto result = co_await connection->asyncWrite(std::move(payload));
+    assert(!result);
+    error->set_value(result.error());
 }
 
 void testBackpressurePolicyRejectsInvalidThresholds() {
@@ -619,6 +659,114 @@ void testSecondReadWaiterIsRejected() {
     destroyConnectionOnLoop(loop, connection);
 }
 
+void testWriteAwaiterReportsConnectionResetOnWriteError() {
+    auto sockets = makeSocketPair();
+    auto* previousSigpipe = std::signal(SIGPIPE, SIG_IGN);
+
+    mini::net::EventLoop loop;
+    auto connection = std::make_shared<mini::net::TcpConnection>(
+        &loop,
+        "socketpair#write-error",
+        sockets[0],
+        mini::net::InetAddress(),
+        mini::net::InetAddress());
+
+    std::promise<mini::net::NetError> errorPromise;
+    auto errorFuture = errorPromise.get_future();
+
+    connection->setCloseCallback([&](const TcpConnectionPtr&) { loop.quit(); });
+    loop.runInLoop([&] { connection->connectEstablished(); });
+
+    ::close(sockets[1]);
+
+    std::thread starter([connection, &errorPromise] {
+        writeUntilError(connection, "payload", &errorPromise).detach();
+    });
+
+    loop.loop();
+    starter.join();
+
+    assert(errorFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
+    assert(errorFuture.get() == mini::net::NetError::ConnectionReset);
+
+    destroyConnectionOnLoop(loop, connection);
+    std::signal(SIGPIPE, previousSigpipe);
+}
+
+void testReadAwaiterReportsConnectionResetOnTcpReset() {
+    const uint16_t port = allocateTestPort();
+
+    const int listenFd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
+    assert(listenFd >= 0);
+
+    sockaddr_in listenAddr{};
+    listenAddr.sin_family = AF_INET;
+    listenAddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    listenAddr.sin_port = htons(port);
+    assert(::bind(listenFd, reinterpret_cast<const sockaddr*>(&listenAddr), sizeof(listenAddr)) == 0);
+    assert(::listen(listenFd, SOMAXCONN) == 0);
+
+    std::promise<void> clientConnected;
+    auto clientConnectedFuture = clientConnected.get_future();
+
+    std::thread client([port, &clientConnected] {
+        const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
+        assert(fd >= 0);
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons(port);
+        assert(::connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) == 0);
+        clientConnected.set_value();
+
+        linger rstLinger{};
+        rstLinger.l_onoff = 1;
+        rstLinger.l_linger = 0;
+        assert(::setsockopt(fd, SOL_SOCKET, SO_LINGER, &rstLinger, sizeof(rstLinger)) == 0);
+        ::close(fd);
+    });
+
+    assert(clientConnectedFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+
+    sockaddr_in peerAddr{};
+    socklen_t peerLen = static_cast<socklen_t>(sizeof(peerAddr));
+    const int serverFd = ::accept4(listenFd, reinterpret_cast<sockaddr*>(&peerAddr), &peerLen, SOCK_CLOEXEC);
+    assert(serverFd >= 0);
+
+    sockaddr_in localAddr{};
+    socklen_t localLen = static_cast<socklen_t>(sizeof(localAddr));
+    assert(::getsockname(serverFd, reinterpret_cast<sockaddr*>(&localAddr), &localLen) == 0);
+    ::close(listenFd);
+
+    mini::net::EventLoop loop;
+    auto connection = std::make_shared<mini::net::TcpConnection>(
+        &loop,
+        "tcp#read-rst",
+        serverFd,
+        mini::net::InetAddress(localAddr),
+        mini::net::InetAddress(peerAddr));
+
+    std::promise<mini::net::NetError> errorPromise;
+    auto errorFuture = errorPromise.get_future();
+
+    connection->setCloseCallback([&](const TcpConnectionPtr&) { loop.quit(); });
+    loop.runInLoop([&] { connection->connectEstablished(); });
+
+    std::thread starter([connection, &errorPromise] {
+        readUntilError(connection, &errorPromise).detach();
+    });
+
+    loop.loop();
+    starter.join();
+    client.join();
+
+    assert(errorFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
+    assert(errorFuture.get() == mini::net::NetError::ConnectionReset);
+
+    destroyConnectionOnLoop(loop, connection);
+}
+
 }  // namespace
 
 int main() {
@@ -632,5 +780,7 @@ int main() {
     testWriteAndWaitClosedResumeOnOwnerLoop();
     testSecondWriteWaiterIsRejected();
     testSecondReadWaiterIsRejected();
+    testWriteAwaiterReportsConnectionResetOnWriteError();
+    testReadAwaiterReportsConnectionResetOnTcpReset();
     return 0;
 }
