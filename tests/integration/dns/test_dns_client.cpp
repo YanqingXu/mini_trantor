@@ -4,6 +4,7 @@
 // 2. Coroutine-based resolve + connect chain
 
 #include "mini/coroutine/ResolveAwaitable.h"
+#include "mini/coroutine/CancellationToken.h"
 #include "mini/coroutine/SleepAwaitable.h"
 #include "mini/coroutine/Task.h"
 #include "mini/net/Buffer.h"
@@ -226,6 +227,33 @@ int main() {
         assert(failureFuture.wait_for(0s) == std::future_status::ready);
         assert(failureFuture.get());
         std::printf("  PASS: coroutine resolve failure is explicit\n");
+    }
+
+    // Integration 4: coroutine-based resolve cancellation is explicit
+    {
+        mini::net::EventLoop loop;
+        auto resolver = std::make_shared<mini::net::DnsResolver>(1);
+        mini::coroutine::CancellationSource source;
+        source.cancel();
+
+        std::promise<bool> cancelledPromise;
+        auto cancelledFuture = cancelledPromise.get_future();
+
+        auto coroTask = [&]() -> mini::coroutine::Task<void> {
+            auto addrs = co_await mini::coroutine::asyncResolve(
+                resolver, &loop, "localhost", 80, source.token());
+            cancelledPromise.set_value(!addrs &&
+                                       addrs.error() == mini::net::NetError::Cancelled);
+            loop.quit();
+        };
+
+        coroTask().detach();
+        loop.runAfter(5s, [&loop] { loop.quit(); });
+        loop.loop();
+
+        assert(cancelledFuture.wait_for(0s) == std::future_status::ready);
+        assert(cancelledFuture.get());
+        std::printf("  PASS: coroutine resolve cancellation is explicit\n");
     }
 
     std::printf("All DNS integration tests passed.\n");

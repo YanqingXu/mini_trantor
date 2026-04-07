@@ -15,6 +15,7 @@
 #include "mini/net/EventLoopThread.h"
 #include "mini/net/InetAddress.h"
 #include "mini/net/NetError.h"
+#include "mini/coroutine/CancellationToken.h"
 
 #include <cassert>
 #include <chrono>
@@ -161,6 +162,32 @@ int main() {
 
         loop->runInLoop([loop] { loop->quit(); });
         std::printf("  PASS: cache hit callback on correct loop thread\n");
+    }
+
+    // Contract 6: cancelled resolve reports Cancelled on the requesting loop thread
+    {
+        mini::net::EventLoopThread loopThread;
+        mini::net::EventLoop* loop = loopThread.startLoop();
+        mini::net::DnsResolver resolver(1);
+        mini::coroutine::CancellationSource source;
+        source.cancel();
+
+        std::promise<bool> promise;
+        auto future = promise.get_future();
+
+        resolver.resolve("localhost", 80, loop,
+            [&](mini::net::DnsResolver::ResolveResult result) {
+                promise.set_value(loop->isInLoopThread() &&
+                                  !result &&
+                                  result.error() == mini::net::NetError::Cancelled);
+            },
+            source.token());
+
+        assert(future.wait_for(5s) == std::future_status::ready);
+        assert(future.get() == true);
+
+        loop->runInLoop([loop] { loop->quit(); });
+        std::printf("  PASS: cancelled resolve delivers explicit error on correct loop\n");
     }
 
     std::printf("All DnsResolver contract tests passed.\n");

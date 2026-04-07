@@ -17,11 +17,6 @@
 
 namespace mini::net {
 
-struct TcpConnection::AwaitCancellationState {
-    bool cancelled{false};
-    std::optional<mini::coroutine::CancellationRegistration> registration;
-};
-
 struct TcpConnection::Impl {
     enum class CloseReason {
         kNone,

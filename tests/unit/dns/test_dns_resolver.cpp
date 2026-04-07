@@ -8,6 +8,7 @@
 #include "mini/net/EventLoopThread.h"
 #include "mini/net/InetAddress.h"
 #include "mini/net/NetError.h"
+#include "mini/coroutine/CancellationToken.h"
 
 #include <cassert>
 #include <chrono>
@@ -180,6 +181,33 @@ int main() {
         auto r2 = mini::net::DnsResolver::getShared();
         assert(r1 == r2);
         std::printf("  PASS: getShared returns same instance\n");
+    }
+
+    // Unit 7: already-cancelled token yields explicit Cancelled
+    {
+        mini::net::EventLoopThread loopThread;
+        mini::net::EventLoop* loop = loopThread.startLoop();
+        mini::net::DnsResolver resolver(1);
+        mini::coroutine::CancellationSource source;
+        source.cancel();
+
+        std::promise<mini::net::DnsResolver::ResolveResult> promise;
+        auto future = promise.get_future();
+
+        loop->runInLoop([&] {
+            resolver.resolve("localhost", 8080, loop,
+                [&](mini::net::DnsResolver::ResolveResult addrs) {
+                    promise.set_value(std::move(addrs));
+                },
+                source.token());
+        });
+
+        auto addrs = future.get();
+        assert(!addrs);
+        assert(addrs.error() == mini::net::NetError::Cancelled);
+
+        loop->runInLoop([loop] { loop->quit(); });
+        std::printf("  PASS: already-cancelled token yields explicit Cancelled\n");
     }
 
     std::printf("All DnsResolver unit tests passed.\n");

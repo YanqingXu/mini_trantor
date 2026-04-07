@@ -5,6 +5,7 @@
 // 支持可选的 TTL 缓存。不阻塞任何 EventLoop 线程。
 
 #include "mini/base/noncopyable.h"
+#include "mini/coroutine/CancellationToken.h"
 #include "mini/net/InetAddress.h"
 #include "mini/net/NetError.h"
 
@@ -14,6 +15,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <string>
 #include <thread>
@@ -37,7 +39,8 @@ public:
     /// Callback is delivered on callbackLoop's thread with either resolved
     /// addresses or an explicit ResolveFailed error.
     void resolve(const std::string& hostname, uint16_t port,
-                 EventLoop* callbackLoop, ResolveCallback cb);
+                 EventLoop* callbackLoop, ResolveCallback cb,
+                 mini::coroutine::CancellationToken token = {});
 
     /// Enable caching with the given TTL. Default TTL: 60 seconds.
     void enableCache(std::chrono::seconds ttl = std::chrono::seconds(60));
@@ -52,13 +55,14 @@ public:
     static std::shared_ptr<DnsResolver> getShared();
 
 private:
+    struct ResolveOperationState;
+
     void workerThread();
 
     struct ResolveRequest {
         std::string hostname;
         uint16_t port;
-        EventLoop* callbackLoop;
-        ResolveCallback callback;
+        std::shared_ptr<ResolveOperationState> operation;
     };
 
     struct CacheEntry {

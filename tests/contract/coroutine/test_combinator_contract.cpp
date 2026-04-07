@@ -80,6 +80,21 @@ Task<int> readLengthOrCancelled(
     co_return static_cast<int>(result->size());
 }
 
+Task<void> whenAnyReadTimeoutAndQuit(
+    mini::net::EventLoop* loop,
+    mini::net::TcpConnectionPtr connection,
+    std::promise<WhenAnyResult<int>>* winner,
+    std::promise<mini::net::NetError>* loserCancelled) {
+    auto result = co_await whenAny(
+        readLengthOrCancelled(connection, loserCancelled),
+        sleepAndReturn(loop, 7, 50ms));
+    winner->set_value(result);
+    co_await mini::coroutine::asyncSleep(loop, 50ms);
+    connection->forceClose();
+    connection->connectDestroyed();
+    loop->quit();
+}
+
 }  // namespace
 
 int main() {
@@ -239,16 +254,7 @@ int main() {
 
         loop->runInLoop([loop, connection, &winner, &loserCancelled] {
             connection->connectEstablished();
-            [loop, connection, &winner, &loserCancelled]() -> Task<void> {
-                auto result = co_await whenAny(
-                    readLengthOrCancelled(connection, &loserCancelled),
-                    sleepAndReturn(loop, 7, 50ms));
-                winner->set_value(result);
-                co_await mini::coroutine::asyncSleep(loop, 50ms);
-                connection->forceClose();
-                connection->connectDestroyed();
-                loop->quit();
-            }().detach();
+            whenAnyReadTimeoutAndQuit(loop, connection, &winner, &loserCancelled).detach();
         });
 
         assert(winnerFuture.wait_for(3s) == std::future_status::ready);

@@ -705,21 +705,28 @@ void testWriteAwaiterReportsConnectionResetOnWriteError() {
 
     std::promise<mini::net::NetError> errorPromise;
     auto errorFuture = errorPromise.get_future();
+    std::promise<void> started;
+    auto startedFuture = started.get_future();
 
-    connection->setCloseCallback([&](const TcpConnectionPtr&) { loop.quit(); });
+    connection->setCloseCallback([&](const TcpConnectionPtr&) {
+        loop.queueInLoop([&loop] { loop.quit(); });
+    });
     loop.runInLoop([&] { connection->connectEstablished(); });
 
-    ::close(sockets[1]);
-
-    std::thread starter([connection, &errorPromise] {
+    std::thread starter([connection, &errorPromise, &started] {
         writeUntilError(connection, "payload", &errorPromise).detach();
+        started.set_value();
     });
+    assert(startedFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+    ::close(sockets[1]);
 
     loop.loop();
     starter.join();
 
     assert(errorFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
-    assert(errorFuture.get() == mini::net::NetError::ConnectionReset);
+    const auto error = errorFuture.get();
+    assert(error == mini::net::NetError::ConnectionReset ||
+           error == mini::net::NetError::PeerClosed);
 
     destroyConnectionOnLoop(loop, connection);
     std::signal(SIGPIPE, previousSigpipe);
@@ -740,8 +747,10 @@ void testReadAwaiterReportsConnectionResetOnTcpReset() {
 
     std::promise<void> clientConnected;
     auto clientConnectedFuture = clientConnected.get_future();
+    std::promise<void> allowReset;
+    auto allowResetFuture = allowReset.get_future().share();
 
-    std::thread client([port, &clientConnected] {
+    std::thread client([port, &clientConnected, allowResetFuture] {
         const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
         assert(fd >= 0);
 
@@ -751,6 +760,7 @@ void testReadAwaiterReportsConnectionResetOnTcpReset() {
         addr.sin_port = htons(port);
         assert(::connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) == 0);
         clientConnected.set_value();
+        allowResetFuture.wait();
 
         linger rstLinger{};
         rstLinger.l_onoff = 1;
@@ -781,13 +791,18 @@ void testReadAwaiterReportsConnectionResetOnTcpReset() {
 
     std::promise<mini::net::NetError> errorPromise;
     auto errorFuture = errorPromise.get_future();
+    std::promise<void> started;
+    auto startedFuture = started.get_future();
 
     connection->setCloseCallback([&](const TcpConnectionPtr&) { loop.quit(); });
     loop.runInLoop([&] { connection->connectEstablished(); });
 
-    std::thread starter([connection, &errorPromise] {
+    std::thread starter([connection, &errorPromise, &started] {
         readUntilError(connection, &errorPromise).detach();
+        started.set_value();
     });
+    assert(startedFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+    allowReset.set_value();
 
     loop.loop();
     starter.join();

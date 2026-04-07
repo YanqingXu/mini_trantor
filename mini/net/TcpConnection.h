@@ -27,7 +27,10 @@ class TlsContext;
 class TcpConnection : public std::enable_shared_from_this<TcpConnection>, private mini::base::noncopyable {
 public:
     enum StateE { kConnecting, kConnected, kDisconnecting, kDisconnected };
-    struct AwaitCancellationState;
+    struct AwaitCancellationState {
+        bool cancelled{false};
+        std::optional<mini::coroutine::CancellationRegistration> registration;
+    };
 
     TcpConnection(
         EventLoop* loop,

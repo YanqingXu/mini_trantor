@@ -4,6 +4,7 @@
 // 它通过 DnsResolver::resolve 发起异步解析，完成后在 owner loop 线程恢复协程。
 // 它不是独立调度器，不绕过 EventLoop 调度语义。
 
+#include "mini/coroutine/CancellationToken.h"
 #include "mini/net/DnsResolver.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/InetAddress.h"
@@ -29,11 +30,13 @@ class ResolveAwaitable {
 public:
     ResolveAwaitable(std::shared_ptr<mini::net::DnsResolver> resolver,
                      mini::net::EventLoop* loop,
-                     std::string hostname, uint16_t port)
+                     std::string hostname, uint16_t port,
+                     CancellationToken token = {})
         : resolver_(std::move(resolver)),
           state_(std::make_shared<ResolveState>()),
           hostname_(std::move(hostname)),
-          port_(port) {
+          port_(port),
+          token_(std::move(token)) {
         state_->loop = loop;
     }
 
@@ -41,9 +44,16 @@ public:
         return false;
     }
 
-    void await_suspend(std::coroutine_handle<> handle) {
+    template <typename Promise>
+    void await_suspend(std::coroutine_handle<Promise> handle) {
         state_->handle = handle;
         auto state = state_;
+        auto token = token_;
+        if (!token) {
+            if constexpr (requires(const Promise& promise) { promise.cancellationToken(); }) {
+                token = handle.promise().cancellationToken();
+            }
+        }
         resolver_->resolve(hostname_, port_, state_->loop,
             [state](mini::net::DnsResolver::ResolveResult addrs) mutable {
                 // Delivered on owner loop thread by DnsResolver.
@@ -52,7 +62,8 @@ public:
                     state->result = std::move(addrs);
                     state->handle.resume();
                 }
-            });
+            },
+            std::move(token));
     }
 
     /// Returns the explicit result produced by DnsResolver.
@@ -65,6 +76,7 @@ private:
     std::shared_ptr<ResolveState> state_;
     std::string hostname_;
     uint16_t port_;
+    CancellationToken token_;
 };
 
 /// Factory function: creates a ResolveAwaitable for use with co_await.
@@ -74,8 +86,9 @@ private:
 ///   if (result) { /* use (*result)[0] */ }
 inline ResolveAwaitable asyncResolve(std::shared_ptr<mini::net::DnsResolver> resolver,
                                      mini::net::EventLoop* loop,
-                                     const std::string& hostname, uint16_t port) {
-    return ResolveAwaitable(std::move(resolver), loop, hostname, port);
+                                     const std::string& hostname, uint16_t port,
+                                     CancellationToken token = {}) {
+    return ResolveAwaitable(std::move(resolver), loop, hostname, port, std::move(token));
 }
 
 }  // namespace mini::coroutine

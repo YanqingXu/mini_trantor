@@ -11,6 +11,21 @@
 
 namespace mini::net {
 
+struct DnsResolver::ResolveOperationState {
+    EventLoop* callbackLoop{nullptr};
+    ResolveCallback callback;
+    std::atomic<bool> completed{false};
+    std::optional<mini::coroutine::CancellationRegistration> registration;
+
+    void deliver(ResolveResult result) {
+        if (completed.exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+        registration.reset();
+        callback(std::move(result));
+    }
+};
+
 DnsResolver::DnsResolver(size_t numThreads) {
     for (size_t i = 0; i < numThreads; ++i) {
         workers_.emplace_back([this] { workerThread(); });
@@ -29,7 +44,23 @@ DnsResolver::~DnsResolver() {
 }
 
 void DnsResolver::resolve(const std::string& hostname, uint16_t port,
-                           EventLoop* callbackLoop, ResolveCallback cb) {
+                          EventLoop* callbackLoop, ResolveCallback cb,
+                          mini::coroutine::CancellationToken token) {
+    auto operation = std::make_shared<ResolveOperationState>();
+    operation->callbackLoop = callbackLoop;
+    operation->callback = std::move(cb);
+
+    if (token) {
+        operation->registration.emplace(token.registerCallback([operation] {
+            operation->callbackLoop->queueInLoop([operation] {
+                operation->deliver(std::unexpected(NetError::Cancelled));
+            });
+        }));
+        if (operation->completed.load(std::memory_order_acquire)) {
+            return;
+        }
+    }
+
     // Check cache first.
     if (cacheEnabled_.load(std::memory_order_acquire)) {
         std::lock_guard<std::mutex> lock(cacheMutex_);
@@ -45,8 +76,8 @@ void DnsResolver::resolve(const std::string& hostname, uint16_t port,
                 addresses.emplace_back(addr);
             }
             callbackLoop->runInLoop(
-                [cb = std::move(cb), result = ResolveResult(std::move(addresses))]() mutable {
-                    cb(std::move(result));
+                [operation, result = ResolveResult(std::move(addresses))]() mutable {
+                    operation->deliver(std::move(result));
                 });
             return;
         }
@@ -55,7 +86,7 @@ void DnsResolver::resolve(const std::string& hostname, uint16_t port,
     // Queue for async resolution on worker thread.
     {
         std::lock_guard<std::mutex> lock(queueMutex_);
-        requestQueue_.push({hostname, port, callbackLoop, std::move(cb)});
+        requestQueue_.push({hostname, port, std::move(operation)});
     }
     queueCv_.notify_one();
 }
@@ -90,6 +121,10 @@ void DnsResolver::workerThread() {
             }
             req = std::move(requestQueue_.front());
             requestQueue_.pop();
+        }
+
+        if (req.operation->completed.load(std::memory_order_acquire)) {
+            continue;
         }
 
         // Perform blocking resolution.
@@ -137,9 +172,9 @@ void DnsResolver::workerThread() {
         }
 
         // Deliver result on the requesting EventLoop thread.
-        req.callbackLoop->runInLoop(
-            [cb = std::move(req.callback), result = std::move(result)]() mutable {
-                cb(std::move(result));
+        req.operation->callbackLoop->runInLoop(
+            [operation = req.operation, result = std::move(result)]() mutable {
+                operation->deliver(std::move(result));
             });
     }
 }
