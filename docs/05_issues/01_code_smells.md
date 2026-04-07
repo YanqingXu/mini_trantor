@@ -5,27 +5,39 @@
 以下是对 mini-trantor 代码库的代码异味分析，按严重程度排序。
 代码异味不一定是 bug，但可能影响可维护性、可读性或未来扩展。
 
+## 已明显缓解的问题
+
+### 1. TcpConnection 过度膨胀（已明显缓解）
+
+**历史症状**: `TcpConnection` 曾同时承担生命周期、plain/TLS transport、
+协程 waiter 状态、背压控制等多条变化轴，导致类的阅读和修改成本过高。
+
+**当前状态**: 这条异味在当前实现里已经明显收敛。
+
+```
+当前边界:
+TcpConnection
+├── public API / 状态机 / 关闭路径收敛
+├── Socket / Channel / Buffer 所有权
+├── 回调编排
+└── helper 协调
+
+已拆出的 helper:
+├── ConnectionTransport              // plain TCP / TLS transport
+├── ConnectionAwaiterRegistry        // read/write/close waiter 状态
+└── ConnectionBackpressureController // 高低水位背压
+```
+
+**判断**:
+- `TcpConnection` 仍然是连接生命周期中心，这部分职责不应继续拆散
+- 但“awaiter 管理 / TLS 适配 / 背压策略”这三块已经不再内联堆在主体里
+- `IdleTimeoutState` 也位于 `TcpServer`，不再属于 `TcpConnection` 内部复杂度
+
+**剩余观察**:
+- `TcpConnection` 仍然保留了 awaitable facade 与生命周期编排逻辑，因此它依然是核心类，但已经不是之前那种“所有细节都自己做”的神类
+- 现在更需要关注的是文档是否持续和当前拆分结构保持一致
+
 ## 高关注度
-
-### 1. TcpConnection 过度膨胀
-
-**症状**: TcpConnection 同时承担回调模式和协程模式的所有职责
-
-```
-TcpConnection 职责:
-├── 回调管理 (6 种回调设置)
-├── 状态机 (4 状态)
-├── 读写 I/O (handleRead/handleWrite/send/sendInLoop)
-├── 关闭逻辑 (shutdown/forceClose/handleClose)
-├── 3 种协程 Awaitable (内嵌类)
-├── 3 种 Awaiter 状态 (readAwaiter_/writeAwaiter_/closeAwaiter_)
-├── TLS 支持 (SSL 握手/读写)
-├── 背压策略 (BackpressurePolicy + 状态)
-├── 空闲超时 (IdleTimeoutState)
-└── queueResume / resumeAllWaitersOnClose
-```
-
-**建议**: 考虑将协程 awaiter 管理、TLS 适配、背压策略抽取为独立组件
 
 ### 2. 缺少错误传播到协程
 
