@@ -222,10 +222,10 @@ Task<WhenAnyResult<T>> whenAny(Task<T> first, Task<Rest>... rest);
 
 | 问题 | 描述 | 严重程度 |
 |------|------|----------|
-| 败者不可取消 | 败者协程继续运行到完成，无法中断 | 中（设计限制） |
+| 协作式取消依赖 awaitable 配合 | 败者是否能尽快退出，取决于子任务 awaitable 是否消费当前 token | 中（设计限制） |
 | 败者异常被静默丢弃 | 败者抛出的异常无人处理 | 低（设计选择） |
 | 同类型限制 | 不支持 whenAny(Task\<int\>, Task\<string\>) | 低（提供 variant 包装即可） |
-| 败者资源消耗 | 败者继续运行可能消耗网络 / 定时器资源 | 中（需配合取消机制） |
+| 败者清理仍可能延后 | 即使收到取消请求，败者也可能在自己的下一次挂起点才完成清理 | 中（协作式取消特性） |
 
 ## 9. 极简实现骨架
 
@@ -244,7 +244,7 @@ Task<WhenAnyResult<T>> whenAny(Task<T> first, Task<Rest>... rest) {
     auto state = make_shared<State>();
 
     // 为每个 task 创建 wrapper，co_await 后 CAS 竞争
-    // 赢家 resume parent，败者丢弃结果
+    // 赢家 cancel losers + resume parent，败者在自己的挂起点观察取消
     // ...
     co_return WhenAnyResult<T>{state->winnerIndex, move(*state->winnerValue)};
 }

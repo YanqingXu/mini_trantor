@@ -109,7 +109,7 @@ mini-trantor 目前已经具备一个“小而完整”的网络库骨架：
 - [已完成] [mini/net/DnsResolver.h](/home/xyq/mini-trantor/mini/net/DnsResolver.h) / [mini/coroutine/ResolveAwaitable.h](/home/xyq/mini-trantor/mini/coroutine/ResolveAwaitable.h) 已接入 `CancellationToken`，取消结果显式映射为 `NetError::Cancelled`
 
 未完成项：
-- [未完成] 文档尚未完全跟上实现：部分说明仍把 `WhenAny` 写成“败者不取消”，与当前代码不一致
+- [未完成] 深入说明类文档仍可继续补充 `withTimeout()` / `NetError::TimedOut` 的更多上层使用示例；旧的 “`WhenAny` 败者不取消” 表述已清理
 
 建议新增模块（按当前实现调整）：
 - [已完成] 不再需要单独新增 `mini/coroutine/CancellationSource.h`，当前已合并进 [mini/coroutine/CancellationToken.h](/home/xyq/mini-trantor/mini/coroutine/CancellationToken.h)

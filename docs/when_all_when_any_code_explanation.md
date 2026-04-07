@@ -11,7 +11,7 @@
 - `WhenAll` 把 wrapper task 放在 awaitable 对象里，因为它要等所有 wrapper 都结束后才恢复父协程。
 - `WhenAny` 把 wrapper task 放在 shared state 里，因为父协程可能在第一个 wrapper 完成后立刻恢复，而其他 wrapper 还没结束。
 - `WhenAll` 当前实现与 intent 基本一致，但 `firstException` 的并发写入没有同步保护，跨线程多异常场景存在数据竞争风险。
-- `WhenAny` 当前实现和 intent 存在一个重要差异：代码没有真正取消剩余子任务，loser 只是“继续跑完但结果被丢弃”。
+- `WhenAny` 当前实现已经会向剩余子任务注入 `CancellationToken` 并在 winner 确定后请求取消；败者是否立刻退出取决于它们是否在挂起点消费当前 token。
 - 对于初次阅读者，最先要抓住的不是模板细节，而是“父协程是谁、wrapper 是谁、subtask 是谁、谁在恢复谁”。
 
 ## 1. 模块整体定位
@@ -415,7 +415,7 @@ loser path 是：
 
 1. `tryWin(index)` 失败
 2. 什么都不写
-3. 直接结束
+3. 在自己的清理路径中结束
 
 ### 7.4 父协程恢复得很早，但 loser 还可能继续跑
 
@@ -424,7 +424,7 @@ loser path 是：
 - `WhenAll` 是“最后一个收尾的人恢复父协程”
 - `WhenAny` 是“第一个抢到的人恢复父协程”
 
-所以 `WhenAny` 的父协程恢复时，整个组合操作在资源层面其实并没有完全结束，至少 loser wrapper 还可能在后台继续走清理路径。
+所以 `WhenAny` 的父协程恢复时，整个组合操作在资源层面其实并没有完全结束，至少 loser wrapper 还可能在后台继续走取消后的清理路径。
 
 ### 7.5 时序图
 
@@ -549,9 +549,9 @@ bool tryWin(std::size_t index) {
 
 这和 `when_any.intent.md` 中“非 winner 的异常会被静默丢弃”是一致的。
 
-### 9.4 当前实现没有真正取消 loser
+### 9.4 当前实现会请求取消 loser
 
-这部分必须和 intent 分开看。
+这部分现在已经和 intent 基本对齐了。
 
 `when_any.intent.md` 里写的是：
 
@@ -559,38 +559,36 @@ bool tryWin(std::size_t index) {
 - 支持 timeout pattern
 - loser 的清理通过 cancel 路径完成
 
-但当前 `WhenAny.h` 的代码里，winner path 只有：
+当前 `WhenAny.h` 的代码里，winner path 已经包含：
 
 - `tryWin`
 - 写 winner 信息
+- `cancelLosers()`
 - `resumeParent`
-
-没有：
-
-- 调用任何 `cancel()`
-- 遍历其他 wrapper
-- 请求 `SleepAwaitable` 或 `TcpConnection` 停止
 
 所以“当前代码现状”是：
 
-- loser 不会被取消
-- loser 只是继续运行
-- 只是它们的结果和异常在逻辑上被忽略
+- loser 会收到协作式取消请求
+- 支持当前 token 的 awaitable（如 `SleepAwaitable`、`TcpConnection` awaitable）会尽快以显式取消结果恢复
+- 如果 loser 已经完成或尚未再次进入支持 token 的挂起点，请求是安全 no-op；它们的结果和异常仍然会在逻辑上被忽略
 
-这一点甚至已经反映到 contract test 里：  
-`tests/contract/coroutine/test_combinator_contract.cpp` 在 `whenAny(...)` 之后专门继续 sleep 一段时间，再 `loop->quit()`，目的就是等 loser 的 timer 自己触发完成，避免残留协程帧。
+这一点在当前 contract test 里也有直接验证：  
+`tests/contract/coroutine/test_cancellation_contract.cpp` 与 `tests/contract/coroutine/test_combinator_contract.cpp` 都覆盖了 loser cancel 路径；`tests/contract/coroutine/test_timeout_contract.cpp` 进一步把 timeout 收敛到 `NetError::TimedOut`。
 
 ### 9.5 这意味着什么
 
 这意味着当前 `WhenAny` 更接近：
 
-- “first result wins, others are ignored”
+- “first result wins, others are cooperatively cancelled”
 
 而不是：
 
-- “first result wins, others are cooperatively cancelled”
+- “强制打断其它任务的抢占式取消器”
 
-所以如果有人按 intent 文本去理解当前实现，会高估它的取消能力。
+所以更准确的理解应该是：
+
+- 它已经具备取消能力
+- 但这个取消是协作式的，不承诺 loser 在发出请求后立刻停止
 
 ## 10. 与测试的对应关系
 
@@ -630,13 +628,13 @@ bool tryWin(std::size_t index) {
 - `WhenAll` 的父协程由“最后一个完成的 subtask 所在执行上下文”恢复
 - `WhenAny` 的父协程由“第一个完成的 subtask 所在执行上下文”恢复
 
-#### 事实 2：当前 `WhenAny` contract test 明确承认 loser 需要自己跑完
+#### 事实 2：当前 `WhenAny` contract test 明确验证 loser cancel 路径
 
-测试里在 winner 产生后并没有立刻退出 loop，而是：
+测试里现在不仅覆盖 winner 产生后的清理，还直接断言 loser 收到 `Cancelled`：
 
-- 再 `asyncSleep` 一段时间
-- 等 loser timer 到点
-- 然后再 quit
+- `tests/contract/coroutine/test_cancellation_contract.cpp` 会断言 loser sleep task 收到 `NetError::Cancelled`
+- `tests/contract/coroutine/test_combinator_contract.cpp` 会断言 `WhenAny(asyncReadSome, asyncSleep)` 中 read loser 收到 `NetError::Cancelled`
+- `tests/contract/coroutine/test_timeout_contract.cpp` 会断言 timeout、active cancel、peer close 三者仍然可区分
 
 这并不是偶然测试写法，而是当前实现语义的一部分。
 
@@ -673,12 +671,10 @@ bool tryWin(std::size_t index) {
 
 ### 11.4 `WhenAny` 当前偏差点
 
-最重要的偏差点只有一个，但很关键：
+当前主要偏差已经不再是“没有取消逻辑”，而是更细的文档/能力边界问题：
 
-- intent 期望“winner 产生后取消其余 task”
-- 当前代码没有取消逻辑
-
-因此当前实现更适合作为“first-complete selector”，还不是真正完整的“race with cancellation combinator”。
+- timeout 统一语义如今主要由 `mini/coroutine/Timeout.h` 收敛，而不是直接由 `WhenAny` 自身暴露 `TimedOut`
+- `WhenAny` 的取消是协作式的，是否快速停下仍取决于子任务 awaitable 是否消费当前 token
 
 ## 12. 线程、所有权、生命周期三张总表
 
@@ -742,8 +738,8 @@ bool tryWin(std::size_t index) {
 
 ### 14.2 误解二：`WhenAny` 已经具备取消能力
 
-当前代码没有。  
-它只是“先完成者获胜，其他人继续跑完但结果不要了”。
+当前代码有，但它是协作式取消，不是抢占式取消。  
+它的真实语义更接近“先完成者获胜，其他任务收到取消请求并在自己的挂起点完成清理”。
 
 ### 14.3 误解三：`WhenAll` / `WhenAny` 直接恢复最外层业务协程
 
