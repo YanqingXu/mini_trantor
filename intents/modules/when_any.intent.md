@@ -50,12 +50,13 @@ WhenAny is a composition utility, not a scheduler.
   in the input parameter list
 
 ### Cancellation Semantics (Critical)
-- cancellation is cooperative: WhenAny sets a cancellation flag, but sub-tasks
-  must check it at their own suspension points
-- for built-in awaitables (SleepAwaitable), cancellation calls the awaitable's
-  `cancel()` method which safely resumes the sub-task coroutine
-- for TcpConnection awaitables, cancellation triggers `forceClose()` on the
-  connection, which causes the awaitable to resume with an error/empty result
+- cancellation is cooperative: WhenAny requests cancellation for losing sub-tasks,
+  but sub-tasks must observe that request at their own suspension points
+- WhenAny currently injects a `CancellationToken` into each sub-task before start
+- built-in awaitables that understand the current token (currently `SleepAwaitable`)
+  resume promptly with explicit cancellation
+- awaitables that do not yet consume the token may continue running to completion;
+  this is acceptable during staged rollout
 - if a cancelled sub-task has already completed by the time cancellation is
   requested, the cancellation is a safe no-op
 - double-resume prevention: only the first sub-task to complete triggers

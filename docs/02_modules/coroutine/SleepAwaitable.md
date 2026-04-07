@@ -21,7 +21,7 @@
 | `SleepAwaitable(loop, duration)` | 构造 | asyncSleep 工厂 |
 | `await_ready()` | 始终返回 false | 协程机制 |
 | `await_suspend(handle)` | 注册定时器，保存 handle | 协程机制 |
-| `await_resume() → bool` | 返回是否正常完成（false = 被取消） | 协程机制 |
+| `await_resume() → Expected<void>` | 正常完成返回 success，被取消返回 `Cancelled` | 协程机制 |
 | `cancel()` | 取消定时器并恢复协程 | 用户 / WhenAny |
 | `state()` | 获取共享状态（外部取消协调用） | 高级用户 |
 
@@ -71,7 +71,7 @@ co_await asyncSleep(loop, 100ms)
       → if (!state->resumed)
         → state->resumed = true
         → state->handle.resume()    // 在 owner loop 线程
-  → await_resume() → true（正常完成）
+  → await_resume() → success（正常完成）
 ```
 
 ### 5.2 取消路径
@@ -85,7 +85,7 @@ sleep.cancel()
       → loop->cancel(state->timerId) // 取消定时器
       → state->handle.resume()       // 恢复协程，避免句柄泄漏
     })
-  → await_resume() → false（被取消）
+  → await_resume() → `Unexpected(Cancelled)`
 ```
 
 ### 5.3 调用链图
@@ -105,7 +105,7 @@ sleep.cancel()
            │ handle.resume()
            ▼
   ┌──────────┐
-  │ 协程体   │  await_resume() → true/false
+  │ 协程体   │  await_resume() → success / Cancelled
   └──────────┘
 ```
 
@@ -126,7 +126,7 @@ sleep.cancel()
 
 * **上游**: 任何 Task\<T\> 协程体内均可 co_await
 * **下游**: 依赖 EventLoop::runAfter / cancel
-* **取消**: WhenAny 等组合器可通过 cancel() 取消等待中的 sleep
+* **取消**: `CancellationToken` 与 `cancel()` 都可取消等待中的 sleep
 
 ## 7. 关键设计点
 
@@ -157,14 +157,14 @@ void cancel() {
 
 * 取消时仍然 `handle.resume()`，因为协程帧处于挂起状态
 * 如果不 resume，协程帧永远不会运行到 final_suspend → 内存泄漏
-* `await_resume()` 返回 false 通知协程体"被取消了"
+* `await_resume()` 返回显式 `Cancelled` 通知协程体"被取消了"
 
 ## 8. 潜在问题
 
 | 问题 | 描述 | 严重程度 |
 |------|------|----------|
 | resumed 非 atomic | SleepState::resumed 是 bool 而非 atomic<bool>，但所有访问都在同一线程 | 低（设计保证） |
-| cancel 后 await_resume 语义 | 调用者需要检查返回值判断是否被取消 | 低（接口清晰） |
+| cancel 后 await_resume 语义 | 调用者需要检查 `Expected<void>` 是否为 `Cancelled` | 低（接口清晰） |
 | loop 销毁后 cancel | 如果 EventLoop 已销毁再调用 cancel → UB | 中（生命周期约束） |
 
 ## 9. 极简实现骨架
@@ -196,7 +196,10 @@ public:
         });
     }
 
-    bool await_resume() { return !state_->cancelled; }
+    Expected<void> await_resume() {
+        if (state_->cancelled) return unexpected(NetError::Cancelled);
+        return {};
+    }
 
     void cancel() {
         auto s = state_;
@@ -216,5 +219,5 @@ public:
 |------|----------|
 | 为什么用 shared_ptr 包装状态？ | timer 回调和 cancel 可能并发访问，shared_ptr 保证状态存活 |
 | 为什么 cancel 必须 resume？ | 挂起的协程帧不 resume 就永远不会运行到 final_suspend，导致内存泄漏 |
-| 如何保证 exactly-once resume？ | resumed 标志位 + 所有访问通过 runInLoop 序列化到同一线程 |
+| 如何保证 exactly-once resume？ | resumed 标志位 + owner loop 序列化 + token 回调只排队一次 |
 | 这个设计和 Reactor 的关系？ | 不绕过 EventLoop，timer 回调和 cancel 都在 owner loop 线程执行 |

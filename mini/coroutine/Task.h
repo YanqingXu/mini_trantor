@@ -3,6 +3,8 @@
 // Task 是一个最小可组合的 coroutine 结果对象。
 // 它提供 start/detach/co_await 语义，但不替代 EventLoop 的调度规则。
 
+#include "mini/coroutine/CancellationToken.h"
+
 #include <coroutine>
 #include <exception>
 #include <optional>
@@ -71,10 +73,19 @@ public:
         }
     }
 
+    void set_cancellation_token(CancellationToken token) noexcept {
+        cancellationToken_ = std::move(token);
+    }
+
+    CancellationToken cancellationToken() const noexcept {
+        return cancellationToken_;
+    }
+
 private:
     std::exception_ptr exception_;
     std::coroutine_handle<> continuation_{};
     bool detached_{false};
+    CancellationToken cancellationToken_{};
 
     template <typename U>
     friend class ::mini::coroutine::Task;
@@ -161,6 +172,16 @@ public:
 
     bool done() const noexcept {
         return !coroutine_ || coroutine_.done();
+    }
+
+    void setCancellationToken(CancellationToken token) noexcept {
+        if (coroutine_) {
+            coroutine_.promise().set_cancellation_token(std::move(token));
+        }
+    }
+
+    CancellationToken cancellationToken() const noexcept {
+        return coroutine_ ? coroutine_.promise().cancellationToken() : CancellationToken{};
     }
 
     void start() {

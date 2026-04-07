@@ -36,7 +36,7 @@ not a scheduler.
 - the coroutine handle is resumed exactly once on all paths:
   either by timer expiry or by explicit cancellation
 - after cancel, the handle is resumed immediately on the owner loop thread
-  with a "cancelled" indication (await_resume returns false)
+  with an explicit `Cancelled` result
 - TimerQueue ownership and lifecycle rules are not changed
 
 ---
@@ -83,7 +83,7 @@ not a scheduler.
 
 ## 9. Extension Points
 - future: await_resume could return a status enum (expired vs cancelled)
-  instead of bool, if richer cancellation semantics are needed
+  instead of the current `Expected<void>` carrier, if richer deadline semantics are needed
 - future: a deadline-based variant (asyncSleepUntil) could be added
   using EventLoop::runAt
 

@@ -41,7 +41,7 @@ Task 的实现要点：
 
 ```cpp
 Task<void> example(EventLoop* loop) {
-    bool completed = co_await asyncSleep(loop, 100ms);
+    auto completed = co_await asyncSleep(loop, 100ms);
     // completed == true: 正常超时
     // completed == false: 被 cancel()
 }

@@ -7,6 +7,7 @@
 
 #include "mini/coroutine/Task.h"
 
+#include <array>
 #include <atomic>
 #include <coroutine>
 #include <cstddef>
@@ -45,6 +46,7 @@ struct WhenAnyState {
     std::size_t winnerIndex{0};
     std::optional<T> winnerValue{};
     std::exception_ptr winnerException{};
+    std::array<CancellationSource, N> cancellationSources{};
     Task<void> wrappers[N];
 
     bool tryWin(std::size_t index) {
@@ -59,6 +61,14 @@ struct WhenAnyState {
     void resumeParent() {
         if (parent) {
             parent.resume();
+        }
+    }
+
+    void cancelLosers(std::size_t winner) {
+        for (std::size_t i = 0; i < N; ++i) {
+            if (i != winner) {
+                cancellationSources[i].cancel();
+            }
         }
     }
 };
@@ -71,6 +81,7 @@ struct WhenAnyVoidState {
     std::coroutine_handle<> parent{};
     std::size_t winnerIndex{0};
     std::exception_ptr winnerException{};
+    std::array<CancellationSource, N> cancellationSources{};
     Task<void> wrappers[N];
 
     bool tryWin(std::size_t index) {
@@ -85,6 +96,14 @@ struct WhenAnyVoidState {
     void resumeParent() {
         if (parent) {
             parent.resume();
+        }
+    }
+
+    void cancelLosers(std::size_t winner) {
+        for (std::size_t i = 0; i < N; ++i) {
+            if (i != winner) {
+                cancellationSources[i].cancel();
+            }
         }
     }
 };
@@ -98,11 +117,13 @@ Task<void> whenAnyValueWrapper(Task<T> subtask, std::size_t index,
         auto val = co_await std::move(subtask);
         if (state->tryWin(index)) {
             state->winnerValue.emplace(std::move(val));
+            state->cancelLosers(index);
             state->resumeParent();
         }
     } catch (...) {
         if (state->tryWin(index)) {
             state->winnerException = std::current_exception();
+            state->cancelLosers(index);
             state->resumeParent();
         }
         // If not winner, exception is silently discarded.
@@ -117,11 +138,13 @@ Task<void> whenAnyVoidWrapper(Task<void> subtask, std::size_t index,
     try {
         co_await std::move(subtask);
         if (state->tryWin(index)) {
+            state->cancelLosers(index);
             state->resumeParent();
         }
     } catch (...) {
         if (state->tryWin(index)) {
             state->winnerException = std::current_exception();
+            state->cancelLosers(index);
             state->resumeParent();
         }
     }
@@ -137,7 +160,8 @@ public:
         : state_(std::make_shared<WhenAnyState<T, N>>()) {
         static_assert(sizeof...(Tasks) == N);
         std::size_t i = 0;
-        ((state_->wrappers[i] = whenAnyValueWrapper<T, N>(std::move(tasks), i, state_),
+        ((tasks.setCancellationToken(state_->cancellationSources[i].token()),
+          state_->wrappers[i] = whenAnyValueWrapper<T, N>(std::move(tasks), i, state_),
           ++i),
          ...);
     }
@@ -173,7 +197,8 @@ public:
         : state_(std::make_shared<WhenAnyVoidState<N>>()) {
         static_assert(sizeof...(Vs) == N);
         std::size_t i = 0;
-        ((state_->wrappers[i] = whenAnyVoidWrapper<N>(std::move(tasks), i, state_),
+        ((tasks.setCancellationToken(state_->cancellationSources[i].token()),
+          state_->wrappers[i] = whenAnyVoidWrapper<N>(std::move(tasks), i, state_),
           ++i),
          ...);
     }
