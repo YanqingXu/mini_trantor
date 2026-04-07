@@ -5,6 +5,7 @@
 // 它不是独立调度器，不绕过 EventLoop 调度语义。
 
 #include "mini/net/EventLoop.h"
+#include "mini/net/NetError.h"
 #include "mini/net/TimerId.h"
 
 #include <chrono>
@@ -48,9 +49,12 @@ public:
         });
     }
 
-    /// Returns true if the sleep completed normally, false if cancelled.
-    bool await_resume() const noexcept {
-        return !state_->cancelled;
+    /// Returns success on timer expiry, or Cancelled if the sleep was cancelled.
+    mini::net::Expected<void> await_resume() const noexcept {
+        if (state_->cancelled) {
+            return std::unexpected(mini::net::NetError::Cancelled);
+        }
+        return {};
     }
 
     /// Cancel the pending sleep.
@@ -83,8 +87,8 @@ private:
 /// Factory function: creates a SleepAwaitable for use with co_await.
 ///
 /// Usage:
-///   bool completed = co_await mini::coroutine::asyncSleep(loop, 100ms);
-///   // completed is true if timer expired, false if cancelled.
+///   auto result = co_await mini::coroutine::asyncSleep(loop, 100ms);
+///   // result.has_value() on timer expiry; result.error() == Cancelled if cancelled.
 inline SleepAwaitable asyncSleep(mini::net::EventLoop* loop, SleepAwaitable::Duration duration) {
     return SleepAwaitable(loop, duration);
 }

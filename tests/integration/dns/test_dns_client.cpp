@@ -11,6 +11,7 @@
 #include "mini/net/EventLoop.h"
 #include "mini/net/EventLoopThread.h"
 #include "mini/net/InetAddress.h"
+#include "mini/net/NetError.h"
 #include "mini/net/TcpClient.h"
 #include "mini/net/TcpConnection.h"
 #include "mini/net/TcpServer.h"
@@ -130,11 +131,12 @@ int main() {
         auto coroTask = [&]() -> mini::coroutine::Task<void> {
             auto addrs = co_await mini::coroutine::asyncResolve(
                 resolver, &loop, "localhost", port);
-            assert(!addrs.empty());
-            assert(addrs[0].toIp() == "127.0.0.1");
+            assert(addrs);
+            assert(!addrs->empty());
+            assert((*addrs)[0].toIp() == "127.0.0.1");
 
             // Use resolved address to create TcpClient and do echo.
-            mini::net::TcpClient client(&loop, addrs[0], "coro_dns_client");
+            mini::net::TcpClient client(&loop, (*addrs)[0], "coro_dns_client");
 
             std::promise<mini::net::TcpConnectionPtr> connPromise;
             auto connFuture = connPromise.get_future();
@@ -199,6 +201,31 @@ int main() {
         assert(resultFuture.wait_for(0s) == std::future_status::ready);
         assert(resultFuture.get() == "coro dns hello");
         std::printf("  PASS: coroutine resolve + connect chain\n");
+    }
+
+    // Integration 3: coroutine-based resolve failure is explicit
+    {
+        mini::net::EventLoop loop;
+        auto resolver = std::make_shared<mini::net::DnsResolver>(1);
+
+        std::promise<bool> failurePromise;
+        auto failureFuture = failurePromise.get_future();
+
+        auto coroTask = [&]() -> mini::coroutine::Task<void> {
+            auto addrs = co_await mini::coroutine::asyncResolve(
+                resolver, &loop, "", 80);
+            failurePromise.set_value(!addrs &&
+                                     addrs.error() == mini::net::NetError::ResolveFailed);
+            loop.quit();
+        };
+
+        coroTask().detach();
+        loop.runAfter(5s, [&loop] { loop.quit(); });
+        loop.loop();
+
+        assert(failureFuture.wait_for(0s) == std::future_status::ready);
+        assert(failureFuture.get());
+        std::printf("  PASS: coroutine resolve failure is explicit\n");
     }
 
     std::printf("All DNS integration tests passed.\n");

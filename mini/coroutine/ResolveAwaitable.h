@@ -7,6 +7,7 @@
 #include "mini/net/DnsResolver.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/InetAddress.h"
+#include "mini/net/NetError.h"
 
 #include <coroutine>
 #include <memory>
@@ -54,8 +55,11 @@ public:
             });
     }
 
-    /// Returns the resolved addresses. Empty vector indicates failure.
-    std::vector<mini::net::InetAddress> await_resume() {
+    /// Returns resolved addresses, or ResolveFailed on resolution failure.
+    mini::net::Expected<std::vector<mini::net::InetAddress>> await_resume() {
+        if (state_->result.empty()) {
+            return std::unexpected(mini::net::NetError::ResolveFailed);
+        }
         return std::move(state_->result);
     }
 
@@ -69,8 +73,8 @@ private:
 /// Factory function: creates a ResolveAwaitable for use with co_await.
 ///
 /// Usage:
-///   auto addrs = co_await mini::coroutine::asyncResolve(resolver, loop, "example.com", 80);
-///   if (!addrs.empty()) { /* use addrs[0] */ }
+///   auto result = co_await mini::coroutine::asyncResolve(resolver, loop, "example.com", 80);
+///   if (result) { /* use (*result)[0] */ }
 inline ResolveAwaitable asyncResolve(std::shared_ptr<mini::net::DnsResolver> resolver,
                                      mini::net::EventLoop* loop,
                                      const std::string& hostname, uint16_t port) {

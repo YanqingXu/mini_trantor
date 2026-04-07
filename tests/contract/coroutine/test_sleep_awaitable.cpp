@@ -14,6 +14,7 @@
 #include "mini/coroutine/Task.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/EventLoopThread.h"
+#include "mini/net/NetError.h"
 
 #include <cassert>
 #include <chrono>
@@ -37,9 +38,9 @@ int main() {
         auto task = [](mini::net::EventLoop* loop,
                        std::promise<std::thread::id>* resumedOn,
                        std::promise<bool>* result) -> mini::coroutine::Task<void> {
-            bool completed = co_await mini::coroutine::asyncSleep(loop, 50ms);
+            auto completed = co_await mini::coroutine::asyncSleep(loop, 50ms);
             resumedOn->set_value(std::this_thread::get_id());
-            result->set_value(completed);
+            result->set_value(completed.has_value());
             loop->quit();
         }(loop, &resumedOn, &result);
 
@@ -64,8 +65,8 @@ int main() {
                        std::shared_ptr<mini::coroutine::SleepState>* outState) -> mini::coroutine::Task<void> {
             auto awaitable = mini::coroutine::asyncSleep(loop, 10s);  // very long sleep
             *outState = awaitable.state();
-            bool completed = co_await awaitable;
-            result->set_value(completed);
+            auto completed = co_await awaitable;
+            result->set_value(!completed && completed.error() == mini::net::NetError::Cancelled);
             loop->quit();
         }(loop, &result, &sleepState);
 
@@ -89,7 +90,7 @@ int main() {
         });
 
         assert(resultFuture.wait_for(2s) == std::future_status::ready);
-        assert(resultFuture.get() == false);  // cancelled
+        assert(resultFuture.get() == true);  // cancelled explicitly
     }
 
     // Contract 3: multiple sequential asyncSleep calls work correctly

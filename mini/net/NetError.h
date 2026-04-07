@@ -1,7 +1,8 @@
 #pragma once
 
-// NetError 定义网络层协程 awaitable 的统一错误类型。
-// 配合 std::expected<T, NetError> 使调用者能区分正常数据、对端关闭和 I/O 错误。
+// NetError 定义当前异步桥接层使用的显式错误类型。
+// 配合 std::expected<T, NetError> 让调用者区分成功、对端关闭、
+// 主动取消、解析失败和 I/O/状态错误。
 
 #include <expected>
 #include <string>
@@ -16,6 +17,10 @@ enum class NetError {
     ConnectionReset,
     /// Connection is not in a valid state for this operation.
     NotConnected,
+    /// The pending async operation was actively cancelled.
+    Cancelled,
+    /// Asynchronous hostname resolution failed.
+    ResolveFailed,
 };
 
 constexpr std::string_view netErrorMessage(NetError e) noexcept {
@@ -23,6 +28,8 @@ constexpr std::string_view netErrorMessage(NetError e) noexcept {
         case NetError::PeerClosed: return "peer closed the connection";
         case NetError::ConnectionReset: return "connection reset";
         case NetError::NotConnected: return "not connected";
+        case NetError::Cancelled: return "operation cancelled";
+        case NetError::ResolveFailed: return "hostname resolution failed";
     }
     return "unknown error";
 }
