@@ -32,7 +32,7 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - ✅ `v4-gamma`：RPC 支持完成 — RpcCodec（长度前缀二进制帧编解码）/ RpcChannel（per-connection 请求-响应关联 + 超时管理）/ RpcServer（TcpServer 协议适配器 + method 注册分发）/ RpcClient（TcpClient 包装 + callback 和 coroutine 双模式调用）
 - ✅ `v4-delta`：协程版 RPC 完成 — RpcServer `registerCoroMethod()`（协程返回值即响应，异常即错误）/ RpcClient `coroCall()`（返回 payload 直接，错误抛 `RpcError`）/ `dispatchCoroHandler` 安全桥接（free function 保证帧生命周期）/ 支持 handler 内 `co_await` 异步操作（SleepAwaitable 等）
 
-当前 build 树中 56/56 测试全部通过（unit × 20 + contract × 21 + integration × 15）。
+当前 build 树中 61/61 测试全部通过（unit × 22 + contract × 23 + integration × 16）。
 
 ### v5-alpha（已完成）
 - ✅ 统一取消原语（`CancellationToken` / `CancellationSource`）、`WhenAny` loser cancel、DNS cancel、显式 `NetError`（`PeerClosed` / `ConnectionReset` / `NotConnected` / `Cancelled` / `TimedOut` / `ResolveFailed`）、`withTimeout()` 已进入主线
@@ -54,7 +54,7 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
   - 收敛 README / docs / intent / 目录说明之间的漂移
 - **v5-alpha**：统一取消与错误语义
   - 为 coroutine、TcpConnection、DNS 等异步接口建立一致的 cancellation / error surface
-- **v5-beta**：优雅关闭与信号集成（进行中）
+- **v5-beta**：优雅关闭与信号集成（已完成）
   - `SignalWatcher` 通过 signalfd + Channel 将 SIGINT/SIGTERM 接入 EventLoop，全局屏蔽 SIGPIPE
   - `Acceptor::stop()` / `EventLoopThreadPool::stop()` / `TcpServer::stop()` 实现有序关闭序列
 - **v5-gamma**：IPv6 与地址模型补全
@@ -86,16 +86,15 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 ## 目录说明
 - `intents/`: 设计意图与模块宪法（architecture / modules / usecases）
 - `rules/`: 项目级约束规则（线程亲和、所有权、测试、编码、Review）
-- `mini/net/`: Reactor 核心实现（EventLoop、Channel、Poller、TcpConnection、TcpServer、TcpClient、Connector、TimerQueue、TlsContext、DnsResolver、SignalWatcher 等）
+- `mini/net/`: Reactor 核心实现（EventLoop、Channel、Poller、EPollPoller、Buffer、Callbacks、TcpConnection、TcpServer、TcpClient、Connector、Acceptor、InetAddress、Socket、SocketsOps、TimerQueue、TimerId、EventLoopThread、EventLoopThreadPool、TlsContext、DnsResolver、NetError、SignalWatcher、`detail/` 内部辅助模块等）
 - `mini/http/`: HTTP/1.1 协议层（HttpRequest、HttpResponse、HttpContext、HttpServer）
 - `mini/ws/`: WebSocket 协议层（WebSocketCodec、WebSocketHandshake、WebSocketConnection、WebSocketServer）
 - `mini/rpc/`: RPC 协议层（RpcCodec、RpcChannel、RpcServer、RpcClient）
-- `mini/coroutine/`: 协程桥接层（`Task.h` 协程结果对象、`CancellationToken.h` 取消原语、`SleepAwaitable.h` 定时器 awaitable、`Timeout.h` 统一 timeout 包装、`ResolveAwaitable.h` DNS 解析 awaitable）
-- `mini/base/`: 基础工具（Timestamp、noncopyable）
+- `mini/coroutine/`: 协程桥接层（`Task.h` 协程结果对象、`CancellationToken.h` 取消原语、`SleepAwaitable.h` 定时器 awaitable、`WhenAll.h` 多任务并发等待、`WhenAny.h` 多任务竞争等待、`Timeout.h` 统一 timeout 包装、`ResolveAwaitable.h` DNS 解析 awaitable）
+- `mini/base/`: 基础工具（Timestamp、noncopyable、Logger）
 - `tests/`: 按 `unit/`、`contract/`、`integration/` 分层的测试
 - `examples/`: 示例程序（echo_server、coroutine_echo_server）
 - `docs/`: 文档
-- `diagrams/`: 架构图
 
 ## 核心模块改动闸门
 每个核心模块 PR / 改动都必须回答这 5 个问题：
@@ -187,7 +186,7 @@ client.connect();
 // 方式一：withTimeout 为异步操作加上超时，返回 Expected<T> 区分错误类型
 auto result = co_await mini::coroutine::withTimeout(
     &loop,
-    conn->asyncReadSome(buffer),
+    conn->asyncReadSome(1024),
     5s);
 
 if (!result) {
