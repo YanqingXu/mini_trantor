@@ -114,7 +114,7 @@ Each PR or direct change touching a core module must answer:
 ---
 
 ## Coding Style Direction
-- modern C++17/20 style where appropriate
+- modern C++20/23 style where appropriate（使用 `std::expected`、`std::coroutine_handle`、concepts 等 C++20/23 特性）
 - keep public interfaces small
 - use RAII
 - avoid over-template design in v1

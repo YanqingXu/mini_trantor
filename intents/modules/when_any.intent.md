@@ -116,7 +116,7 @@ WhenAny is a composition utility, not a scheduler.
 ---
 
 ## 9. Extension Points
-- future: cancellation token / stop_token integration for richer cancellation
+- [已完成] CancellationToken 集成 — 每个 sub-task 在启动前注入独立 CancellationSource，winner 确定后 cancelLosers()
 - future: WhenAny for dynamic task vectors (`std::vector<Task<T>>`)
 - future: WhenAny with heterogeneous return types via `std::variant`
 - future: priority-based selection (prefer certain sub-tasks)

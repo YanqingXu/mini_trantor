@@ -26,17 +26,19 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - ✅ `v3-beta`：DNS Resolver 完成 — DnsResolver（线程池异步解析 + TTL 缓存）/ TcpClient hostname-based connect / ResolveAwaitable 协程桥接
 - ✅ `v3-gamma`：TLS/SSL 集成完成 — TlsContext（RAII SSL_CTX 封装）/ TcpConnection 非阻塞 TLS 状态机 / TcpServer·TcpClient 的 `enableSsl()` API / OpenSSL 后端
 
-### v4（进行中）
+### v4（已完成）
 - ✅ `v4-alpha`：HTTP/1.1 协议层完成 — HttpRequest（请求值对象）/ HttpResponse（响应构建器 + 序列化）/ HttpContext（per-connection 增量解析状态机）/ HttpServer（TcpServer 协议适配器 + HttpCallback）/ keep-alive + Connection: close + 400 Bad Request
 - ✅ `v4-beta`：WebSocket 支持完成 — WebSocketCodec（RFC 6455 帧编解码）/ WebSocketHandshake（HTTP Upgrade 验证 + Sec-WebSocket-Accept 计算）/ WebSocketConnection（per-connection 状态机 + auto ping/pong + close 握手）/ WebSocketServer（TcpServer 包装 + HTTP→WS 升级）
 - ✅ `v4-gamma`：RPC 支持完成 — RpcCodec（长度前缀二进制帧编解码）/ RpcChannel（per-connection 请求-响应关联 + 超时管理）/ RpcServer（TcpServer 协议适配器 + method 注册分发）/ RpcClient（TcpClient 包装 + callback 和 coroutine 双模式调用）
 - ✅ `v4-delta`：协程版 RPC 完成 — RpcServer `registerCoroMethod()`（协程返回值即响应，异常即错误）/ RpcClient `coroCall()`（返回 payload 直接，错误抛 `RpcError`）/ `dispatchCoroHandler` 安全桥接（free function 保证帧生命周期）/ 支持 handler 内 `co_await` 异步操作（SleepAwaitable 等）
 
-当前 build 树中 56/56 测试全部通过（unit × 20 + contract × 21 + integration × 15）。
+当前 build 树中注册 56 个测试（unit × 20 + contract × 21 + integration × 15）。
+其中 `integration.coroutine.test_timeout_race` 和 `unit.net.test_connection_awaiter_registry` 存在已知稳定性问题（分别表现为 core dump 和 `std::logic_error`），需修复后方可声称全部通过。
 
 `v5-alpha` 当前状态：
-- 统一取消原语、`WhenAny` loser cancel、DNS cancel、显式 `NetError`、`NetError::TimedOut` 与 `withTimeout()` 已进入主线
-- 当前剩余工作主要是 README / overview / 深入文档之间的状态对齐
+- 统一取消原语（`CancellationToken` / `CancellationSource`）、`WhenAny` loser cancel、DNS cancel、显式 `NetError`（`PeerClosed` / `ConnectionReset` / `NotConnected` / `Cancelled` / `TimedOut` / `ResolveFailed`）、`withTimeout()` 已进入主线
+- roadmap 定义的退出信号中，"close/error/cancel 路径不会 double-resume" 仍因 `test_timeout_race` 崩溃而受挑战，v5-alpha 尚未退出
+- 当前剩余工作：修复上述 2 个测试的稳定性问题，以及 README / overview / intent 之间的状态对齐
 
 ## 下一阶段方向
 
@@ -143,6 +145,7 @@ target_link_libraries(my_app PRIVATE mini_trantor::mini_trantor)
 #include "mini/net/TlsContext.h"
 #include "mini/net/DnsResolver.h"
 #include "mini/coroutine/ResolveAwaitable.h"
+#include "mini/net/NetError.h"
 #include "mini/http/HttpServer.h"
 #include "mini/ws/WebSocketServer.h"
 #include "mini/rpc/RpcServer.h"
@@ -168,6 +171,57 @@ clientCtx->setVerifyPeer(true);
 mini::net::TcpClient client(&loop, serverAddr, "TlsClient");
 client.enableSsl(clientCtx, "hostname");
 client.connect();
+```
+
+### Cancellation / Timeout / NetError 使用示例
+
+```cpp
+#include "mini/coroutine/Task.h"
+#include "mini/coroutine/Timeout.h"
+#include "mini/coroutine/CancellationToken.h"
+#include "mini/net/NetError.h"
+#include "mini/net/TcpConnection.h"
+
+// 方式一：withTimeout 为异步操作加上超时，返回 Expected<T> 区分错误类型
+auto result = co_await mini::coroutine::withTimeout(
+    &loop,
+    conn->asyncReadSome(buffer),
+    5s);
+
+if (!result) {
+    switch (result.error()) {
+    case mini::net::NetError::TimedOut:
+        // 操作超时
+        break;
+    case mini::net::NetError::Cancelled:
+        // 主动取消（通过 CancellationToken）
+        break;
+    case mini::net::NetError::PeerClosed:
+        // 对端关闭连接
+        break;
+    case mini::net::NetError::ConnectionReset:
+        // 连接被重置
+        break;
+    default:
+        // 其他 I/O 错误
+        break;
+    }
+    co_return;
+}
+// result.value() 包含读取到的数据
+
+// 方式二：手动使用 CancellationToken 控制协程取消
+mini::coroutine::CancellationSource source;
+auto token = source.token();
+
+// 启动一个可取消的异步任务
+auto task = someAsyncWork(&loop, token);
+// ... 在其他地方决定取消
+source.cancel();
+auto taskResult = co_await task;
+if (!taskResult) {
+    // taskResult.error() == NetError::Cancelled
+}
 ```
 
 ### DNS Resolver 使用示例
