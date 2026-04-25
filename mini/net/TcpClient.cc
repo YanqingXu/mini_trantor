@@ -15,12 +15,7 @@
 namespace mini::net {
 
 TcpClient::TcpClient(EventLoop* loop, const InetAddress& serverAddr, std::string name)
-    : loop_(loop),
-      name_(std::move(name)),
-      retry_(false),
-      connect_(true),
-      nextConnId_(1) {
-    initConnector(serverAddr);
+    : TcpClient(loop, serverAddr, std::move(name), TcpClientOptions{}) {
 }
 
 TcpClient::TcpClient(EventLoop* loop, std::string hostname, uint16_t port,
@@ -34,6 +29,16 @@ TcpClient::TcpClient(EventLoop* loop, std::string hostname, uint16_t port,
       port_(port),
       resolver_(resolver ? std::move(resolver) : DnsResolver::getShared()),
       resolveGuard_(std::make_shared<bool>(true)) {
+}
+
+TcpClient::TcpClient(EventLoop* loop, const InetAddress& serverAddr, std::string name, TcpClientOptions options)
+    : loop_(loop),
+      name_(std::move(name)),
+      retry_(options.retry),
+      connect_(true),
+      nextConnId_(1),
+      connectorOptions_(options.connector) {
+    initConnector(serverAddr, options.connector);
 }
 
 TcpClient::~TcpClient() {
@@ -134,6 +139,25 @@ void TcpClient::setWriteCompleteCallback(WriteCompleteCallback cb) {
     writeCompleteCallback_ = std::move(cb);
 }
 
+// ── Metrics hooks ──
+
+void TcpClient::setConnectorEventCallback(ConnectorEventCallback cb) {
+    connectorEventCallback_ = std::move(cb);
+    if (connector_) {
+        connector_->setConnectorEventCallback(connectorEventCallback_);
+    }
+}
+
+void TcpClient::setConnectionEventCallback(ConnectionEventCallback cb) {
+    connectionEventCallback_ = std::move(cb);
+}
+
+void TcpClient::setTlsEventCallback(TlsEventCallback cb) {
+    tlsEventCallback_ = std::move(cb);
+}
+
+// ── Internal ──
+
 void TcpClient::newConnection(int sockfd) {
     loop_->assertInLoopThread();
 
@@ -142,10 +166,34 @@ void TcpClient::newConnection(int sockfd) {
     const std::string connName = name_ + "#" + std::to_string(nextConnId_++);
 
     auto conn = std::make_shared<TcpConnection>(loop_, connName, sockfd, localAddr, peerAddr);
-    conn->setConnectionCallback(connectionCallback_);
+
+    // Wrap user's connection callback with ConnectionEvent hook.
+    auto connEventCb = connectionEventCallback_;
+    auto userConnCb = connectionCallback_;
+    conn->setConnectionCallback([userConnCb, connEventCb](const TcpConnectionPtr& c) {
+        if (connEventCb) {
+            connEventCb(c, c->connected() ? ConnectionEvent::Connected : ConnectionEvent::Disconnected);
+        }
+        if (userConnCb) {
+            userConnCb(c);
+        }
+    });
     conn->setMessageCallback(messageCallback_);
     conn->setWriteCompleteCallback(writeCompleteCallback_);
-    conn->setCloseCallback([this](const TcpConnectionPtr& c) { removeConnection(c); });
+
+    // Close callback with hook.
+    auto tlsEventCb = tlsEventCallback_;
+    conn->setCloseCallback([this, connEventCb](const TcpConnectionPtr& c) {
+        if (connEventCb) {
+            connEventCb(c, ConnectionEvent::Disconnected);
+        }
+        removeConnection(c);
+    });
+
+    // Set TLS event hook if configured.
+    if (tlsEventCb) {
+        conn->setTlsEventCallback(tlsEventCb);
+    }
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -153,6 +201,9 @@ void TcpClient::newConnection(int sockfd) {
     }
 
     if (tlsContext_) {
+        if (tlsEventCb) {
+            tlsEventCb(conn, TlsEvent::HandshakeStarted);
+        }
         conn->startTls(tlsContext_, /*isServer=*/false, tlsHostname_);
     }
     conn->connectEstablished();
@@ -182,12 +233,24 @@ void TcpClient::removeConnection(const TcpConnectionPtr& conn) {
 void TcpClient::initConnector(const InetAddress& serverAddr) {
     connector_ = std::make_shared<Connector>(loop_, serverAddr);
     connector_->setNewConnectionCallback([this](int sockfd) { newConnection(sockfd); });
+    if (connectorEventCallback_) {
+        connector_->setConnectorEventCallback(connectorEventCallback_);
+    }
+}
+
+void TcpClient::initConnector(const InetAddress& serverAddr, const ConnectorOptions& options) {
+    connector_ = std::make_shared<Connector>(loop_, serverAddr, options);
+    connector_->setNewConnectionCallback([this](int sockfd) { newConnection(sockfd); });
+    if (connectorEventCallback_) {
+        connector_->setConnectorEventCallback(connectorEventCallback_);
+    }
 }
 
 void TcpClient::resolveAndConnect() {
     auto guard = resolveGuard_;
+    auto options = connectorOptions_;
     resolver_->resolve(hostname_, port_, loop_,
-        [this, guard](DnsResolver::ResolveResult addrs) mutable {
+        [this, guard, options](DnsResolver::ResolveResult addrs) mutable {
             // Delivered on owner loop thread.
             if (!*guard) return;  // TcpClient was destroyed
             if (!connect_) return;  // stop() was called
@@ -195,7 +258,11 @@ void TcpClient::resolveAndConnect() {
                 LOG_ERROR << "TcpClient: DNS resolution failed for '" << hostname_ << "'";
                 return;
             }
-            initConnector((*addrs)[0]);
+            if (options) {
+                initConnector((*addrs)[0], *options);
+            } else {
+                initConnector((*addrs)[0]);
+            }
             connector_->start();
         });
 }

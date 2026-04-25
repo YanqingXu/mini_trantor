@@ -42,7 +42,8 @@ mini-trantor 目前已经具备一个"小而完整"的网络库骨架：
 - ~~取消语义和错误语义仍未统一~~ ✅ 已在 v5-alpha 中统一
 - ~~进程级优雅关闭与信号集成尚未闭环~~ ✅ 已在 v5-beta 中闭环
 - ~~地址模型仍偏 IPv4-only~~ ✅ 已在 v5-gamma 中补全为 IPv4/IPv6 双栈
-- 配置、可观测性、工程护栏仍偏轻
+- ~~配置、可观测性仍偏轻~~ ✅ 已在 v5-delta 中补全
+- 工程护栏仍偏轻
 - 协议层和传输层解耦还不够彻底
 - client 生态能力仍不完整
 - README / docs / intent 存在阶段性漂移
@@ -246,32 +247,30 @@ mini-trantor 目前已经具备一个"小而完整"的网络库骨架：
 
 ---
 
-### v5-delta：配置体系与可观测性
+### v5-delta：配置体系与可观测性 ✅
 
 目标：
 - 把硬编码参数和"只能靠读代码排查问题"的状态，升级为可配置、可观测的库能力
 
-主要模块：
-- [mini/net/Connector.h](/home/xyq/mini-trantor/mini/net/Connector.h)
-- [mini/net/DnsResolver.h](/home/xyq/mini-trantor/mini/net/DnsResolver.h)
-- [mini/net/TcpServer.h](/home/xyq/mini-trantor/mini/net/TcpServer.h)
-- [mini/base/Logger.h](/home/xyq/mini-trantor/mini/base/Logger.h)
-- [mini/base/Logger.cc](/home/xyq/mini-trantor/mini/base/Logger.cc)
+已完成的变更：
+- `ConnectorOptions` 结构体：initRetryDelay / maxRetryDelay / connectTimeout / enableRetry
+- `DnsResolverOptions` 结构体：numWorkerThreads / cacheTtl / enableCache
+- `TcpServerOptions` 结构体：numThreads / idleTimeout / backpressureHighWaterMark / backpressureLowWaterMark / reusePort
+- `TcpClientOptions` 结构体：内嵌 ConnectorOptions + retry
+- `MetricsHook` 回调接口：ConnectionEvent / BackpressureEvent / ConnectorEvent / TlsEvent 四类事件枚举
+- `TcpServer` hook 注入：setConnectionEventCallback / setBackpressureEventCallback / setTlsEventCallback
+- `TcpClient` hook 注入：setConnectorEventCallback / setConnectionEventCallback / setTlsEventCallback
+- `Connector` 连接超时：connectTimeout > 0 时注册 EventLoop 定时器，超时走正常失败路径
+- `TcpServer` drain-aware stop：stop(Duration drainTimeout) 等待在飞连接关闭
+- `ConnectionBackpressureController` 触发 BackpressureEvent hook
+- `ConnectionTransport` TLS 握手完成/失败触发 TlsEvent hook
+- 所有现有 API 保持向后兼容（原构造函数签名不变）
+- 所有 hook 在 owner loop 线程调用
 
-建议新增模块：
-- `mini/net/NetOptions.h`
-- `mini/net/ServerOptions.h`
-- `mini/base/MetricsHook.h`
-
-优先覆盖的现有测试：
-- [tests/unit/connector/test_connector.cpp](/home/xyq/mini-trantor/tests/unit/connector/test_connector.cpp)
-- [tests/unit/dns/test_dns_resolver.cpp](/home/xyq/mini-trantor/tests/unit/dns/test_dns_resolver.cpp)
-- [tests/integration/tcp_server/test_tcp_server_backpressure_policy.cpp](/home/xyq/mini-trantor/tests/integration/tcp_server/test_tcp_server_backpressure_policy.cpp)
-
-建议新增测试：
-- `tests/unit/base/test_logger.cpp`
-- `tests/contract/net/test_options_contract.cpp`
-- `tests/contract/net/test_metrics_hook_contract.cpp`
+已覆盖的测试：
+- `tests/contract/net/test_options_contract.cpp` — Options 默认值/自定义值/验证/传播/向后兼容
+- `tests/contract/net/test_metrics_hook_contract.cpp` — ConnectionEvent/ConnectorEvent hook 触发/无 hook 行为不变
+- 所有现有 IPv4/IPv6/TLS/DNS 测试无回归
 
 退出信号：
 - 重连、DNS、背压、poll timeout 等关键参数可显式配置

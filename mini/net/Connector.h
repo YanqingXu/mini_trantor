@@ -3,8 +3,11 @@
 // Connector 是 TcpClient 的主动连接适配器，与 Acceptor 对称。
 // 它负责发起非阻塞 connect、处理 EINPROGRESS、检测连接就绪，
 // 并将已连接的 fd 通过回调交付给上层。所有 Channel 操作在 owner loop 线程。
+// v5-delta: 支持 ConnectorOptions 配置、连接超时、ConnectorEvent hook。
 
+#include "mini/base/MetricsHook.h"
 #include "mini/base/noncopyable.h"
+#include "mini/net/ConnectorOptions.h"
 #include "mini/net/InetAddress.h"
 #include "mini/net/TimerId.h"
 
@@ -25,9 +28,13 @@ public:
     enum StateE { kDisconnected, kConnecting, kConnected };
 
     Connector(EventLoop* loop, const InetAddress& serverAddr);
+    Connector(EventLoop* loop, const InetAddress& serverAddr, ConnectorOptions options);
     ~Connector();
 
     void setNewConnectionCallback(NewConnectionCallback cb);
+
+    /// 设置 ConnectorEvent hook。必须在 start() 前调用。
+    void setConnectorEventCallback(ConnectorEventCallback cb);
 
     const InetAddress& serverAddress() const noexcept;
     StateE state() const noexcept;
@@ -51,6 +58,7 @@ private:
     void connecting(int sockfd);
     void handleWrite();
     void handleError();
+    void handleConnectTimeout();
     void retry(int sockfd);
     int removeAndResetChannel();
     void resetChannel();
@@ -60,10 +68,13 @@ private:
     StateE state_;
     bool connect_;
     NewConnectionCallback newConnectionCallback_;
+    ConnectorEventCallback connectorEventCallback_;
     std::unique_ptr<Channel> channel_;
     Duration retryDelayMs_;
     Duration maxRetryDelayMs_;
+    Duration connectTimeout_;
     TimerId retryTimerId_;
+    TimerId connectTimeoutTimerId_;
 
     static constexpr Duration kDefaultInitRetryDelay = std::chrono::milliseconds(500);
     static constexpr Duration kDefaultMaxRetryDelay = std::chrono::seconds(30);

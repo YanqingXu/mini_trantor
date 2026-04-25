@@ -14,12 +14,17 @@
 namespace mini::net {
 
 Connector::Connector(EventLoop* loop, const InetAddress& serverAddr)
+    : Connector(loop, serverAddr, ConnectorOptions{}) {
+}
+
+Connector::Connector(EventLoop* loop, const InetAddress& serverAddr, ConnectorOptions options)
     : loop_(loop),
       serverAddr_(serverAddr),
       state_(kDisconnected),
-      connect_(false),
-      retryDelayMs_(kDefaultInitRetryDelay),
-      maxRetryDelayMs_(kDefaultMaxRetryDelay) {
+      connect_(options.enableRetry),
+      retryDelayMs_(options.initRetryDelay),
+      maxRetryDelayMs_(options.maxRetryDelay),
+      connectTimeout_(options.connectTimeout) {
 }
 
 Connector::~Connector() {
@@ -28,12 +33,21 @@ Connector::~Connector() {
         loop_->cancel(retryTimerId_);
         retryTimerId_ = {};
     }
+    // Cancel any pending connect timeout timer.
+    if (connectTimeoutTimerId_.valid()) {
+        loop_->cancel(connectTimeoutTimerId_);
+        connectTimeoutTimerId_ = {};
+    }
     // Channel should already be removed before destruction.
     assert(!channel_);
 }
 
 void Connector::setNewConnectionCallback(NewConnectionCallback cb) {
     newConnectionCallback_ = std::move(cb);
+}
+
+void Connector::setConnectorEventCallback(ConnectorEventCallback cb) {
+    connectorEventCallback_ = std::move(cb);
 }
 
 const InetAddress& Connector::serverAddress() const noexcept {
@@ -83,6 +97,11 @@ void Connector::stopInLoop() {
         loop_->cancel(retryTimerId_);
         retryTimerId_ = {};
     }
+    // Cancel pending connect timeout timer.
+    if (connectTimeoutTimerId_.valid()) {
+        loop_->cancel(connectTimeoutTimerId_);
+        connectTimeoutTimerId_ = {};
+    }
     if (state_ == kConnecting) {
         state_ = kDisconnected;
         const int sockfd = removeAndResetChannel();
@@ -91,6 +110,10 @@ void Connector::stopInLoop() {
 }
 
 void Connector::connect() {
+    if (connectorEventCallback_) {
+        connectorEventCallback_(serverAddr_, ConnectorEvent::ConnectAttempt);
+    }
+
     const int sockfd = sockets::createNonblockingOrDie(serverAddr_.family());
     const int ret = ::connect(sockfd, serverAddr_.getSockAddr(), serverAddr_.getSockAddrLen());
     const int savedErrno = (ret == 0) ? 0 : errno;
@@ -108,6 +131,9 @@ void Connector::connect() {
         case EADDRNOTAVAIL:
         case ECONNREFUSED:
         case ENETUNREACH:
+            if (connectorEventCallback_) {
+                connectorEventCallback_(serverAddr_, ConnectorEvent::ConnectFailed);
+            }
             retry(sockfd);
             break;
 
@@ -120,6 +146,9 @@ void Connector::connect() {
         case ENOTSOCK:
         default:
             LOG_ERROR << "Connector::connect error: " << std::strerror(savedErrno);
+            if (connectorEventCallback_) {
+                connectorEventCallback_(serverAddr_, ConnectorEvent::ConnectFailed);
+            }
             sockets::close(sockfd);
             break;
     }
@@ -132,11 +161,24 @@ void Connector::connecting(int sockfd) {
     channel_->setWriteCallback([this] { handleWrite(); });
     channel_->setErrorCallback([this] { handleError(); });
     channel_->enableWriting();
+
+    // Register connect timeout timer if configured.
+    if (connectTimeout_ > Duration::zero()) {
+        connectTimeoutTimerId_ = loop_->runAfter(connectTimeout_, [self = shared_from_this()] {
+            self->handleConnectTimeout();
+        });
+    }
 }
 
 void Connector::handleWrite() {
     if (state_ != kConnecting) {
         return;
+    }
+
+    // Cancel connect timeout timer on success path.
+    if (connectTimeoutTimerId_.valid()) {
+        loop_->cancel(connectTimeoutTimerId_);
+        connectTimeoutTimerId_ = {};
     }
 
     // Remove channel before delivering fd — ownership transfers to upper layer.
@@ -145,6 +187,9 @@ void Connector::handleWrite() {
     const int err = sockets::getSocketError(sockfd);
     if (err != 0) {
         LOG_ERROR << "Connector::handleWrite SO_ERROR = " << err << ": " << std::strerror(err);
+        if (connectorEventCallback_) {
+            connectorEventCallback_(serverAddr_, ConnectorEvent::ConnectFailed);
+        }
         retry(sockfd);
         return;
     }
@@ -170,11 +215,17 @@ void Connector::handleWrite() {
 
     if (selfConnect) {
         LOG_WARN << "Connector::handleWrite self-connect detected, retrying";
+        if (connectorEventCallback_) {
+            connectorEventCallback_(serverAddr_, ConnectorEvent::SelfConnectDetected);
+        }
         retry(sockfd);
         return;
     }
 
     state_ = kConnected;
+    if (connectorEventCallback_) {
+        connectorEventCallback_(serverAddr_, ConnectorEvent::ConnectSuccess);
+    }
     if (connect_ && newConnectionCallback_) {
         newConnectionCallback_(sockfd);
     } else {
@@ -186,16 +237,55 @@ void Connector::handleError() {
     if (state_ != kConnecting) {
         return;
     }
+
+    // Cancel connect timeout timer.
+    if (connectTimeoutTimerId_.valid()) {
+        loop_->cancel(connectTimeoutTimerId_);
+        connectTimeoutTimerId_ = {};
+    }
+
     const int sockfd = removeAndResetChannel();
     const int err = sockets::getSocketError(sockfd);
     LOG_ERROR << "Connector::handleError SO_ERROR = " << err << ": " << std::strerror(err);
+    if (connectorEventCallback_) {
+        connectorEventCallback_(serverAddr_, ConnectorEvent::ConnectFailed);
+    }
     retry(sockfd);
 }
 
-void Connector::retry(int sockfd) {
+void Connector::handleConnectTimeout() {
+    connectTimeoutTimerId_ = {};
+    if (state_ != kConnecting) {
+        // Connection already completed (success or failure) before timeout.
+        return;
+    }
+
+    LOG_WARN << "Connector::handleConnectTimeout: connect to "
+             << serverAddr_.toIpPort() << " timed out";
+
+    if (connectorEventCallback_) {
+        connectorEventCallback_(serverAddr_, ConnectorEvent::ConnectTimeout);
+    }
+
+    // Close the connecting socket and retry or fail.
+    const int sockfd = removeAndResetChannel();
     sockets::close(sockfd);
     state_ = kDisconnected;
+
     if (connect_) {
+        retry(0);  // No socket to close (already closed), but schedule retry.
+    }
+}
+
+void Connector::retry(int sockfd) {
+    if (sockfd >= 0) {
+        sockets::close(sockfd);
+    }
+    state_ = kDisconnected;
+    if (connect_) {
+        if (connectorEventCallback_) {
+            connectorEventCallback_(serverAddr_, ConnectorEvent::RetryScheduled);
+        }
         // Schedule retry with backoff via EventLoop timer.
         retryTimerId_ = loop_->runAfter(retryDelayMs_, [self = shared_from_this()] {
             self->retryTimerId_ = {};

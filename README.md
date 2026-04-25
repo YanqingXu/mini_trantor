@@ -32,7 +32,7 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - ✅ `v4-gamma`：RPC 支持完成 — RpcCodec（长度前缀二进制帧编解码）/ RpcChannel（per-connection 请求-响应关联 + 超时管理）/ RpcServer（TcpServer 协议适配器 + method 注册分发）/ RpcClient（TcpClient 包装 + callback 和 coroutine 双模式调用）
 - ✅ `v4-delta`：协程版 RPC 完成 — RpcServer `registerCoroMethod()`（协程返回值即响应，异常即错误）/ RpcClient `coroCall()`（返回 payload 直接，错误抛 `RpcError`）/ `dispatchCoroHandler` 安全桥接（free function 保证帧生命周期）/ 支持 handler 内 `co_await` 异步操作（SleepAwaitable 等）
 
-当前 build 树中 64/64 测试全部通过（unit × 24 + contract × 24 + integration × 16）。
+当前 build 树中 66/66 测试全部通过（unit × 24 + contract × 26 + integration × 16）。
 
 ### v5-alpha（已完成）
 - ✅ 统一取消原语（`CancellationToken` / `CancellationSource`）、`WhenAny` loser cancel、DNS cancel、显式 `NetError`（`PeerClosed` / `ConnectionReset` / `NotConnected` / `Cancelled` / `TimedOut` / `ResolveFailed`）、`withTimeout()` 已进入主线
@@ -62,8 +62,13 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
   - `SocketsOps` 全族升级：`createNonblockingOrDie(family)`、`sockaddr_storage` 签名
   - `Connector` / `DnsResolver` 支持 family-aware 连接和双栈解析
   - 新增 IPv6 测试：unit / contract / integration 三层覆盖，所有 IPv4 测试无回归
-- **v5-delta**：配置体系与可观测性
-  - 让重连、DNS、背压、超时等关键行为可配置、可观测
+- **v5-delta**：配置体系与可观测性（已完成）
+  - `ConnectorOptions` / `DnsResolverOptions` / `TcpServerOptions` / `TcpClientOptions` 四个 Options 结构体
+  - `MetricsHook` 回调接口：`ConnectionEvent` / `BackpressureEvent` / `ConnectorEvent` / `TlsEvent`
+  - `Connector` 连接超时：`connectTimeout` > 0 时 EventLoop 定时器自动管理
+  - `TcpServer` drain-aware stop：`stop(Duration)` 等待在飞连接关闭
+  - 所有 hook 在 owner loop 线程调用，不设 hook 时零开销
+  - 所有现有 API 向后兼容
 - **v5-epsilon**：协议层与传输层进一步解耦
   - 为后续 HTTP client 和更多协议扩展清理抽象边界
 - **v5-zeta**：工程护栏补齐
@@ -75,7 +80,7 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 
 1. `v5-alpha`：统一取消与错误语义
 2. `v5-beta`：优雅关闭与信号集成
-3. `v5-delta`：配置体系与可观测性
+3. `v5-epsilon`：协议层与传输层进一步解耦
 
 ## 核心理念
 对于重要模块，不先写代码，先写：

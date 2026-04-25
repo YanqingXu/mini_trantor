@@ -7,6 +7,7 @@
 
 #include "mini/base/noncopyable.h"
 #include "mini/coroutine/CancellationToken.h"
+#include "mini/net/DnsResolverOptions.h"
 #include "mini/net/InetAddress.h"
 #include "mini/net/NetError.h"
 
@@ -34,6 +35,9 @@ public:
 
     /// Create a resolver with the given number of worker threads.
     explicit DnsResolver(size_t numThreads = 2);
+
+    /// Create a resolver from options.
+    explicit DnsResolver(DnsResolverOptions options);
     ~DnsResolver();
 
     /// Resolve hostname asynchronously.

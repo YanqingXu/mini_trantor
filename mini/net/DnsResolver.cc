@@ -26,8 +26,15 @@ struct DnsResolver::ResolveOperationState {
     }
 };
 
-DnsResolver::DnsResolver(size_t numThreads) {
-    for (size_t i = 0; i < numThreads; ++i) {
+DnsResolver::DnsResolver(size_t numThreads)
+    : DnsResolver(DnsResolverOptions{.numWorkerThreads = numThreads}) {
+}
+
+DnsResolver::DnsResolver(DnsResolverOptions options)
+    : cacheEnabled_(options.enableCache),
+      cacheTtl_(options.cacheTtl) {
+    options.validate();
+    for (size_t i = 0; i < options.numWorkerThreads; ++i) {
         workers_.emplace_back([this] { workerThread(); });
     }
 }

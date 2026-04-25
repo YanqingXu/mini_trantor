@@ -1,6 +1,7 @@
 #include "mini/net/detail/ConnectionBackpressureController.h"
 
 #include "mini/net/Channel.h"
+#include "mini/net/TcpConnection.h"
 
 #include <stdexcept>
 
@@ -69,6 +70,14 @@ std::size_t ConnectionBackpressureController::lowWaterMark() const noexcept {
     return lowWaterMark_;
 }
 
+void ConnectionBackpressureController::setBackpressureEventCallback(BackpressureEventCallback cb) {
+    backpressureEventCallback_ = std::move(cb);
+}
+
+void ConnectionBackpressureController::setConnectionPtr(std::shared_ptr<TcpConnection> conn) {
+    connection_ = conn;
+}
+
 void ConnectionBackpressureController::apply(
     std::size_t bufferedBytes,
     Channel& channel,
@@ -89,12 +98,28 @@ void ConnectionBackpressureController::apply(
     if (readingEnabled_ && bufferedBytes >= highWaterMark_) {
         readingEnabled_ = false;
         channel.disableReading();
+
+        // Fire BackpressureEvent::ReadPaused hook.
+        if (backpressureEventCallback_) {
+            auto conn = connection_.lock();
+            if (conn) {
+                backpressureEventCallback_(conn, BackpressureEvent::ReadPaused, bufferedBytes);
+            }
+        }
         return;
     }
 
     if (!readingEnabled_ && bufferedBytes <= lowWaterMark_) {
         readingEnabled_ = true;
         channel.enableReading();
+
+        // Fire BackpressureEvent::ReadResumed hook.
+        if (backpressureEventCallback_) {
+            auto conn = connection_.lock();
+            if (conn) {
+                backpressureEventCallback_(conn, BackpressureEvent::ReadResumed, bufferedBytes);
+            }
+        }
     }
 }
 

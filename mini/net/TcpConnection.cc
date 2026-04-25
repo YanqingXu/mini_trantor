@@ -59,6 +59,10 @@ struct TcpConnection::Impl {
     std::unique_ptr<detail::ConnectionTransport> transport;
     CloseReason closeReason;
     std::any context;
+
+    // Metrics hooks (v5-delta)
+    BackpressureEventCallback backpressureEventCallback;
+    TlsEventCallback tlsEventCallback;
 };
 
 TcpConnection::TcpConnection(
@@ -193,6 +197,16 @@ void TcpConnection::setWriteCompleteCallback(WriteCompleteCallback cb) {
 
 void TcpConnection::setCloseCallback(CloseCallback cb) {
     impl_->callbacks->setCloseCallback(std::move(cb));
+}
+
+void TcpConnection::setBackpressureEventCallback(BackpressureEventCallback cb) {
+    impl_->backpressureEventCallback = cb;
+    impl_->backpressure->setBackpressureEventCallback(std::move(cb));
+    impl_->backpressure->setConnectionPtr(shared_from_this());
+}
+
+void TcpConnection::setTlsEventCallback(TlsEventCallback cb) {
+    impl_->tlsEventCallback = std::move(cb);
 }
 
 void TcpConnection::connectEstablished() {
@@ -450,10 +464,18 @@ void TcpConnection::advanceTransportHandshake() {
     impl_->loop->assertInLoopThread();
     const auto result = impl_->transport->advanceHandshake(*impl_->channel);
     if (result.failed) {
+        // Fire TLS handshake failed hook.
+        if (impl_->tlsEventCallback) {
+            impl_->tlsEventCallback(shared_from_this(), TlsEvent::HandshakeFailed);
+        }
         handleError(result.savedErrno);
         return;
     }
     if (result.completed) {
+        // Fire TLS handshake completed hook.
+        if (impl_->tlsEventCallback) {
+            impl_->tlsEventCallback(shared_from_this(), TlsEvent::HandshakeCompleted);
+        }
         notifyConnected(shared_from_this());
     }
 }

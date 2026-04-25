@@ -5,6 +5,7 @@
 // 可选支持 TLS：通过 startTls() 激活后，read/write 透明走 SSL 路径。
 
 #include "mini/base/noncopyable.h"
+#include "mini/base/MetricsHook.h"
 #include "mini/coroutine/CancellationToken.h"
 #include "mini/base/Timestamp.h"
 #include "mini/net/Callbacks.h"
@@ -66,6 +67,14 @@ public:
     void setHighWaterMarkCallback(HighWaterMarkCallback cb, std::size_t highWaterMark);
     void setWriteCompleteCallback(WriteCompleteCallback cb);
     void setCloseCallback(CloseCallback cb);
+
+    // ── Metrics hooks (v5-delta) ──
+
+    /// Set backpressure event hook. Fires on owner loop thread.
+    void setBackpressureEventCallback(BackpressureEventCallback cb);
+
+    /// Set TLS handshake event hook. Fires on owner loop thread.
+    void setTlsEventCallback(TlsEventCallback cb);
 
     void connectEstablished();
     void connectDestroyed();

@@ -153,6 +153,10 @@ add_mini_test(unit net ${CMAKE_CURRENT_SOURCE_DIR}/unit/net/test_inet_address_ip
 add_mini_test(contract tcp_client ${CMAKE_CURRENT_SOURCE_DIR}/contract/tcp_client/test_tcp_client_ipv6.cpp)
 add_mini_test(integration tcp_server ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_server/test_tcp_server_ipv6.cpp)
 
+# --- Configuration and observability tests (v5-delta) ---
+add_mini_test(contract net ${CMAKE_CURRENT_SOURCE_DIR}/contract/net/test_options_contract.cpp)
+add_mini_test(contract net ${CMAKE_CURRENT_SOURCE_DIR}/contract/net/test_metrics_hook_contract.cpp)
+
 get_property(unit_targets GLOBAL PROPERTY MINI_UNIT_TEST_TARGETS)
 get_property(contract_targets GLOBAL PROPERTY MINI_CONTRACT_TEST_TARGETS)
 get_property(integration_targets GLOBAL PROPERTY MINI_INTEGRATION_TEST_TARGETS)
