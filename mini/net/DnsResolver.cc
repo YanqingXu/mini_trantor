@@ -71,9 +71,15 @@ void DnsResolver::resolve(const std::string& hostname, uint16_t port,
             std::vector<InetAddress> addresses;
             addresses.reserve(it->second.addresses.size());
             for (const auto& sa : it->second.addresses) {
-                sockaddr_in addr = sa;
-                addr.sin_port = htons(port);
-                addresses.emplace_back(addr);
+                sockaddr_storage storage = sa;
+                if (storage.ss_family == AF_INET) {
+                    auto* addr4 = reinterpret_cast<sockaddr_in*>(&storage);
+                    addr4->sin_port = htons(port);
+                } else if (storage.ss_family == AF_INET6) {
+                    auto* addr6 = reinterpret_cast<sockaddr_in6*>(&storage);
+                    addr6->sin6_port = htons(port);
+                }
+                addresses.emplace_back(storage);
             }
             callbackLoop->runInLoop(
                 [operation, result = ResolveResult(std::move(addresses))]() mutable {
@@ -127,9 +133,9 @@ void DnsResolver::workerThread() {
             continue;
         }
 
-        // Perform blocking resolution.
+        // Perform blocking resolution with AF_UNSPEC for dual-stack.
         struct addrinfo hints {};
-        hints.ai_family = AF_INET;
+        hints.ai_family = AF_UNSPEC;
         hints.ai_socktype = SOCK_STREAM;
 
         struct addrinfo* res = nullptr;
@@ -138,20 +144,29 @@ void DnsResolver::workerThread() {
                                       &hints, &res);
 
         ResolveResult result = std::unexpected(NetError::ResolveFailed);
-        std::vector<sockaddr_in> cacheAddrs;
+        std::vector<sockaddr_storage> cacheAddrs;
         std::vector<InetAddress> addresses;
 
         if (ret == 0 && res != nullptr) {
             for (const addrinfo* p = res; p != nullptr; p = p->ai_next) {
                 if (p->ai_family == AF_INET && p->ai_addrlen >= sizeof(sockaddr_in)) {
-                    sockaddr_in addr{};
-                    std::memcpy(&addr, p->ai_addr, sizeof(sockaddr_in));
-                    addresses.emplace_back(addr);
+                    sockaddr_storage storage{};
+                    std::memcpy(&storage, p->ai_addr, sizeof(sockaddr_in));
+                    addresses.emplace_back(storage);
 
                     // Store with port 0 for cache.
-                    sockaddr_in cacheAddr = addr;
-                    cacheAddr.sin_port = 0;
-                    cacheAddrs.push_back(cacheAddr);
+                    sockaddr_storage cacheStorage = storage;
+                    reinterpret_cast<sockaddr_in*>(&cacheStorage)->sin_port = 0;
+                    cacheAddrs.push_back(cacheStorage);
+                } else if (p->ai_family == AF_INET6 && p->ai_addrlen >= sizeof(sockaddr_in6)) {
+                    sockaddr_storage storage{};
+                    std::memcpy(&storage, p->ai_addr, sizeof(sockaddr_in6));
+                    addresses.emplace_back(storage);
+
+                    // Store with port 0 for cache.
+                    sockaddr_storage cacheStorage = storage;
+                    reinterpret_cast<sockaddr_in6*>(&cacheStorage)->sin6_port = 0;
+                    cacheAddrs.push_back(cacheStorage);
                 }
             }
             ::freeaddrinfo(res);

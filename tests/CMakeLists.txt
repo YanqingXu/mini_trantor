@@ -148,6 +148,11 @@ add_mini_test(unit rpc ${CMAKE_CURRENT_SOURCE_DIR}/unit/rpc/test_rpc_codec.cpp)
 add_mini_test(contract rpc ${CMAKE_CURRENT_SOURCE_DIR}/contract/rpc/test_rpc_server.cpp)
 add_mini_test(integration rpc ${CMAKE_CURRENT_SOURCE_DIR}/integration/rpc/test_rpc.cpp)
 
+# --- IPv6 dual-stack tests (v5-gamma) ---
+add_mini_test(unit net ${CMAKE_CURRENT_SOURCE_DIR}/unit/net/test_inet_address_ipv6.cpp)
+add_mini_test(contract tcp_client ${CMAKE_CURRENT_SOURCE_DIR}/contract/tcp_client/test_tcp_client_ipv6.cpp)
+add_mini_test(integration tcp_server ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_server/test_tcp_server_ipv6.cpp)
+
 get_property(unit_targets GLOBAL PROPERTY MINI_UNIT_TEST_TARGETS)
 get_property(contract_targets GLOBAL PROPERTY MINI_CONTRACT_TEST_TARGETS)
 get_property(integration_targets GLOBAL PROPERTY MINI_INTEGRATION_TEST_TARGETS)

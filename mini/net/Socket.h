@@ -28,6 +28,7 @@ public:
     void setReusePort(bool on);
     void setKeepAlive(bool on);
     void setTcpNoDelay(bool on);
+    void setIpv6Only(bool on);
 
 private:
     int sockfd_;

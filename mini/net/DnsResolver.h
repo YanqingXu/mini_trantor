@@ -3,6 +3,7 @@
 // DnsResolver 提供异步域名解析，使用工作线程池执行阻塞 getaddrinfo，
 // 通过 EventLoop::runInLoop 将结果投递回请求方线程。
 // 支持可选的 TTL 缓存。不阻塞任何 EventLoop 线程。
+// v5-gamma: 支持双栈解析 (AF_UNSPEC)，缓存使用 sockaddr_storage。
 
 #include "mini/base/noncopyable.h"
 #include "mini/coroutine/CancellationToken.h"
@@ -66,7 +67,7 @@ private:
     };
 
     struct CacheEntry {
-        std::vector<sockaddr_in> addresses;  // stored with port 0
+        std::vector<sockaddr_storage> addresses;  // stored with port 0, dual-stack
         std::chrono::steady_clock::time_point expiry;
     };
 

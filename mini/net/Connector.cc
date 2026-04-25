@@ -91,9 +91,8 @@ void Connector::stopInLoop() {
 }
 
 void Connector::connect() {
-    const int sockfd = sockets::createNonblockingOrDie();
-    const auto& addr = serverAddr_.getSockAddrInet();
-    const int ret = ::connect(sockfd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr));
+    const int sockfd = sockets::createNonblockingOrDie(serverAddr_.family());
+    const int ret = ::connect(sockfd, serverAddr_.getSockAddr(), serverAddr_.getSockAddrLen());
     const int savedErrno = (ret == 0) ? 0 : errno;
 
     switch (savedErrno) {
@@ -150,11 +149,26 @@ void Connector::handleWrite() {
         return;
     }
 
-    // Self-connect detection: local addr == peer addr.
-    const sockaddr_in localAddr = sockets::getLocalAddr(sockfd);
-    const sockaddr_in peerAddr = sockets::getPeerAddr(sockfd);
-    if (localAddr.sin_port == peerAddr.sin_port &&
-        localAddr.sin_addr.s_addr == peerAddr.sin_addr.s_addr) {
+    // Self-connect detection: compare local and peer addresses.
+    const sockaddr_storage localStorage = sockets::getLocalAddr(sockfd);
+    const sockaddr_storage peerStorage = sockets::getPeerAddr(sockfd);
+
+    bool selfConnect = false;
+    if (localStorage.ss_family == peerStorage.ss_family) {
+        if (localStorage.ss_family == AF_INET6) {
+            const auto& local6 = *reinterpret_cast<const sockaddr_in6*>(&localStorage);
+            const auto& peer6 = *reinterpret_cast<const sockaddr_in6*>(&peerStorage);
+            selfConnect = (local6.sin6_port == peer6.sin6_port) &&
+                          (std::memcmp(&local6.sin6_addr, &peer6.sin6_addr, sizeof(in6_addr)) == 0);
+        } else {
+            const auto& local4 = *reinterpret_cast<const sockaddr_in*>(&localStorage);
+            const auto& peer4 = *reinterpret_cast<const sockaddr_in*>(&peerStorage);
+            selfConnect = (local4.sin_port == peer4.sin_port) &&
+                          (local4.sin_addr.s_addr == peer4.sin_addr.s_addr);
+        }
+    }
+
+    if (selfConnect) {
         LOG_WARN << "Connector::handleWrite self-connect detected, retrying";
         retry(sockfd);
         return;

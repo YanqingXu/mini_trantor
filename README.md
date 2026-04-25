@@ -32,7 +32,7 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - ✅ `v4-gamma`：RPC 支持完成 — RpcCodec（长度前缀二进制帧编解码）/ RpcChannel（per-connection 请求-响应关联 + 超时管理）/ RpcServer（TcpServer 协议适配器 + method 注册分发）/ RpcClient（TcpClient 包装 + callback 和 coroutine 双模式调用）
 - ✅ `v4-delta`：协程版 RPC 完成 — RpcServer `registerCoroMethod()`（协程返回值即响应，异常即错误）/ RpcClient `coroCall()`（返回 payload 直接，错误抛 `RpcError`）/ `dispatchCoroHandler` 安全桥接（free function 保证帧生命周期）/ 支持 handler 内 `co_await` 异步操作（SleepAwaitable 等）
 
-当前 build 树中 61/61 测试全部通过（unit × 22 + contract × 23 + integration × 16）。
+当前 build 树中 64/64 测试全部通过（unit × 24 + contract × 24 + integration × 16）。
 
 ### v5-alpha（已完成）
 - ✅ 统一取消原语（`CancellationToken` / `CancellationSource`）、`WhenAny` loser cancel、DNS cancel、显式 `NetError`（`PeerClosed` / `ConnectionReset` / `NotConnected` / `Cancelled` / `TimedOut` / `ResolveFailed`）、`withTimeout()` 已进入主线
@@ -57,8 +57,11 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - **v5-beta**：优雅关闭与信号集成（已完成）
   - `SignalWatcher` 通过 signalfd + Channel 将 SIGINT/SIGTERM 接入 EventLoop，全局屏蔽 SIGPIPE
   - `Acceptor::stop()` / `EventLoopThreadPool::stop()` / `TcpServer::stop()` 实现有序关闭序列
-- **v5-gamma**：IPv6 与地址模型补全
-  - 将当前偏 IPv4-only 的地址抽象升级为双栈可用
+- **v5-gamma**：IPv6 与地址模型补全（已完成）
+  - `InetAddress` 内部存储升级为 `sockaddr_storage` + `sa_family_t`，支持 IPv4/IPv6 双栈
+  - `SocketsOps` 全族升级：`createNonblockingOrDie(family)`、`sockaddr_storage` 签名
+  - `Connector` / `DnsResolver` 支持 family-aware 连接和双栈解析
+  - 新增 IPv6 测试：unit / contract / integration 三层覆盖，所有 IPv4 测试无回归
 - **v5-delta**：配置体系与可观测性
   - 让重连、DNS、背压、超时等关键行为可配置、可观测
 - **v5-epsilon**：协议层与传输层进一步解耦
@@ -72,7 +75,7 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 
 1. `v5-alpha`：统一取消与错误语义
 2. `v5-beta`：优雅关闭与信号集成
-3. `v5-gamma`：IPv6 与地址模型补全
+3. `v5-delta`：配置体系与可观测性
 
 ## 核心理念
 对于重要模块，不先写代码，先写：

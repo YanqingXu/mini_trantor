@@ -41,7 +41,7 @@ mini-trantor 目前已经具备一个"小而完整"的网络库骨架：
 
 - ~~取消语义和错误语义仍未统一~~ ✅ 已在 v5-alpha 中统一
 - ~~进程级优雅关闭与信号集成尚未闭环~~ ✅ 已在 v5-beta 中闭环
-- 地址模型仍偏 IPv4-only
+- ~~地址模型仍偏 IPv4-only~~ ✅ 已在 v5-gamma 中补全为 IPv4/IPv6 双栈
 - 配置、可观测性、工程护栏仍偏轻
 - 协议层和传输层解耦还不够彻底
 - client 生态能力仍不完整
@@ -215,27 +215,30 @@ mini-trantor 目前已经具备一个"小而完整"的网络库骨架：
 
 ---
 
-### v5-gamma：IPv6 与地址模型补全
+### v5-gamma：IPv6 与地址模型补全 ✅
 
 目标：
 - 把地址抽象从 IPv4-only 提升到可双栈使用
 
-主要模块：
-- [mini/net/InetAddress.h](/home/xyq/mini-trantor/mini/net/InetAddress.h)
-- [mini/net/Socket.h](/home/xyq/mini-trantor/mini/net/Socket.h)
-- [mini/net/SocketsOps.h](/home/xyq/mini-trantor/mini/net/SocketsOps.h)
-- [mini/net/Acceptor.cc](/home/xyq/mini-trantor/mini/net/Acceptor.cc)
-- [mini/net/Connector.cc](/home/xyq/mini-trantor/mini/net/Connector.cc)
+已完成的变更：
+- `InetAddress` 内部存储从 `sockaddr_in` 升级为 `sockaddr_storage` + `sa_family_t family_`
+- 新增 IPv6 构造器：`InetAddress(string, port, bool ipv6)`、`InetAddress(const sockaddr_in6&)`、`InetAddress(const sockaddr_storage&)`
+- 新增 IPv6 访问器：`getSockAddrInet6()`、`setSockAddrInet6()`、`getSockAddr()`、`getSockAddrLen()`
+- 新增族查询：`family()`、`isIpv4()`、`isIpv6()`
+- `toIpPort()` 对 IPv6 使用 `[addr]:port` 括号表示法
+- `SocketsOps::createNonblockingOrDie()` 接受 `sa_family_t` 参数
+- `SocketsOps` 的 `bindOrDie`/`accept`/`getLocalAddr`/`getPeerAddr` 统一使用 `sockaddr_storage`
+- `Socket::setIpv6Only()` 声明和实现补齐
+- `Connector::connect()` 使用 family-aware 的 socket 创建和连接
+- `Connector::handleWrite()` 自连接检测支持 IPv4/IPv6
+- `DnsResolver` 使用 `AF_UNSPEC` 双栈解析，缓存从 `sockaddr_in` 升级为 `sockaddr_storage`
+- IPv4 所有现有 API 保持向后兼容
 
-优先覆盖的现有测试：
-- [tests/contract/connector/test_connector.cpp](/home/xyq/mini-trantor/tests/contract/connector/test_connector.cpp)
-- [tests/contract/tcp_client/test_tcp_client.cpp](/home/xyq/mini-trantor/tests/contract/tcp_client/test_tcp_client.cpp)
-- [tests/contract/tcp_server/test_tcp_server.cpp](/home/xyq/mini-trantor/tests/contract/tcp_server/test_tcp_server.cpp)
-
-建议新增测试：
-- `tests/unit/net/test_inet_address_ipv6.cpp`
-- `tests/contract/tcp_client/test_tcp_client_ipv6.cpp`
-- `tests/integration/tcp_server/test_tcp_server_ipv6.cpp`
+已覆盖的测试：
+- `tests/unit/net/test_inet_address_ipv6.cpp` — IPv4/IPv6 构造、转换、括号解析
+- `tests/contract/tcp_client/test_tcp_client_ipv6.cpp` — IPv6 echo、地址族检测、括号表示法
+- `tests/integration/tcp_server/test_tcp_server_ipv6.cpp` — 多线程 IPv6 echo
+- 所有现有 IPv4 测试无回归
 
 退出信号：
 - 监听、主动连接、字符串化、DNS 结果消费均可覆盖 IPv4 / IPv6

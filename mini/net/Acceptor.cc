@@ -11,11 +11,16 @@ namespace mini::net {
 
 Acceptor::Acceptor(EventLoop* loop, const InetAddress& listenAddr, bool reusePort)
     : loop_(loop),
-      acceptSocket_(sockets::createNonblockingOrDie()),
+      acceptSocket_(sockets::createNonblockingOrDie(listenAddr.family())),
       acceptChannel_(loop, acceptSocket_.fd()),
       listening_(false) {
     acceptSocket_.setReuseAddr(true);
     acceptSocket_.setReusePort(reusePort);
+    // For IPv6 sockets, default to dual-stack (IPV6_V6ONLY=0) so the same
+    // socket can accept both IPv4-mapped and native IPv6 connections.
+    if (listenAddr.isIpv6()) {
+        acceptSocket_.setIpv6Only(false);
+    }
     acceptSocket_.bindAddress(listenAddr);
     acceptChannel_.setReadCallback([this](mini::base::Timestamp receiveTime) { handleRead(receiveTime); });
 }
