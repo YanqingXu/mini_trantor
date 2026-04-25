@@ -13,6 +13,7 @@ It is the lifecycle boundary between listening infrastructure and per-connection
 - optionally coordinate per-connection idle-timeout policy through owner-loop timers
 - optionally install per-connection backpressure thresholds for accepted connections
 - remove connections safely during close/shutdown
+- orchestrate ordered shutdown via stop()
 
 ---
 
@@ -55,6 +56,7 @@ It is the lifecycle boundary between listening infrastructure and per-connection
 - idle timeout closes quiet connections without skipping the normal removal path
 - backpressure policy installed by TcpServer pauses and later resumes per-connection reads without breaking ownership rules
 - destruction invalidates delayed removal callbacks safely
+- stop() stops Acceptor, force-closes all connections, stops thread pool; idempotent
 
 ---
 

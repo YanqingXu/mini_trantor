@@ -160,7 +160,7 @@ mini-trantor 目前已经具备一个"小而完整"的网络库骨架：
 
 ---
 
-### v5-beta：优雅关闭与信号集成
+### v5-beta：优雅关闭与信号集成（进行中）
 
 目标：
 - 让"服务如何停下来"成为库级 contract，而不是应用层临时约定
@@ -172,9 +172,14 @@ mini-trantor 目前已经具备一个"小而完整"的网络库骨架：
 - [mini/net/Acceptor.h](/home/xyq/mini-trantor/mini/net/Acceptor.h)
 - [mini/net/EventLoopThreadPool.h](/home/xyq/mini-trantor/mini/net/EventLoopThreadPool.h)
 
-建议新增模块：
-- `mini/net/SignalWatcher.h`
-- 或 `mini/net/SignalSet.h`
+已新增模块：
+- [mini/net/SignalWatcher.h](/home/xyq/mini-trantor/mini/net/SignalWatcher.h) — 通过 signalfd + Channel 将 SIGINT/SIGTERM 接入 EventLoop
+
+已完成项：
+- [已完成] [mini/net/Acceptor.h](/home/xyq/mini-trantor/mini/net/Acceptor.h) / [mini/net/Acceptor.cc](/home/xyq/mini-trantor/mini/net/Acceptor.cc) 新增 `stop()` 方法：停止监听 Channel 并设 `listening_ = false`
+- [已完成] [mini/net/EventLoopThreadPool.h](/home/xyq/mini-trantor/mini/net/EventLoopThreadPool.h) / [mini/net/EventLoopThreadPool.cc](/home/xyq/mini-trantor/mini/net/EventLoopThreadPool.cc) 新增 `stop()` 方法：quit 所有 worker loops 并清理线程
+- [已完成] [mini/net/TcpServer.h](/home/xyq/mini-trantor/mini/net/TcpServer.h) / [mini/net/TcpServer.cc](/home/xyq/mini-trantor/mini/net/TcpServer.cc) 新增 `stop()` 方法：停止 Acceptor → forceClose 所有连接 → 停止线程池
+- [已完成] [mini/net/SignalWatcher.h](/home/xyq/mini-trantor/mini/net/SignalWatcher.h) / [mini/net/SignalWatcher.cc](/home/xyq/mini-trantor/mini/net/SignalWatcher.cc) 通过 signalfd + Channel 将 SIGINT/SIGTERM 接入 EventLoop；构造时全局屏蔽 SIGPIPE
 
 优先覆盖的现有测试：
 - [tests/contract/event_loop/test_event_loop.cpp](/home/xyq/mini-trantor/tests/contract/event_loop/test_event_loop.cpp)
@@ -182,9 +187,10 @@ mini-trantor 目前已经具备一个"小而完整"的网络库骨架：
 - [tests/contract/tcp_client/test_tcp_client.cpp](/home/xyq/mini-trantor/tests/contract/tcp_client/test_tcp_client.cpp)
 - [tests/integration/tcp_server/test_tcp_server_threaded.cpp](/home/xyq/mini-trantor/tests/integration/tcp_server/test_tcp_server_threaded.cpp)
 
-建议新增测试：
-- `tests/contract/signal/test_signal_handling.cpp`
-- `tests/integration/tcp_server/test_graceful_shutdown.cpp`
+已新增测试：
+- [tests/unit/acceptor/test_acceptor_stop.cpp](/home/xyq/mini-trantor/tests/unit/acceptor/test_acceptor_stop.cpp) — Acceptor::stop() 单元测试
+- [tests/contract/signal/test_signal_handling.cpp](/home/xyq/mini-trantor/tests/contract/signal/test_signal_handling.cpp) — SignalWatcher contract 测试
+- [tests/integration/tcp_server/test_graceful_shutdown.cpp](/home/xyq/mini-trantor/tests/integration/tcp_server/test_graceful_shutdown.cpp) — 优雅关闭集成测试
 
 退出信号：
 - SIGINT / SIGTERM 能安全唤醒 owner loop

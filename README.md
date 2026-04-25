@@ -54,8 +54,9 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
   - 收敛 README / docs / intent / 目录说明之间的漂移
 - **v5-alpha**：统一取消与错误语义
   - 为 coroutine、TcpConnection、DNS 等异步接口建立一致的 cancellation / error surface
-- **v5-beta**：优雅关闭与信号集成
-  - 补齐 SIGINT/SIGTERM、server drain、worker loop 退出等生命周期闭环
+- **v5-beta**：优雅关闭与信号集成（进行中）
+  - `SignalWatcher` 通过 signalfd + Channel 将 SIGINT/SIGTERM 接入 EventLoop，全局屏蔽 SIGPIPE
+  - `Acceptor::stop()` / `EventLoopThreadPool::stop()` / `TcpServer::stop()` 实现有序关闭序列
 - **v5-gamma**：IPv6 与地址模型补全
   - 将当前偏 IPv4-only 的地址抽象升级为双栈可用
 - **v5-delta**：配置体系与可观测性
@@ -85,7 +86,7 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 ## 目录说明
 - `intents/`: 设计意图与模块宪法（architecture / modules / usecases）
 - `rules/`: 项目级约束规则（线程亲和、所有权、测试、编码、Review）
-- `mini/net/`: Reactor 核心实现（EventLoop、Channel、Poller、TcpConnection、TcpServer、TcpClient、Connector、TimerQueue、TlsContext、DnsResolver 等）
+- `mini/net/`: Reactor 核心实现（EventLoop、Channel、Poller、TcpConnection、TcpServer、TcpClient、Connector、TimerQueue、TlsContext、DnsResolver、SignalWatcher 等）
 - `mini/http/`: HTTP/1.1 协议层（HttpRequest、HttpResponse、HttpContext、HttpServer）
 - `mini/ws/`: WebSocket 协议层（WebSocketCodec、WebSocketHandshake、WebSocketConnection、WebSocketServer）
 - `mini/rpc/`: RPC 协议层（RpcCodec、RpcChannel、RpcServer、RpcClient）

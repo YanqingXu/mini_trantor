@@ -10,6 +10,7 @@ EventLoopThread workers and returning loops for connection assignment.
 - start configured worker EventLoopThread instances
 - expose base loop when zero worker threads are configured
 - hand out worker loops in a predictable round-robin manner
+- stop all worker loops on explicit request (stop())
 
 ---
 
@@ -43,6 +44,7 @@ EventLoopThread workers and returning loops for connection assignment.
 - zero-thread start keeps work on base loop
 - multi-thread start publishes the configured worker loops
 - getNextLoop rotates through workers predictably
+- stop() quits all worker loops and clears thread/loop containers
 
 ---
 

@@ -32,6 +32,7 @@ add_mini_test(unit dns ${CMAKE_CURRENT_SOURCE_DIR}/unit/dns/test_dns_resolver.cp
 add_mini_test(unit net ${CMAKE_CURRENT_SOURCE_DIR}/unit/net/test_connection_awaiter_registry.cpp)
 add_mini_test(unit net ${CMAKE_CURRENT_SOURCE_DIR}/unit/net/test_connection_backpressure_controller.cpp)
 add_mini_test(unit net ${CMAKE_CURRENT_SOURCE_DIR}/unit/net/test_connection_transport.cpp)
+add_mini_test(unit acceptor ${CMAKE_CURRENT_SOURCE_DIR}/unit/acceptor/test_acceptor_stop.cpp)
 
 add_mini_test(contract acceptor ${CMAKE_CURRENT_SOURCE_DIR}/contract/acceptor/test_acceptor.cpp)
 add_mini_test(contract connector ${CMAKE_CURRENT_SOURCE_DIR}/contract/connector/test_connector.cpp)
@@ -58,6 +59,7 @@ add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_cancellation_contract.cpp)
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_timeout_contract.cpp)
 add_mini_test(contract dns ${CMAKE_CURRENT_SOURCE_DIR}/contract/dns/test_dns_contract.cpp)
+add_mini_test(contract signal ${CMAKE_CURRENT_SOURCE_DIR}/contract/signal/test_signal_handling.cpp)
 
 add_mini_test(integration tcp_server ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_server/test_tcp_server.cpp)
 add_mini_test(
@@ -79,6 +81,11 @@ add_mini_test(
     integration
     tcp_server
     ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_server/test_tcp_server_backpressure_policy.cpp
+)
+add_mini_test(
+    integration
+    tcp_server
+    ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_server/test_graceful_shutdown.cpp
 )
 add_mini_test(
     integration

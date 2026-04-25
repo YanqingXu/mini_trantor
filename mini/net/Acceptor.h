@@ -24,6 +24,7 @@ public:
     void setNewConnectionCallback(NewConnectionCallback cb);
     bool listening() const noexcept;
     void listen();
+    void stop();
 
 private:
     void handleRead(mini::base::Timestamp receiveTime);

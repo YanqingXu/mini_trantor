@@ -26,6 +26,12 @@ int Socket::fd() const noexcept {
     return sockfd_;
 }
 
+int Socket::releaseFd() noexcept {
+    const int fd = sockfd_;
+    sockfd_ = -1;
+    return fd;
+}
+
 void Socket::bindAddress(const InetAddress& localAddr) {
     sockets::bindOrDie(sockfd_, localAddr.getSockAddrInet());
 }

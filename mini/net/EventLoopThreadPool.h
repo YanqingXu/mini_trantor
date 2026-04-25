@@ -22,6 +22,7 @@ public:
 
     void setThreadNum(int numThreads);
     void start(const ThreadInitCallback& callback = ThreadInitCallback());
+    void stop();
 
     EventLoop* getNextLoop();
     std::vector<EventLoop*> getAllLoops() const;

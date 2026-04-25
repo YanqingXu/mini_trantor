@@ -45,6 +45,22 @@ void Acceptor::listen() {
     acceptChannel_.enableReading();
 }
 
+void Acceptor::stop() {
+    loop_->assertInLoopThread();
+    if (!listening_) {
+        return;
+    }
+    listening_ = false;
+    acceptChannel_.disableAll();
+    acceptChannel_.remove();
+    // Close the listen socket so the kernel rejects further connections.
+    // Release the fd from the Socket RAII wrapper first to avoid double-close.
+    const int fd = acceptSocket_.releaseFd();
+    if (fd >= 0) {
+        sockets::close(fd);
+    }
+}
+
 void Acceptor::handleRead(mini::base::Timestamp receiveTime) {
     (void)receiveTime;
     loop_->assertInLoopThread();

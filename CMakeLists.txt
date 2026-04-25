@@ -36,6 +36,7 @@ add_library(mini_trantor
     mini/net/TcpServer.cc
     mini/net/TlsContext.cc
     mini/net/DnsResolver.cc
+    mini/net/SignalWatcher.cc
     mini/http/HttpRequest.cc
     mini/http/HttpResponse.cc
     mini/http/HttpContext.cc

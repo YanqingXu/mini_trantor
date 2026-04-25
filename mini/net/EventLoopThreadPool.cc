@@ -30,6 +30,15 @@ void EventLoopThreadPool::start(const ThreadInitCallback& callback) {
     }
 }
 
+void EventLoopThreadPool::stop() {
+    for (auto* loop : loops_) {
+        loop->quit();
+    }
+    threads_.clear();
+    loops_.clear();
+    started_ = false;
+}
+
 EventLoop* EventLoopThreadPool::getNextLoop() {
     baseLoop_->assertInLoopThread();
     EventLoop* loop = baseLoop_;

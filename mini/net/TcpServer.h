@@ -41,6 +41,7 @@ public:
     std::size_t connectionCount() const;
 
     void start();
+    void stop();
 
 private:
     void newConnection(int sockfd, const InetAddress& peerAddr);

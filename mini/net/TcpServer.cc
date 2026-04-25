@@ -145,6 +145,48 @@ void TcpServer::start() {
     }
 }
 
+void TcpServer::stop() {
+    loop_->assertInLoopThread();
+
+    // 1. Stop accepting new connections.
+    if (acceptor_->listening()) {
+        acceptor_->setNewConnectionCallback({});
+        acceptor_->stop();
+    }
+
+    // 2. Force-close all existing connections and remove their channels.
+    //    Snapshot first to avoid iterator invalidation, then clear.
+    //    Each connection must be closed and destroyed on its own loop thread.
+    //    The close callback is cleared so removeConnection() won't try to
+    //    access the server after stop() returns.
+    auto conns = connections_;
+    connections_.clear();
+    for (auto& [name, connection] : conns) {
+        connection->setCloseCallback({});
+        EventLoop* connLoop = connection->getLoop();
+        if (connLoop == loop_) {
+            // Same loop thread — call synchronously.
+            connection->forceClose();
+            connection->connectDestroyed();
+        } else {
+            // Different loop thread — schedule both on the connection's loop.
+            // forceCloseInLoop() is called directly (we're already on our loop,
+            // and forceClose dispatches to the right thread internally).
+            // But we need connectDestroyed() to run AFTER forceClose completes,
+            // so we queue it via runInLoop which guarantees ordering.
+            connLoop->runInLoop([connection] {
+                connection->forceClose();
+                connection->connectDestroyed();
+            });
+        }
+    }
+
+    // 3. Stop worker loops (quit + join).
+    //    Worker loops drain pending functors (including connectDestroyed)
+    //    before exiting, so channels are properly removed.
+    threadPool_->stop();
+}
+
 void TcpServer::newConnection(int sockfd, const InetAddress& peerAddr) {
     loop_->assertInLoopThread();
     EventLoop* ioLoop = threadPool_->getNextLoop();

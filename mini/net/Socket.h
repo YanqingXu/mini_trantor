@@ -15,6 +15,10 @@ public:
 
     int fd() const noexcept;
 
+    /// Release ownership of the socket fd.  After this call, the Socket
+    /// destructor will NOT close the fd.  Returns the released fd.
+    int releaseFd() noexcept;
+
     void bindAddress(const InetAddress& localAddr);
     void listen();
     int accept(InetAddress* peerAddr);

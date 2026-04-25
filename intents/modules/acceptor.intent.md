@@ -12,6 +12,7 @@ hands them upward through a narrow callback boundary.
 - own listen Channel registration
 - accept as many ready connections as possible per readable event
 - deliver accepted fds to upper layer on the loop thread
+- stop accepting on explicit request (stop())
 
 ---
 
@@ -33,6 +34,7 @@ hands them upward through a narrow callback boundary.
 
 ## 5. Threading Rules
 - listen() is owner-thread only
+- stop() is owner-thread only
 - handleRead() runs on owner loop thread
 - destructor must respect owner-thread teardown discipline
 
@@ -50,6 +52,7 @@ hands them upward through a narrow callback boundary.
 - accepted fd is forwarded through callback on loop thread
 - no callback means accepted fd is closed explicitly
 - destroy-before-listen path is safe
+- stop() disables listening and removes Channel; idempotent when not listening
 
 ---
 
