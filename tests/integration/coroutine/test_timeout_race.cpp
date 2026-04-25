@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cassert>
+#include <cstdlib>
 #include <chrono>
 #include <future>
 #include <string>
@@ -29,14 +30,17 @@ std::array<int, 2> makeSocketPair() {
 void destroyConnectionOnLoop(
     mini::net::EventLoop* loop,
     mini::net::TcpConnectionPtr connection) {
-    std::promise<void> destroyed;
-    auto future = destroyed.get_future();
-    loop->runInLoop([connection = std::move(connection), &destroyed]() mutable {
+    auto destroyed = std::make_shared<std::promise<void>>();
+    auto future = destroyed->get_future();
+    loop->runInLoop([connection = std::move(connection), destroyed]() mutable {
         connection->connectDestroyed();
         connection.reset();
-        destroyed.set_value();
+        destroyed->set_value();
     });
-    assert(future.wait_for(1s) == std::future_status::ready);
+    if (future.wait_for(5s) != std::future_status::ready) {
+        // Connection destruction did not complete in time — test is broken.
+        std::abort();
+    }
 }
 
 mini::coroutine::Task<mini::net::Expected<std::string>> readExpected(
@@ -49,7 +53,10 @@ mini::coroutine::Task<void> timeoutRound(
     mini::net::TcpConnectionPtr connection,
     std::promise<mini::net::NetError>* result) {
     auto value = co_await mini::coroutine::withTimeout(loop, readExpected(connection), 20ms);
-    assert(!value);
+    if (value) {
+        result->set_value(mini::net::NetError::NotConnected);
+        co_return;
+    }
     result->set_value(value.error());
 }
 
@@ -58,7 +65,10 @@ mini::coroutine::Task<void> closeRound(
     mini::net::TcpConnectionPtr connection,
     std::promise<mini::net::NetError>* result) {
     auto value = co_await mini::coroutine::withTimeout(loop, readExpected(connection), 200ms);
-    assert(!value);
+    if (value) {
+        result->set_value(mini::net::NetError::NotConnected);
+        co_return;
+    }
     result->set_value(value.error());
 }
 
@@ -70,7 +80,10 @@ mini::coroutine::Task<void> cancelRound(
     auto operation = readExpected(connection);
     operation.setCancellationToken(source.token());
     auto value = co_await mini::coroutine::withTimeout(loop, std::move(operation), 200ms);
-    assert(!value);
+    if (value) {
+        result->set_value(mini::net::NetError::NotConnected);
+        co_return;
+    }
     result->set_value(value.error());
 }
 
@@ -98,8 +111,12 @@ int main() {
             timeoutRound(loop, connection, &result).detach();
         });
 
-        assert(future.wait_for(3s) == std::future_status::ready);
-        assert(future.get() == mini::net::NetError::TimedOut);
+        if (future.wait_for(3s) != std::future_status::ready) {
+            std::abort();
+        }
+        if (future.get() != mini::net::NetError::TimedOut) {
+            std::abort();
+        }
 
         ::close(sockets[1]);
         destroyConnectionOnLoop(loop, connection);
@@ -130,8 +147,10 @@ int main() {
 
         assert(future.wait_for(3s) == std::future_status::ready);
         const auto error = future.get();
-        assert(error == mini::net::NetError::PeerClosed ||
-               error == mini::net::NetError::ConnectionReset);
+        if (error != mini::net::NetError::PeerClosed &&
+            error != mini::net::NetError::ConnectionReset) {
+            std::abort();
+        }
 
         destroyConnectionOnLoop(loop, connection);
         closer.join();
@@ -161,8 +180,12 @@ int main() {
             source.cancel();
         });
 
-        assert(future.wait_for(3s) == std::future_status::ready);
-        assert(future.get() == mini::net::NetError::Cancelled);
+        if (future.wait_for(3s) != std::future_status::ready) {
+            std::abort();
+        }
+        if (future.get() != mini::net::NetError::Cancelled) {
+            std::abort();
+        }
 
         ::close(sockets[1]);
         destroyConnectionOnLoop(loop, connection);

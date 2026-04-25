@@ -32,13 +32,14 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - ✅ `v4-gamma`：RPC 支持完成 — RpcCodec（长度前缀二进制帧编解码）/ RpcChannel（per-connection 请求-响应关联 + 超时管理）/ RpcServer（TcpServer 协议适配器 + method 注册分发）/ RpcClient（TcpClient 包装 + callback 和 coroutine 双模式调用）
 - ✅ `v4-delta`：协程版 RPC 完成 — RpcServer `registerCoroMethod()`（协程返回值即响应，异常即错误）/ RpcClient `coroCall()`（返回 payload 直接，错误抛 `RpcError`）/ `dispatchCoroHandler` 安全桥接（free function 保证帧生命周期）/ 支持 handler 内 `co_await` 异步操作（SleepAwaitable 等）
 
-当前 build 树中注册 56 个测试（unit × 20 + contract × 21 + integration × 15）。
-其中 `integration.coroutine.test_timeout_race` 和 `unit.net.test_connection_awaiter_registry` 存在已知稳定性问题（分别表现为 core dump 和 `std::logic_error`），需修复后方可声称全部通过。
+当前 build 树中 56/56 测试全部通过（unit × 20 + contract × 21 + integration × 15）。
 
-`v5-alpha` 当前状态：
-- 统一取消原语（`CancellationToken` / `CancellationSource`）、`WhenAny` loser cancel、DNS cancel、显式 `NetError`（`PeerClosed` / `ConnectionReset` / `NotConnected` / `Cancelled` / `TimedOut` / `ResolveFailed`）、`withTimeout()` 已进入主线
-- roadmap 定义的退出信号中，"close/error/cancel 路径不会 double-resume" 仍因 `test_timeout_race` 崩溃而受挑战，v5-alpha 尚未退出
-- 当前剩余工作：修复上述 2 个测试的稳定性问题，以及 README / overview / intent 之间的状态对齐
+### v5-alpha（已完成）
+- ✅ 统一取消原语（`CancellationToken` / `CancellationSource`）、`WhenAny` loser cancel、DNS cancel、显式 `NetError`（`PeerClosed` / `ConnectionReset` / `NotConnected` / `Cancelled` / `TimedOut` / `ResolveFailed`）、`withTimeout()` 已进入主线
+- ✅ 退出信号全部满足：
+  - `asyncReadSome`、`asyncWrite`、`asyncSleep`、DNS resolve、`WhenAny` 共享一致取消模型
+  - 调用者可区分 peer close、timeout、主动 cancel、I/O error
+  - close/error/cancel 路径不会 double-resume 或泄漏协程句柄
 
 ## 下一阶段方向
 

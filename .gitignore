@@ -31,3 +31,5 @@
 *.swo
 .DS_Store
 Thumbs.db
+build-o3-asan/
+build-asan/

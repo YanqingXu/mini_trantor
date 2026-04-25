@@ -2,7 +2,7 @@
 
 ## 1. 文档目标
 
-本文档将“当前项目还缺什么”整理为一份可执行的演进路线图。
+本文档将"当前项目还缺什么"整理为一份可执行的演进路线图。
 
 路线图的目标不是继续堆功能，而是优先补齐：
 
@@ -28,7 +28,7 @@
 
 ## 3. 当前判断
 
-mini-trantor 目前已经具备一个“小而完整”的网络库骨架：
+mini-trantor 目前已经具备一个"小而完整"的网络库骨架：
 
 - Reactor core 已成型
 - one-loop-per-thread 线程模型已成型
@@ -37,7 +37,7 @@ mini-trantor 目前已经具备一个“小而完整”的网络库骨架：
 - 安装与 `find_package` 已具备
 - `unit / contract / integration` 三层测试结构已建立
 
-但作为“长期可演进的 C++ 网络库底座”，仍有几个关键缺口：
+但作为"长期可演进的 C++ 网络库底座"，仍有几个关键缺口：
 
 - 取消语义和错误语义仍未统一
 - 进程级优雅关闭与信号集成尚未闭环
@@ -70,15 +70,14 @@ mini-trantor 目前已经具备一个“小而完整”的网络库骨架：
 退出信号：
 - README、docs、intent 中的版本边界一致
 - 测试数量、语言标准、目录说明与仓库实际内容一致
-- 不再出现“文档声称存在、仓库实际不存在”的目录或能力
+- 不再出现"文档声称存在、仓库实际不存在"的目录或能力
 
 ---
 
-### v5-alpha：统一取消与错误语义
+### v5-alpha：统一取消与错误语义（已完成 ✅）
 
-当前状态（截至 2026-04-07）：
-- 进行中，timeout 统一语义与专项 race coverage 已补齐，剩余工作主要集中在文档与阶段状态对齐
-- 现状判断：取消原语、`SleepAwaitable`、`TcpConnection` awaitable、`WhenAny` loser cancel、DNS resolve cancellation、显式 `NetError`、`TimedOut` 统一 error surface 与 timeout race integration 已进入主线；文档对齐仍未完成
+当前状态：
+- ✅ 已退出（2026-04-25）。退出信号全部满足，56/56 测试通过。
 
 目标：
 - 建立全库一致的 cancellation 和 error surface
@@ -109,7 +108,7 @@ mini-trantor 目前已经具备一个“小而完整”的网络库骨架：
 - [已完成] [mini/net/DnsResolver.h](/home/xyq/mini-trantor/mini/net/DnsResolver.h) / [mini/coroutine/ResolveAwaitable.h](/home/xyq/mini-trantor/mini/coroutine/ResolveAwaitable.h) 已接入 `CancellationToken`，取消结果显式映射为 `NetError::Cancelled`
 
 未完成项：
-- [未完成] 深入说明类文档仍可继续补充 `withTimeout()` / `NetError::TimedOut` 的更多上层使用示例；旧的 “`WhenAny` 败者不取消” 表述已清理
+- [已完成] 深入说明类文档已补充 `withTimeout()` / `NetError::TimedOut` 使用示例（见 README）；旧的 "`WhenAny` 败者不取消" 表述已清理
 
 建议新增模块（按当前实现调整）：
 - [已完成] 不再需要单独新增 `mini/coroutine/CancellationSource.h`，当前已合并进 [mini/coroutine/CancellationToken.h](/home/xyq/mini-trantor/mini/coroutine/CancellationToken.h)
@@ -147,12 +146,12 @@ mini-trantor 目前已经具备一个“小而完整”的网络库骨架：
   - `integration.dns.test_dns_client` 通过
   - `contract.tcp_connection.test_tcp_connection` 通过
   - `integration.coroutine.test_timeout_race` 通过
-- 当前结论：`TcpConnection`、DNS cancel 子线和 timeout 统一语义已恢复为绿，但 v5-alpha 仍未退出，主要缺口集中在文档与阶段状态对齐
+- 当前结论：v5-alpha 已退出。56/56 测试通过，退出信号全部满足。
 
-继续推进清单：
-1. 同步修正文档漂移，至少更新 `WhenAny` 相关文档说明和 README 的阶段状态
-2. 复核是否还需要把 `withTimeout()` 上推到更多上层模块（如未来 HTTP client / handshake timeout）
-3. 继续围绕关闭路径与 timeout/cancel 交错补充更高层集成 coverage（若后续模块引入新的 awaitable）
+继续推进清单（已完成）：
+1. ~~同步修正文档漂移，至少更新 `WhenAny` 相关文档说明和 README 的阶段状态~~ ✅
+2. 复核是否还需要把 `withTimeout()` 上推到更多上层模块（如未来 HTTP client / handshake timeout）— 留待后续阶段
+3. ~~继续围绕关闭路径与 timeout/cancel 交错补充更高层集成 coverage~~ ✅
 
 退出信号：
 - `asyncReadSome`、`asyncWrite`、`asyncSleep`、DNS resolve、`WhenAny` 共享一致取消模型
@@ -164,7 +163,7 @@ mini-trantor 目前已经具备一个“小而完整”的网络库骨架：
 ### v5-beta：优雅关闭与信号集成
 
 目标：
-- 让“服务如何停下来”成为库级 contract，而不是应用层临时约定
+- 让"服务如何停下来"成为库级 contract，而不是应用层临时约定
 
 主要模块：
 - [mini/net/EventLoop.h](/home/xyq/mini-trantor/mini/net/EventLoop.h)
@@ -225,7 +224,7 @@ mini-trantor 目前已经具备一个“小而完整”的网络库骨架：
 ### v5-delta：配置体系与可观测性
 
 目标：
-- 把硬编码参数和“只能靠读代码排查问题”的状态，升级为可配置、可观测的库能力
+- 把硬编码参数和"只能靠读代码排查问题"的状态，升级为可配置、可观测的库能力
 
 主要模块：
 - [mini/net/Connector.h](/home/xyq/mini-trantor/mini/net/Connector.h)
@@ -292,7 +291,7 @@ mini-trantor 目前已经具备一个“小而完整”的网络库骨架：
 ### v5-zeta：工程护栏补齐
 
 目标：
-- 让项目从“能开发”进化到“敢长期维护”
+- 让项目从"能开发"进化到"敢长期维护"
 
 主要文件：
 - [CMakeLists.txt](/home/xyq/mini-trantor/CMakeLists.txt)
@@ -357,7 +356,7 @@ mini-trantor 目前已经具备一个“小而完整”的网络库骨架：
 7. `v6-alpha`
 
 说明：
-- `G0` 与 `v5-alpha` 可以并行，因为它们分别修“认知一致性”和“运行时一致性”
+- `G0` 与 `v5-alpha` 可以并行，因为它们分别修"认知一致性"和"运行时一致性"
 - `v5-beta` 应早于更高层协议扩展，否则关闭语义会在更多模块里复制扩散
 - `v5-gamma` 应早于 HTTP client / 更强 client 生态，否则地址模型会在新增 API 中固化
 - `v5-delta` 与 `v5-zeta` 可以部分并行，但前者更偏库能力，后者更偏工程护栏
@@ -404,4 +403,4 @@ mini-trantor 目前已经具备一个“小而完整”的网络库骨架：
 2. `v5-beta`：优雅关闭与信号集成
 3. `v5-gamma`：IPv6 与地址模型补全
 
-这三项完成后，mini-trantor 作为“通用 C++ 网络库底座”的可信度会明显提升。
+这三项完成后，mini-trantor 作为"通用 C++ 网络库底座"的可信度会明显提升。
