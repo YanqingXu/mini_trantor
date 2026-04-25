@@ -37,6 +37,7 @@ void EventLoopThreadPool::stop() {
     threads_.clear();
     loops_.clear();
     started_ = false;
+    next_ = 0;
 }
 
 EventLoop* EventLoopThreadPool::getNextLoop() {
