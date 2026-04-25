@@ -258,7 +258,16 @@ void testSignalShutdown() {
             // Defer destruction of the SignalWatcher to after the current
             // event handling completes. Deleting it here would destroy the
             // Channel whose handleEvent is still on the call stack.
-            baseLoop->queueInLoop([signalWatcher] {});
+            // The lambda captures signalWatcher by value (shared_ptr copy),
+            // forming a reference cycle: SignalWatcher -> callback_ -> lambda
+            // -> shared_ptr<SignalWatcher>.  We break the cycle by clearing
+            // the callback in the deferred task, which drops the lambda and
+            // thus the last shared_ptr reference.
+            baseLoop->queueInLoop([signalWatcher] {
+                signalWatcher->setSignalCallback({});
+                // After this, the lambda that captured signalWatcher is destroyed,
+                // dropping the last reference. signalWatcher is destroyed here.
+            });
             baseLoop->quit();
             signalHandled.set_value();
         });

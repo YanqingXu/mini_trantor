@@ -62,6 +62,7 @@ TcpServer::TcpServer(EventLoop* loop, const InetAddress& listenAddr, std::string
       acceptor_(std::make_unique<Acceptor>(loop, listenAddr, reusePort)),
       threadPool_(std::make_shared<EventLoopThreadPool>(loop, name_)),
       started_(false),
+      stopped_(false),
       nextConnId_(1),
       highWaterMark_(0),
       backpressureHighWaterMark_(0),
@@ -140,6 +141,7 @@ std::size_t TcpServer::connectionCount() const {
 void TcpServer::start() {
     bool expected = false;
     if (started_.compare_exchange_strong(expected, true)) {
+        stopped_ = false;
         threadPool_->start(threadInitCallback_);
         loop_->runInLoop([this] { acceptor_->listen(); });
     }
@@ -147,6 +149,12 @@ void TcpServer::start() {
 
 void TcpServer::stop() {
     loop_->assertInLoopThread();
+
+    // Idempotent: if already stopped, return immediately.
+    if (stopped_) {
+        return;
+    }
+    stopped_ = true;
 
     // 1. Stop accepting new connections.
     if (acceptor_->listening()) {

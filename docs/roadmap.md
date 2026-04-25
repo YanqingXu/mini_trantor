@@ -160,7 +160,10 @@ mini-trantor 目前已经具备一个"小而完整"的网络库骨架：
 
 ---
 
-### v5-beta：优雅关闭与信号集成（进行中）
+### v5-beta：优雅关闭与信号集成（已完成 ✅）
+
+当前状态：
+- ✅ 已退出（2026-04-25）。退出信号全部满足。
 
 目标：
 - 让"服务如何停下来"成为库级 contract，而不是应用层临时约定
@@ -177,9 +180,10 @@ mini-trantor 目前已经具备一个"小而完整"的网络库骨架：
 
 已完成项：
 - [已完成] [mini/net/Acceptor.h](/home/xyq/mini-trantor/mini/net/Acceptor.h) / [mini/net/Acceptor.cc](/home/xyq/mini-trantor/mini/net/Acceptor.cc) 新增 `stop()` 方法：停止监听 Channel 并设 `listening_ = false`
-- [已完成] [mini/net/EventLoopThreadPool.h](/home/xyq/mini-trantor/mini/net/EventLoopThreadPool.h) / [mini/net/EventLoopThreadPool.cc](/home/xyq/mini-trantor/mini/net/EventLoopThreadPool.cc) 新增 `stop()` 方法：quit 所有 worker loops 并清理线程
-- [已完成] [mini/net/TcpServer.h](/home/xyq/mini-trantor/mini/net/TcpServer.h) / [mini/net/TcpServer.cc](/home/xyq/mini-trantor/mini/net/TcpServer.cc) 新增 `stop()` 方法：停止 Acceptor → forceClose 所有连接 → 停止线程池
-- [已完成] [mini/net/SignalWatcher.h](/home/xyq/mini-trantor/mini/net/SignalWatcher.h) / [mini/net/SignalWatcher.cc](/home/xyq/mini-trantor/mini/net/SignalWatcher.cc) 通过 signalfd + Channel 将 SIGINT/SIGTERM 接入 EventLoop；构造时全局屏蔽 SIGPIPE
+- [已完成] [mini/net/EventLoopThreadPool.h](/home/xyq/mini-trantor/mini/net/EventLoopThreadPool.h) / [mini/net/EventLoopThreadPool.cc](/home/xyq/mini-trantor/mini/net/EventLoopThreadPool.cc) 新增 `stop()` 方法：quit 所有 worker loops 并清理线程，重置 `next_` 为 0
+- [已完成] [mini/net/TcpServer.h](/home/xyq/mini-trantor/mini/net/TcpServer.h) / [mini/net/TcpServer.cc](/home/xyq/mini-trantor/mini/net/TcpServer.cc) 新增 `stop()` 方法：停止 Acceptor → forceClose 所有连接 → 停止线程池；添加显式 `stopped_` 标志保证幂等性
+- [已完成] [mini/net/SignalWatcher.h](/home/xyq/mini-trantor/mini/net/SignalWatcher.h) / [mini/net/SignalWatcher.cc](/home/xyq/mini-trantor/mini/net/SignalWatcher.cc) 通过 signalfd + Channel 将 SIGINT/SIGTERM 接入 EventLoop；构造时全局屏蔽 SIGPIPE；提供 `blockSignals()` / `ignoreSigpipe()` 静态方法
+- [已完成] [mini/net/Socket.h](/home/xyq/mini-trantor/mini/net/Socket.h) / [mini/net/Socket.cc](/home/xyq/mini-trantor/mini/net/Socket.cc) 新增 `releaseFd()` 方法支持 Acceptor::stop() 关闭监听 socket
 
 优先覆盖的现有测试：
 - [tests/contract/event_loop/test_event_loop.cpp](/home/xyq/mini-trantor/tests/contract/event_loop/test_event_loop.cpp)
@@ -189,13 +193,25 @@ mini-trantor 目前已经具备一个"小而完整"的网络库骨架：
 
 已新增测试：
 - [tests/unit/acceptor/test_acceptor_stop.cpp](/home/xyq/mini-trantor/tests/unit/acceptor/test_acceptor_stop.cpp) — Acceptor::stop() 单元测试
+- [tests/unit/event_loop_thread_pool/test_thread_pool_stop.cpp](/home/xyq/mini-trantor/tests/unit/event_loop_thread_pool/test_thread_pool_stop.cpp) — EventLoopThreadPool::stop() 单元测试（8 个场景）
 - [tests/contract/signal/test_signal_handling.cpp](/home/xyq/mini-trantor/tests/contract/signal/test_signal_handling.cpp) — SignalWatcher contract 测试
+- [tests/contract/tcp_server/test_shutdown_ordering.cpp](/home/xyq/mini-trantor/tests/contract/tcp_server/test_shutdown_ordering.cpp) — shutdown ordering contract 测试（6 个场景）
 - [tests/integration/tcp_server/test_graceful_shutdown.cpp](/home/xyq/mini-trantor/tests/integration/tcp_server/test_graceful_shutdown.cpp) — 优雅关闭集成测试
 
 退出信号：
-- SIGINT / SIGTERM 能安全唤醒 owner loop
-- 停止 accept、停止新建连接、关闭已有连接、退出 worker loops 的顺序明确
-- pending functors 与关闭路径不产生悬空 callback
+- ✅ SIGINT / SIGTERM 能安全唤醒 owner loop
+- ✅ 停止 accept、停止新建连接、关闭已有连接、退出 worker loops 的顺序明确
+- ✅ pending functors 与关闭路径不产生悬空 callback
+
+退出信号验证结果：
+- `unit.acceptor.test_acceptor_stop` 通过
+- `unit.event_loop_thread_pool.test_thread_pool_stop` 通过（8 个场景）
+- `contract.signal.test_signal_handling` 通过
+- `contract.tcp_server.test_shutdown_ordering` 通过（6 个场景）
+- `contract.tcp_server.test_tcp_server` 通过
+- `contract.event_loop_thread_pool.test_event_loop_thread_pool` 通过
+- `integration.tcp_server.test_graceful_shutdown` 通过（5 个场景）
+- 既有测试（contract.event_loop、integration.tcp_server、contract.tcp_client）无回归
 
 ---
 

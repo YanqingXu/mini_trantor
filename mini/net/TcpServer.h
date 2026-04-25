@@ -58,6 +58,7 @@ private:
     WriteCompleteCallback writeCompleteCallback_;
     ThreadInitCallback threadInitCallback_;
     std::atomic<bool> started_;
+    bool stopped_;
     int nextConnId_;
     std::size_t highWaterMark_;
     std::size_t backpressureHighWaterMark_;
