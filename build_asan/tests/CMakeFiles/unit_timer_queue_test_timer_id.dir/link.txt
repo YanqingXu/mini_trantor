@@ -1,1 +1,0 @@
-/usr/bin/c++ -fsanitize=address -fno-omit-frame-pointer -g -g -fsanitize=address CMakeFiles/unit_timer_queue_test_timer_id.dir/unit/timer_queue/test_timer_id.cpp.o -o unit_timer_queue_test_timer_id  ../libmini_trantor.a /usr/lib/x86_64-linux-gnu/libssl.so /usr/lib/x86_64-linux-gnu/libcrypto.so 

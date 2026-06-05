@@ -1,1 +1,0 @@
-/usr/bin/c++ -fsanitize=address -fno-omit-frame-pointer -g -g -fsanitize=address CMakeFiles/contract_rpc_test_rpc_server.dir/contract/rpc/test_rpc_server.cpp.o -o contract_rpc_test_rpc_server  ../libmini_trantor.a /usr/lib/x86_64-linux-gnu/libssl.so /usr/lib/x86_64-linux-gnu/libcrypto.so 

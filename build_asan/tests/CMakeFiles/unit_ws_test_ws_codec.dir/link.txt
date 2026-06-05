@@ -1,1 +1,0 @@
-/usr/bin/c++ -fsanitize=address -fno-omit-frame-pointer -g -g -fsanitize=address CMakeFiles/unit_ws_test_ws_codec.dir/unit/ws/test_ws_codec.cpp.o -o unit_ws_test_ws_codec  ../libmini_trantor.a /usr/lib/x86_64-linux-gnu/libssl.so /usr/lib/x86_64-linux-gnu/libcrypto.so 

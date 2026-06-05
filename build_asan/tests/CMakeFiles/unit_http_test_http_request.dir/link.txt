@@ -1,1 +1,0 @@
-/usr/bin/c++ -fsanitize=address -fno-omit-frame-pointer -g -g -fsanitize=address CMakeFiles/unit_http_test_http_request.dir/unit/http/test_http_request.cpp.o -o unit_http_test_http_request  ../libmini_trantor.a /usr/lib/x86_64-linux-gnu/libssl.so /usr/lib/x86_64-linux-gnu/libcrypto.so 

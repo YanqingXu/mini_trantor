@@ -1,1 +1,0 @@
-/usr/bin/c++ -fsanitize=address -fno-omit-frame-pointer -g -g -fsanitize=address CMakeFiles/unit_dns_test_dns_resolver.dir/unit/dns/test_dns_resolver.cpp.o -o unit_dns_test_dns_resolver  ../libmini_trantor.a /usr/lib/x86_64-linux-gnu/libssl.so /usr/lib/x86_64-linux-gnu/libcrypto.so 
