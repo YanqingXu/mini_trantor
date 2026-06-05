@@ -95,12 +95,16 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
   - 为后续 HTTP client 和更多协议扩展清理抽象边界
 - **v5-zeta**：工程护栏补齐 ✅ **已完成**
   - CI（GitHub Actions Debug + Release）、ASan + UBSan、install 校验
-- **v6-alpha**：客户端生态与上层复用能力
-  - 重点推进 HTTP client、RPC 连接池、服务发现等 client-side 复用能力
+- **v6-alpha**：客户端生态 ✅ **进行中**
+  - **Phase A — 基础设施**（并行）：HttpResponse 解析器、RpcPoolOptions
+  - **Phase B — HTTP Client**（并行）：HttpClient 核心（keep-alive 复用 + 协程接口 + Options）、测试
+  - **Phase C — RPC 连接池**（并行）：RpcConnectionPool（round-robin 分发 + lazy 健康检查 + 生命周期）、测试
+  - **Phase D — 收尾**：示例程序（http_client / rpc_pool_client）、文档对齐
+  - 设计意图见 `intents/architecture/v6_alpha_client_ecosystem.intent.md`
 
 如果只优先做最关键的三件事，建议顺序是：
 
-1. `v6-alpha`：HTTP client 和 RPC 连接池（已具备工程护栏，可安全迭代）
+1. `v6-alpha`：HTTP client 和 RPC 连接池 ✅ 进行中
 2. `v6-beta`：服务发现与上层复用能力
 3. `v6-gamma`：更多协议扩展
 
