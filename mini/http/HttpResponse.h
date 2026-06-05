@@ -43,6 +43,7 @@ public:
     void addHeader(std::string key, std::string value) {
         headers_[std::move(key)] = std::move(value);
     }
+    const std::map<std::string, std::string>& headers() const noexcept { return headers_; }
 
     void setBody(std::string body) { body_ = std::move(body); }
     const std::string& body() const noexcept { return body_; }

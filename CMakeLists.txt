@@ -40,6 +40,7 @@ add_library(mini_trantor
     mini/net/ProtocolConnectionAdapter.cc
     mini/http/HttpRequest.cc
     mini/http/HttpResponse.cc
+    mini/http/HttpResponseContext.cc
     mini/http/HttpContext.cc
     mini/http/HttpServer.cc
     mini/ws/WebSocketCodec.cc
