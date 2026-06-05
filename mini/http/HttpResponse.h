@@ -46,6 +46,14 @@ public:
     const std::map<std::string, std::string>& headers() const noexcept { return headers_; }
 
     void setBody(std::string body) { body_ = std::move(body); }
+
+    void reset() {
+        statusCode_ = k200Ok;
+        statusMessage_ = "OK";
+        closeConnection_ = false;
+        headers_.clear();
+        body_.clear();
+    }
     const std::string& body() const noexcept { return body_; }
 
     /// Serialize the response to a string ready for sending.

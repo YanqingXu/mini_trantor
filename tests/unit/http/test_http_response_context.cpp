@@ -228,6 +228,48 @@ int main() {
         std::printf("  PASS: incremental body parsing\n");
     }
 
+    // 12. Malformed Content-Length (non-numeric)
+    {
+        HttpResponseContext ctx;
+        mini::net::Buffer buf;
+        buf.append("HTTP/1.1 200 OK\r\nContent-Length: abc\r\n\r\nbody"sv);
+
+        assert(!ctx.parseResponse(&buf));
+        std::printf("  PASS: malformed Content-Length rejected\n");
+    }
+
+    // 13. Empty buffer input
+    {
+        HttpResponseContext ctx;
+        mini::net::Buffer buf;
+
+        assert(ctx.parseResponse(&buf));  // No data to parse, returns true
+        assert(!ctx.gotAll());             // But not complete
+        std::printf("  PASS: empty buffer handled gracefully\n");
+    }
+
+    // 14. Four-digit status code rejected
+    {
+        HttpResponseContext ctx;
+        mini::net::Buffer buf;
+        buf.append("HTTP/1.1 2000 OK\r\n\r\n"sv);
+
+        assert(!ctx.parseResponse(&buf));
+        std::printf("  PASS: four-digit status code rejected\n");
+    }
+
+    // 15. Connection: CLOSE (uppercase) detected
+    {
+        HttpResponseContext ctx;
+        mini::net::Buffer buf;
+        buf.append("HTTP/1.1 200 OK\r\nConnection: CLOSE\r\n\r\n"sv);
+
+        assert(ctx.parseResponse(&buf));
+        assert(ctx.gotAll());
+        assert(ctx.response().closeConnection());
+        std::printf("  PASS: Connection: CLOSE (uppercase) detected\n");
+    }
+
     std::printf("\nAll HttpResponseContext tests passed.\n");
     return 0;
 }

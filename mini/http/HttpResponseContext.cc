@@ -5,6 +5,15 @@
 #include <cctype>
 #include <stdexcept>
 
+namespace {
+
+std::string toLower(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+    return s;
+}
+
+}  // anonymous namespace
+
 namespace mini::http {
 
 bool HttpResponseContext::parseStatusLine(const char* begin, const char* end) {
@@ -36,6 +45,11 @@ bool HttpResponseContext::parseStatusLine(const char* begin, const char* end) {
     if (p + 3 > end || !std::isdigit(static_cast<unsigned char>(p[0])) ||
         !std::isdigit(static_cast<unsigned char>(p[1])) ||
         !std::isdigit(static_cast<unsigned char>(p[2]))) {
+        return false;
+    }
+
+    // Reject 4-digit status codes
+    if (p + 3 < end && std::isdigit(static_cast<unsigned char>(p[3]))) {
         return false;
     }
 
@@ -86,8 +100,7 @@ bool HttpResponseContext::parseResponse(mini::net::Buffer* buf) {
                     }
 
                     auto connIt = hs.find("Connection");
-                    if (connIt != hs.end() &&
-                        (connIt->second == "close" || connIt->second == "Close")) {
+                    if (connIt != hs.end() && toLower(connIt->second) == "close") {
                         response_.setCloseConnection(true);
                     }
 

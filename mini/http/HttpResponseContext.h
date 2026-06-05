@@ -38,7 +38,8 @@ public:
     void reset() {
         state_ = kExpectStatusLine;
         version_ = HttpVersion::kUnknown;
-        response_ = HttpResponse{true};  // Default close=true; overridden by headers
+        response_.reset();
+        response_.setCloseConnection(true);  // Default close=true; overridden by headers
         contentLength_ = 0;
     }
 
