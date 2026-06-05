@@ -48,6 +48,16 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
   - HTTP / WS / RPC 协议层的 send/shutdown/forceClose/context 操作均改为通过 adapter 完成
   - 新增 7 个 adapter 单元测试 + 4 个 HTTP transport contract 测试，所有 WS / RPC contract + integration 测试无回归
 
+### v5-zeta（已完成）
+- ✅ 工程护栏补齐：CI、sanitizer、install 校验
+  - 新增 `.github/workflows/ci.yml`，Debug（ASan + UBSan）/ Release 双矩阵构建 + 测试
+  - 新增 `cmake/Sanitizers.cmake` 模块，Debug 模式自动启用 AddressSanitizer / UndefinedBehaviorSanitizer
+  - 新增 `intents/architecture/v5_zeta_engineering_guardrails.intent.md` 设计意图文档
+  - 修复 3 个测试：acceptor stop 超时、HTTP server 线程关联断言、awaiter registry segfault
+  - CI 中包含 install + find_package 消费验证
+  - 所有 50+ unit/contract 测试通过，无 regression
+  - Fuzz 入口与 benchmark 暂未纳入（可后续补充）
+
 ## 下一阶段方向
 
 下一阶段不再以零散候选项维护，而是统一收敛到路线图文档：
@@ -83,16 +93,16 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
   - 协议状态通过 `adapter->setProtocolContext()` / `adapter->getProtocolContext()` 存储，与传输层解耦
   - 新增 7 个 ProtocolConnectionAdapter 单元测试 + 4 个 HTTP transport contract 测试，全部通过
   - 为后续 HTTP client 和更多协议扩展清理抽象边界
-- **v5-zeta**：工程护栏补齐
-  - 引入 CI、sanitizer、fuzz、benchmark、install 校验
+- **v5-zeta**：工程护栏补齐 ✅ **已完成**
+  - CI（GitHub Actions Debug + Release）、ASan + UBSan、install 校验
 - **v6-alpha**：客户端生态与上层复用能力
   - 重点推进 HTTP client、RPC 连接池、服务发现等 client-side 复用能力
 
 如果只优先做最关键的三件事，建议顺序是：
 
-1. `v5-zeta`：工程护栏补齐（CI / sanitizer / fuzz）
-2. `v6-alpha`：HTTP client 和 RPC 连接池
-3. `v6-beta`：服务发现与上层复用能力
+1. `v6-alpha`：HTTP client 和 RPC 连接池（已具备工程护栏，可安全迭代）
+2. `v6-beta`：服务发现与上层复用能力
+3. `v6-gamma`：更多协议扩展
 
 ## 核心理念
 对于重要模块，不先写代码，先写：
