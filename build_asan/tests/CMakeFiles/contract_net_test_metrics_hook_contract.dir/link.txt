@@ -1,0 +1,1 @@
+/usr/bin/c++ -fsanitize=address -fno-omit-frame-pointer -g -g -fsanitize=address CMakeFiles/contract_net_test_metrics_hook_contract.dir/contract/net/test_metrics_hook_contract.cpp.o -o contract_net_test_metrics_hook_contract  ../libmini_trantor.a /usr/lib/x86_64-linux-gnu/libssl.so /usr/lib/x86_64-linux-gnu/libcrypto.so 

@@ -1,0 +1,1 @@
+/usr/bin/c++ -fsanitize=address -fno-omit-frame-pointer -g -g -fsanitize=address CMakeFiles/contract_tcp_client_test_tcp_client_ipv6.dir/contract/tcp_client/test_tcp_client_ipv6.cpp.o -o contract_tcp_client_test_tcp_client_ipv6  ../libmini_trantor.a /usr/lib/x86_64-linux-gnu/libssl.so /usr/lib/x86_64-linux-gnu/libcrypto.so 

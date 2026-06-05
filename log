@@ -1,0 +1,3 @@
+20260425 23:49:03.638302 ERROR Connector.cc:249 - Connector::handleError SO_ERROR = 111: Connection refused
+20260425 23:49:27.181341 ERROR SocketsOps.cc:65 - close: Bad file descriptor
+20260425 23:49:27.685537 ERROR SocketsOps.cc:65 - close: Bad file descriptor

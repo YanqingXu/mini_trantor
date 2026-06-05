@@ -1,0 +1,2 @@
+# Empty dependencies file for integration_tcp_client_test_tcp_client.
+# This may be replaced when dependencies are built.
