@@ -233,6 +233,9 @@ void TcpConnection::connectDestroyed() {
         }
         runCloseSequence(shared_from_this(), false);
     }
+    if (impl_->channel->events() != Channel::kNoneEvent) {
+        impl_->channel->disableAll();
+    }
     impl_->channel->remove();
 }
 
