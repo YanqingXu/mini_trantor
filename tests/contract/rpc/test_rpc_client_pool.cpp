@@ -307,10 +307,126 @@ void testStopFailAllPending() {
     assert(failCount.load() == 2);
 }
 
+void testRetryBoundaryManualReconnectWithoutAutoRetry() {
+    const uint16_t port = allocateTestPort();
+    mini::net::EventLoopThread loopThread;
+    auto* loop = loopThread.startLoop();
+
+    mini::rpc::RpcPoolOptions options;
+    options.minConnections = 1;
+    options.maxConnections = 1;
+    options.createOnDemand = false;
+    options.connector.enableRetry = false;
+    options.connector.initRetryDelay = 250ms;
+    options.connector.maxRetryDelay = 500ms;
+
+    auto server = std::make_unique<mini::rpc::RpcServer>(
+        loop, mini::net::InetAddress(port, true), "rpc_pool_contract_retry_boundary_server");
+    server->registerCoroMethod(
+        "SlowEcho",
+        [loop](std::string payload) -> mini::coroutine::Task<std::string> {
+            co_await mini::coroutine::asyncSleep(loop, 120ms);
+            co_return std::string("ok:") + payload;
+        });
+    runOnLoop(loop, [&] {
+        server->start();
+    });
+
+    auto pool = std::make_unique<mini::rpc::RpcConnectionPool>(
+        loop,
+        mini::net::InetAddress("127.0.0.1", port),
+        "rpc_pool_contract_retry_boundary",
+        options);
+    auto* poolRaw = pool.get();
+
+    std::atomic<int> connectedCount{0};
+    std::atomic<int> disconnectedCount{0};
+    std::atomic<int> successCount{0};
+    std::atomic<bool> closeScheduled{false};
+    std::atomic<bool> reconnectWindowCaptured{false};
+    std::atomic<long long> disconnectTimeNs{0};
+    std::atomic<long long> reconnectDelayNs{0};
+    auto toNanos = [](std::chrono::steady_clock::time_point tp) {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   tp.time_since_epoch())
+            .count();
+    };
+    std::promise<void> done;
+    auto doneFuture = done.get_future();
+
+    loop->runInLoop([&] {
+        poolRaw->setConnectionCallback([&](const mini::net::TcpConnectionPtr& conn) {
+            if (conn->connected()) {
+                const auto nowNs = toNanos(std::chrono::steady_clock::now());
+                const auto d = disconnectTimeNs.load();
+                if (!reconnectWindowCaptured.load() && d != 0) {
+                    reconnectDelayNs.store(nowNs - d);
+                    reconnectWindowCaptured.store(true);
+                }
+
+                ++connectedCount;
+                if (!closeScheduled.load()) {
+                    closeScheduled.store(true);
+                    auto connKeepAlive = conn;
+                    loop->runAfter(20ms, [connKeepAlive] {
+                        if (connKeepAlive && connKeepAlive->connected()) {
+                            connKeepAlive->forceClose();
+                        }
+                    });
+                }
+            } else {
+                if (disconnectTimeNs.load() == 0) {
+                    disconnectTimeNs.store(toNanos(std::chrono::steady_clock::now()));
+                }
+                ++disconnectedCount;
+            }
+        });
+
+        poolRaw->start();
+        poolRaw->call("SlowEcho", "first",
+                      [&](const std::string& error, const std::string& resp) {
+                          assert(error.empty());
+                          assert(resp == "ok:first");
+                          if (++successCount == 2) {
+                              done.set_value();
+                          }
+                      },
+                      3000);
+        poolRaw->call("SlowEcho", "second",
+                      [&](const std::string& error, const std::string& resp) {
+                          assert(error.empty());
+                          assert(resp == "ok:second");
+                          if (++successCount == 2) {
+                              done.set_value();
+                          }
+                      },
+                      3000);
+    });
+
+    assert(doneFuture.wait_for(8s) == std::future_status::ready);
+    assert(successCount.load() == 2);
+    assert(connectedCount.load() >= 2);
+    assert(disconnectedCount.load() >= 1);
+    assert(reconnectDelayNs.load() > 0);
+    assert(reconnectDelayNs.load() < 250000000);  // < 250ms
+
+    std::promise<void> cleanupDone;
+    auto cleanupFuture = cleanupDone.get_future();
+    loop->runInLoop([&] {
+        poolRaw->stop();
+        pool.reset();
+        server.reset();
+        loop->quit();
+        cleanupDone.set_value();
+    });
+    cleanupFuture.wait();
+}
+
 int main() {
     testConnectionRebuildVisible();
     testInFlightAndQueuedResendAfterReconnect();
     testStopFailAllPending();
+    testRetryBoundaryManualReconnectWithoutAutoRetry();
     std::printf("All RPC connection pool contract tests passed.\n");
     return 0;
 }
