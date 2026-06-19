@@ -138,7 +138,9 @@ add_mini_test(unit http ${CMAKE_CURRENT_SOURCE_DIR}/unit/http/test_http_context.
 add_mini_test(unit http ${CMAKE_CURRENT_SOURCE_DIR}/unit/http/test_http_response_context.cpp)
 add_mini_test(contract http ${CMAKE_CURRENT_SOURCE_DIR}/contract/http/test_http_server.cpp)
 add_mini_test(contract http ${CMAKE_CURRENT_SOURCE_DIR}/contract/http/test_http_transport_contract.cpp)
+add_mini_test(contract http ${CMAKE_CURRENT_SOURCE_DIR}/contract/http/test_http_client.cpp)
 add_mini_test(integration http ${CMAKE_CURRENT_SOURCE_DIR}/integration/http/test_http_server.cpp)
+add_mini_test(integration http ${CMAKE_CURRENT_SOURCE_DIR}/integration/http/test_http_client.cpp)
 
 # --- WebSocket tests ---
 add_mini_test(unit ws ${CMAKE_CURRENT_SOURCE_DIR}/unit/ws/test_ws_codec.cpp)

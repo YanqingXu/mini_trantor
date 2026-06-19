@@ -270,6 +270,30 @@ int main() {
         std::printf("  PASS: Connection: CLOSE (uppercase) detected\n");
     }
 
+    // 16. Connection: keep-alive keeps connection open
+    {
+        HttpResponseContext ctx;
+        mini::net::Buffer buf;
+        buf.append("HTTP/1.1 200 OK\r\nConnection: keep-alive\r\n\r\n"sv);
+
+        assert(ctx.parseResponse(&buf));
+        assert(ctx.gotAll());
+        assert(!ctx.response().closeConnection());
+        std::printf("  PASS: Connection: keep-alive keeps open\n");
+    }
+
+    // 17. Default is keep-alive when no Connection header in HTTP/1.1
+    {
+        HttpResponseContext ctx;
+        mini::net::Buffer buf;
+        buf.append("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"sv);
+
+        assert(ctx.parseResponse(&buf));
+        assert(ctx.gotAll());
+        assert(!ctx.response().closeConnection());
+        std::printf("  PASS: HTTP/1.1 default keeps open\n");
+    }
+
     std::printf("\nAll HttpResponseContext tests passed.\n");
     return 0;
 }

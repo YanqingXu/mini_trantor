@@ -59,6 +59,7 @@ TcpClient::~TcpClient() {
         // Detach connection from this client: clear close callback,
         // then destroy the connection on its owner loop.
         EventLoop* ioLoop = conn->getLoop();
+        conn->setConnectionCallback({});
         ioLoop->runInLoop([conn] {
             conn->setCloseCallback({});
             conn->connectDestroyed();
@@ -72,6 +73,17 @@ TcpClient::~TcpClient() {
 
 void TcpClient::connect() {
     connect_ = true;
+    if (connector_) {
+        const auto state = connector_->state();
+        if (state == Connector::kConnected) {
+            connector_->restart();
+            return;
+        }
+        if (state == Connector::kConnecting) {
+            return;
+        }
+    }
+
     if (!hostname_.empty() && !connector_) {
         resolveAndConnect();
     } else {

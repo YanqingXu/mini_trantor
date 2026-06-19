@@ -5,11 +5,39 @@
 #include <cctype>
 #include <stdexcept>
 
+
 namespace {
 
 std::string toLower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), ::tolower);
     return s;
+}
+
+std::string trim(std::string s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+        s.erase(s.begin());
+    }
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+        s.pop_back();
+    }
+    return s;
+}
+
+bool hasTokenClose(const std::string& value) {
+    auto text = toLower(trim(value));
+    std::size_t start = 0;
+    while (start < text.size()) {
+        auto comma = text.find(',', start);
+        auto token = trim(text.substr(start, comma == std::string::npos ? std::string::npos : comma - start));
+        if (token == "close") {
+            return true;
+        }
+        if (comma == std::string::npos) {
+            break;
+        }
+        start = comma + 1;
+    }
+    return false;
 }
 
 }  // anonymous namespace
@@ -93,14 +121,22 @@ bool HttpResponseContext::parseResponse(mini::net::Buffer* buf) {
                     buf->retrieveUntil(crlf + 2);
 
                     const auto& hs = response_.headers();
-                    auto it = hs.find("Content-Length");
-                    if (it != hs.end()) {
-                        try { contentLength_ = std::stoull(it->second); }
-                        catch (...) { return false; }
+                    for (const auto& [key, value] : hs) {
+                        const auto lowerKey = toLower(key);
+                        if (lowerKey == "content-length") {
+                            try {
+                                contentLength_ = std::stoull(value);
+                            } catch (...) {
+                                return false;
+                            }
+                        } else if (lowerKey == "connection") {
+                            response_.setCloseConnection(hasTokenClose(value));
+                        }
                     }
 
-                    auto connIt = hs.find("Connection");
-                    if (connIt != hs.end() && toLower(connIt->second) == "close") {
+                    if (version_ == HttpVersion::kHttp10 &&
+                        response_.headers().find("Connection") == response_.headers().end() &&
+                        response_.headers().find("connection") == response_.headers().end()) {
                         response_.setCloseConnection(true);
                     }
 
@@ -111,12 +147,24 @@ bool HttpResponseContext::parseResponse(mini::net::Buffer* buf) {
                     if (colon == crlf) return false;
 
                     std::string key(buf->peek(), colon);
+                    std::string value;
                     const char* valStart = colon + 1;
-                    while (valStart < crlf && *valStart == ' ') ++valStart;
+                    while (valStart < crlf && std::isspace(static_cast<unsigned char>(*valStart))) ++valStart;
                     const char* valEnd = crlf;
-                    while (valEnd > valStart && *(valEnd - 1) == ' ') --valEnd;
+                    while (valEnd > valStart && std::isspace(static_cast<unsigned char>(*(valEnd - 1)))) --valEnd;
+                    value.append(valStart, valEnd);
 
-                    response_.addHeader(std::move(key), std::string(valStart, valEnd));
+                    const auto lowerKey = toLower(trim(key));
+                    const auto normalizedValue = trim(value);
+                    if (lowerKey == "connection") {
+                        response_.setCloseConnection(hasTokenClose(normalizedValue));
+                    } else if (lowerKey == "content-length") {
+                        try { contentLength_ = std::stoull(normalizedValue); }
+                        catch (...) { return false; }
+                    }
+
+                    key = trim(key);
+                    response_.addHeader(std::move(key), normalizedValue);
                     buf->retrieveUntil(crlf + 2);
                 }
             }

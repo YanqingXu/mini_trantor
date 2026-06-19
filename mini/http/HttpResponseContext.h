@@ -39,7 +39,7 @@ public:
         state_ = kExpectStatusLine;
         version_ = HttpVersion::kUnknown;
         response_.reset();
-        response_.setCloseConnection(true);  // Default close=true; overridden by headers
+        response_.setCloseConnection(false);
         contentLength_ = 0;
     }
 
@@ -50,7 +50,7 @@ private:
 
     ParseState state_{kExpectStatusLine};
     HttpVersion version_{HttpVersion::kUnknown};
-    HttpResponse response_{true};
+    HttpResponse response_{false};
     std::size_t contentLength_{0};
 
     static constexpr std::size_t kMaxHeaderSize = 8192;
