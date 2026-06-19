@@ -42,6 +42,10 @@ public:
     RpcClient(mini::net::EventLoop* loop,
               const mini::net::InetAddress& serverAddr,
               std::string name);
+    RpcClient(mini::net::EventLoop* loop,
+              const mini::net::InetAddress& serverAddr,
+              std::string name,
+              mini::net::TcpClientOptions options);
 
     void connect();
     void disconnect();

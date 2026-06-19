@@ -151,6 +151,7 @@ add_mini_test(integration ws ${CMAKE_CURRENT_SOURCE_DIR}/integration/ws/test_ws_
 # --- RPC tests ---
 add_mini_test(unit rpc ${CMAKE_CURRENT_SOURCE_DIR}/unit/rpc/test_rpc_codec.cpp)
 add_mini_test(contract rpc ${CMAKE_CURRENT_SOURCE_DIR}/contract/rpc/test_rpc_server.cpp)
+add_mini_test(contract rpc ${CMAKE_CURRENT_SOURCE_DIR}/contract/rpc/test_rpc_client_pool.cpp)
 add_mini_test(integration rpc ${CMAKE_CURRENT_SOURCE_DIR}/integration/rpc/test_rpc.cpp)
 
 # --- IPv6 dual-stack tests (v5-gamma) ---

@@ -52,6 +52,7 @@ add_library(mini_trantor
     mini/rpc/RpcChannel.cc
     mini/rpc/RpcServer.cc
     mini/rpc/RpcClient.cc
+    mini/rpc/RpcConnectionPool.cc
 )
 
 add_library(mini_trantor::mini_trantor ALIAS mini_trantor)

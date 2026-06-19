@@ -12,8 +12,15 @@ namespace mini::rpc {
 RpcClient::RpcClient(mini::net::EventLoop* loop,
                      const mini::net::InetAddress& serverAddr,
                      std::string name)
+    : RpcClient(loop, serverAddr, std::move(name), mini::net::TcpClientOptions{}) {
+}
+
+RpcClient::RpcClient(mini::net::EventLoop* loop,
+                     const mini::net::InetAddress& serverAddr,
+                     std::string name,
+                     mini::net::TcpClientOptions options)
     : loop_(loop),
-      client_(loop, serverAddr, std::move(name)) {
+      client_(loop, serverAddr, std::move(name), std::move(options)) {
     client_.setConnectionCallback(
         [this](const mini::net::TcpConnectionPtr& conn) { onConnection(conn); });
     client_.setMessageCallback(
