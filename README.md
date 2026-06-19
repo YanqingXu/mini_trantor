@@ -32,7 +32,7 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - ✅ `v4-gamma`：RPC 支持完成 — RpcCodec（长度前缀二进制帧编解码）/ RpcChannel（per-connection 请求-响应关联 + 超时管理）/ RpcServer（TcpServer 协议适配器 + method 注册分发）/ RpcClient（TcpClient 包装 + callback 和 coroutine 双模式调用）
 - ✅ `v4-delta`：协程版 RPC 完成 — RpcServer `registerCoroMethod()`（协程返回值即响应，异常即错误）/ RpcClient `coroCall()`（返回 payload 直接，错误抛 `RpcError`）/ `dispatchCoroHandler` 安全桥接（free function 保证帧生命周期）/ 支持 handler 内 `co_await` 异步操作（SleepAwaitable 等）
 
-当前 build 树中 66/66 测试全部通过（unit × 24 + contract × 26 + integration × 16）。
+当前 build 树中 72/72 测试全部通过（unit × 25 + contract × 29 + integration × 16）。
 
 ### v5-alpha（已完成）
 - ✅ 统一取消原语（`CancellationToken` / `CancellationSource`）、`WhenAny` loser cancel、DNS cancel、显式 `NetError`（`PeerClosed` / `ConnectionReset` / `NotConnected` / `Cancelled` / `TimedOut` / `ResolveFailed`）、`withTimeout()` 已进入主线
@@ -55,7 +55,7 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
   - 新增 `intents/architecture/v5_zeta_engineering_guardrails.intent.md` 设计意图文档
   - 修复 3 个测试：acceptor stop 超时、HTTP server 线程关联断言、awaiter registry segfault
   - CI 中包含 install + find_package 消费验证
-  - 所有 50+ unit/contract 测试通过，无 regression
+  - 所有现有 72 个 CTest 用例通过（unit ×25 + contract ×29 + integration ×16），无 regression
   - Fuzz 入口与 benchmark 暂未纳入（可后续补充）
 
 ## 下一阶段方向
@@ -96,16 +96,16 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - **v5-zeta**：工程护栏补齐 ✅ **已完成**
   - CI（GitHub Actions Debug + Release）、ASan + UBSan、install 校验
 - **v6-alpha**：客户端生态 ✅ **进行中**
-  - **Phase A — 基础设施**（并行）：HttpResponse 解析器、RpcPoolOptions
-  - **Phase B — HTTP Client**（并行）：HttpClient 核心（keep-alive 复用 + 协程接口 + Options）、测试
-  - **Phase C — RPC 连接池**（并行）：RpcConnectionPool（round-robin 分发 + lazy 健康检查 + 生命周期）、测试
-  - **Phase D — 收尾**：示例程序（http_client / rpc_pool_client）、文档对齐
+  - **Phase A — 基础设施**（并行）：`HttpResponseContext` + `RpcPoolOptions`（已完成）
+  - **Phase B — HTTP Client**（并行）：`HttpClient` 已实现（keep-alive 复用、连接重建、协程 API、超时）并有 contract + integration 回归
+  - **Phase C — RPC 连接池**（并行）：`RpcConnectionPool` 已实现（round-robin 分发、生命周期、重建续发、停止 fail-all pending）并有 contract 覆盖
+  - **Phase D — 收尾**：`examples/http_client.cpp`、`examples/rpc_pool_client.cpp` 及示例/快速上手文档（未完成）
   - 设计意图见 `intents/architecture/v6_alpha_client_ecosystem.intent.md`
 
 如果只优先做最关键的三件事，建议顺序是：
 
 1. `v6-alpha`：HTTP client 和 RPC 连接池 ✅ 进行中
-2. `v6-beta`：服务发现与上层复用能力
+2. `v6-beta`：服务发现与上层复用能力（下一步）
 3. `v6-gamma`：更多协议扩展
 
 ## 核心理念
@@ -121,9 +121,9 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - `intents/`: 设计意图与模块宪法（architecture / modules / usecases）
 - `rules/`: 项目级约束规则（线程亲和、所有权、测试、编码、Review）
 - `mini/net/`: Reactor 核心实现（EventLoop、Channel、Poller、EPollPoller、Buffer、Callbacks、TcpConnection、TcpServer、TcpClient、Connector、Acceptor、InetAddress、Socket、SocketsOps、TimerQueue、TimerId、EventLoopThread、EventLoopThreadPool、TlsContext、DnsResolver、NetError、SignalWatcher、`detail/` 内部辅助模块等）
-- `mini/http/`: HTTP/1.1 协议层（HttpRequest、HttpResponse、HttpContext、HttpServer）
+- `mini/http/`: HTTP/1.1 协议层（HttpRequest、HttpResponse、HttpResponseContext、HttpClient、HttpContext、HttpServer）
 - `mini/ws/`: WebSocket 协议层（WebSocketCodec、WebSocketHandshake、WebSocketConnection、WebSocketServer）
-- `mini/rpc/`: RPC 协议层（RpcCodec、RpcChannel、RpcServer、RpcClient）
+- `mini/rpc/`: RPC 协议层（RpcCodec、RpcChannel、RpcServer、RpcClient、RpcPoolOptions、RpcConnectionPool）
 - `mini/coroutine/`: 协程桥接层（`Task.h` 协程结果对象、`CancellationToken.h` 取消原语、`SleepAwaitable.h` 定时器 awaitable、`WhenAll.h` 多任务并发等待、`WhenAny.h` 多任务竞争等待、`Timeout.h` 统一 timeout 包装、`ResolveAwaitable.h` DNS 解析 awaitable）
 - `mini/base/`: 基础工具（Timestamp、noncopyable、Logger）
 - `tests/`: 按 `unit/`、`contract/`、`integration/` 分层的测试
@@ -391,3 +391,37 @@ try {
 
 loop.loop();
 ```
+
+## 附录：架构审计报告（2026-06-20）
+
+本节按 “结构正确胜过功能堆砌” 的视角，基于当前仓库状态给出工程可持续性评估。
+
+### 1) 技术架构高度
+
+- Reactor 内核（`EventLoop / Poller / Channel / TimerQueue`）与线程模型（one-loop-per-thread）已经形成统一的基础语义：I/O、定时器与回调都在所属 `EventLoop` 线程执行。
+- `EventLoopThread / EventLoopThreadPool` 的分发与生命周期链路稳定，配合 `TcpServer / TcpClient / Connector`，使得跨线程访问有明确的单一入口（`runInLoop / queueInLoop`）。
+- 协程桥接（`Task<T>`、`CancellationToken`、`SleepAwaitable`、`WhenAny/WhenAll`）无独立调度器，恢复操作回归 `EventLoop`，没有绕开底层事件循环。
+- v6-alpha 客户端生态（`HttpClient` + `RpcConnectionPool`）在协议特性之外，优先复用了现有连接与回收机制，保持了“可复用而非并行体系”原则。
+
+### 2) 工程化与方法论（v5-zeta 价值）
+
+- CI 已覆盖 `Debug` 与 `Release` 双矩阵；Debug 路径接入 `ASan/UBSan`，并带来生命周期与指针错误的前置暴露能力。
+- 安装链路已通过 `cmake --install` + `find_package` 验证，消费方可用性从“编译”提升为“可集成”。
+- `72` 个测试（unit/contract/integration）分层结构完整，且新增契约变更持续通过测试闭环验证。
+- 仍需跟进的 gap：`v5-zeta` 目标中“fuzz/benchmark 入口”仍未在仓库落地（当前更偏守护层面的基本闭环，协议稳定性可再加一层鲁棒性保险）。
+
+### 3) 功能完备性评估（HTTP/WS/RPC/TLS/DNS + v6-alpha）
+
+- HTTP/1.1、WebSocket、RPC、TLS、DNS、IPv6 已具备可运行主链路，能支撑真实服务中的核心交互路径。
+- v6-alpha 已形成可复用客户端核心能力：HTTP 请求生命周期、连接重建、keep-alive 与超时；RPC 具备连接池、续发与 `stop` fail-all。
+- 目前的边界是“轻量客户端化”：尚未覆盖服务发现、负载均衡、HTTP/2、网关高级协议策略（如 redirect/cookie/chunked 等），因此适合用作核心网联接层，不宜直接宣称全场景网关替代。
+
+### 4) 未来演进潜力与挑战
+
+- `v6-beta`（服务发现与上层复用）顺序合理，建议优先补齐 endpoint/健康语义与连接池策略的契约化。
+- `v7` 的 HTTP/2 可行，但会带来流语义与 head-of-line、状态机复杂度，必须先固化 `v6` 客户端复用协议边界再推进。
+- 负载均衡方向可循序渐进：先从池内策略与可观测指标入手，避免全局状态打破 one-loop-per-thread 所有权边界。
+
+### 5) 结论
+
+当前阶段最值得肯定的是：库已从“能跑”进入“可持续维护”的状态，尤其在生命周期、线程亲和、取消/错误语义、测试契约方面形成了统一语言。下一步应继续遵循 Intent 先行与契约优先：先补齐客户端生态缺口与关键边界契约，再扩展高级协议与服务治理能力，可显著降低后续重构成本。
