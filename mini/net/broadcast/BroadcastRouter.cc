@@ -3,6 +3,7 @@
 #include "mini/net/TcpConnection.h"
 
 #include <mutex>
+#include <utility>
 
 namespace mini::net::broadcast {
 
@@ -11,54 +12,145 @@ BroadcastRouter::BroadcastRouter(EventLoop* baseLoop)
 }
 
 void BroadcastRouter::registerConnection(const TcpConnectionPtr& connection) {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (!connection) {
         return;
     }
-    if (!baseLoop_) {
+    registerSession(connection->name(), connection);
+}
+
+void BroadcastRouter::registerSession(std::string sessionId, const TcpConnectionPtr& connection) {
+    if (!baseLoop_ || sessionId.empty() || !connection) {
         return;
     }
 
-    std::string sessionId = connection->name();
-    auto loop = connection->getLoop();
     auto weakConnection = std::weak_ptr<TcpConnection>(connection);
-
+    auto* loop = connection->getLoop();
     if (baseLoop_->isInLoopThread()) {
-        registerInLoop(std::move(sessionId), std::move(weakConnection), loop);
+        registerInLoop(std::move(sessionId), std::move(weakConnection), {}, loop);
         return;
     }
 
     baseLoop_->queueInLoop([this,
                             sessionId = std::move(sessionId),
                             weakConnection = std::move(weakConnection),
-                            loop = loop] {
-        registerInLoop(std::move(sessionId), std::move(weakConnection), loop);
+                            loop] {
+        registerInLoop(std::move(sessionId), std::move(weakConnection), {}, loop);
     });
 }
 
+void BroadcastRouter::registerEndpoint(
+    std::string sessionId,
+    std::shared_ptr<transport::ITransportEndpoint> endpoint) {
+    if (!baseLoop_ || sessionId.empty() || !endpoint) {
+        return;
+    }
+
+    auto* loop = endpoint->getLoop();
+    auto weakEndpoint = std::weak_ptr<transport::ITransportEndpoint>(endpoint);
+    if (baseLoop_->isInLoopThread()) {
+        registerInLoop(std::move(sessionId), {}, std::move(weakEndpoint), loop);
+        return;
+    }
+
+    baseLoop_->queueInLoop([this,
+                            sessionId = std::move(sessionId),
+                            weakEndpoint = std::move(weakEndpoint),
+                            loop] {
+        registerInLoop(std::move(sessionId), {}, std::move(weakEndpoint), loop);
+    });
+}
+
+void BroadcastRouter::registerEndpoint(
+    transport::TransportSessionId sessionId,
+    std::shared_ptr<transport::ITransportEndpoint> endpoint) {
+    registerEndpoint(transportSessionKey(sessionId), std::move(endpoint));
+}
+
 void BroadcastRouter::deregisterConnection(const TcpConnectionPtr& connection) {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (!connection) {
         return;
     }
-    if (!baseLoop_) {
-        return;
-    }
-
-    std::string sessionId = connection->name();
-
-    if (baseLoop_->isInLoopThread()) {
-        deregisterInLoop(std::move(sessionId));
-        return;
-    }
-
-    baseLoop_->queueInLoop([this, sessionId = std::move(sessionId)] { deregisterInLoop(sessionId); });
+    deregisterSession(connection->name());
 }
 
-void BroadcastRouter::registerInLoop(std::string sessionId,
-                                    std::weak_ptr<TcpConnection> connection,
-                                    EventLoop* loop) {
+void BroadcastRouter::deregisterSession(std::string_view sessionId) {
+    if (!baseLoop_ || sessionId.empty()) {
+        return;
+    }
+
+    auto id = std::string(sessionId);
+    if (baseLoop_->isInLoopThread()) {
+        deregisterInLoop(std::move(id));
+        return;
+    }
+
+    baseLoop_->queueInLoop([this, id = std::move(id)] { deregisterInLoop(id); });
+}
+
+void BroadcastRouter::joinGroup(std::string sessionId, std::string groupId) {
+    if (!baseLoop_ || sessionId.empty() || groupId.empty()) {
+        return;
+    }
+    if (baseLoop_->isInLoopThread()) {
+        joinBucketInLoop(std::move(sessionId), std::move(groupId), sessionsByGroup_, groupsBySession_);
+        return;
+    }
+    baseLoop_->queueInLoop([this, sessionId = std::move(sessionId), groupId = std::move(groupId)] {
+        joinBucketInLoop(std::move(sessionId), std::move(groupId), sessionsByGroup_, groupsBySession_);
+    });
+}
+
+void BroadcastRouter::leaveGroup(std::string_view sessionId, std::string_view groupId) {
+    if (!baseLoop_ || sessionId.empty() || groupId.empty()) {
+        return;
+    }
+    auto session = std::string(sessionId);
+    auto group = std::string(groupId);
+    if (baseLoop_->isInLoopThread()) {
+        leaveBucketInLoop(std::move(session), std::move(group), sessionsByGroup_, groupsBySession_);
+        return;
+    }
+    baseLoop_->queueInLoop([this, session = std::move(session), group = std::move(group)] {
+        leaveBucketInLoop(std::move(session), std::move(group), sessionsByGroup_, groupsBySession_);
+    });
+}
+
+void BroadcastRouter::joinAoi(std::string sessionId, std::string aoiId) {
+    if (!baseLoop_ || sessionId.empty() || aoiId.empty()) {
+        return;
+    }
+    if (baseLoop_->isInLoopThread()) {
+        joinBucketInLoop(std::move(sessionId), std::move(aoiId), sessionsByAoi_, aoisBySession_);
+        return;
+    }
+    baseLoop_->queueInLoop([this, sessionId = std::move(sessionId), aoiId = std::move(aoiId)] {
+        joinBucketInLoop(std::move(sessionId), std::move(aoiId), sessionsByAoi_, aoisBySession_);
+    });
+}
+
+void BroadcastRouter::leaveAoi(std::string_view sessionId, std::string_view aoiId) {
+    if (!baseLoop_ || sessionId.empty() || aoiId.empty()) {
+        return;
+    }
+    auto session = std::string(sessionId);
+    auto aoi = std::string(aoiId);
+    if (baseLoop_->isInLoopThread()) {
+        leaveBucketInLoop(std::move(session), std::move(aoi), sessionsByAoi_, aoisBySession_);
+        return;
+    }
+    baseLoop_->queueInLoop([this, session = std::move(session), aoi = std::move(aoi)] {
+        leaveBucketInLoop(std::move(session), std::move(aoi), sessionsByAoi_, aoisBySession_);
+    });
+}
+
+void BroadcastRouter::registerInLoop(
+    std::string sessionId,
+    std::weak_ptr<TcpConnection> connection,
+    std::weak_ptr<transport::ITransportEndpoint> endpoint,
+    EventLoop* loop) {
     baseLoop_->assertInLoopThread();
+    std::lock_guard<std::mutex> lock(mutex_);
+
     auto existing = sessionById_.find(sessionId);
     if (existing != sessionById_.end()) {
         const auto oldLoop = existing->second.loop;
@@ -71,12 +163,14 @@ void BroadcastRouter::registerInLoop(std::string sessionId,
         }
     }
 
-    sessionById_[sessionId] = {std::move(connection), loop};
+    sessionById_[sessionId] = {std::move(connection), std::move(endpoint), loop};
     sessionsByLoop_[loop].insert(sessionId);
 }
 
 void BroadcastRouter::deregisterInLoop(std::string sessionId) {
     baseLoop_->assertInLoopThread();
+    std::lock_guard<std::mutex> lock(mutex_);
+
     auto sessionIt = sessionById_.find(sessionId);
     if (sessionIt == sessionById_.end()) {
         return;
@@ -85,17 +179,72 @@ void BroadcastRouter::deregisterInLoop(std::string sessionId) {
     const auto sessionLoop = sessionIt->second.loop;
     sessionById_.erase(sessionIt);
 
-    if (sessionLoop == nullptr) {
-        return;
+    if (sessionLoop != nullptr) {
+        auto loopIt = sessionsByLoop_.find(sessionLoop);
+        if (loopIt != sessionsByLoop_.end()) {
+            loopIt->second.erase(sessionId);
+            pruneLoopBucket(sessionLoop);
+        }
     }
 
-    auto loopIt = sessionsByLoop_.find(sessionLoop);
-    if (loopIt == sessionsByLoop_.end()) {
+    auto eraseFromBuckets = [&](auto& sessionsByBucket, auto& bucketsBySession) {
+        auto bucketIt = bucketsBySession.find(sessionId);
+        if (bucketIt == bucketsBySession.end()) {
+            return;
+        }
+        for (const auto& bucket : bucketIt->second) {
+            auto membersIt = sessionsByBucket.find(bucket);
+            if (membersIt == sessionsByBucket.end()) {
+                continue;
+            }
+            membersIt->second.erase(sessionId);
+            if (membersIt->second.empty()) {
+                sessionsByBucket.erase(membersIt);
+            }
+        }
+        bucketsBySession.erase(bucketIt);
+    };
+    eraseFromBuckets(sessionsByGroup_, groupsBySession_);
+    eraseFromBuckets(sessionsByAoi_, aoisBySession_);
+}
+
+void BroadcastRouter::joinBucketInLoop(
+    std::string sessionId,
+    std::string bucketId,
+    std::unordered_map<std::string, std::unordered_set<std::string>>& sessionsByBucket,
+    std::unordered_map<std::string, std::unordered_set<std::string>>& bucketsBySession) {
+    baseLoop_->assertInLoopThread();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (sessionById_.find(sessionId) == sessionById_.end()) {
         return;
     }
+    sessionsByBucket[bucketId].insert(sessionId);
+    bucketsBySession[sessionId].insert(std::move(bucketId));
+}
 
-    loopIt->second.erase(sessionId);
-    pruneLoopBucket(sessionLoop);
+void BroadcastRouter::leaveBucketInLoop(
+    std::string sessionId,
+    std::string bucketId,
+    std::unordered_map<std::string, std::unordered_set<std::string>>& sessionsByBucket,
+    std::unordered_map<std::string, std::unordered_set<std::string>>& bucketsBySession) {
+    baseLoop_->assertInLoopThread();
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    auto membersIt = sessionsByBucket.find(bucketId);
+    if (membersIt != sessionsByBucket.end()) {
+        membersIt->second.erase(sessionId);
+        if (membersIt->second.empty()) {
+            sessionsByBucket.erase(membersIt);
+        }
+    }
+
+    auto bucketsIt = bucketsBySession.find(sessionId);
+    if (bucketsIt != bucketsBySession.end()) {
+        bucketsIt->second.erase(bucketId);
+        if (bucketsIt->second.empty()) {
+            bucketsBySession.erase(bucketsIt);
+        }
+    }
 }
 
 std::vector<BroadcastRouter::LoopBatch> BroadcastRouter::route(const SessionIds& sessionIds) const {
@@ -104,46 +253,25 @@ std::vector<BroadcastRouter::LoopBatch> BroadcastRouter::route(const SessionIds&
     }
     baseLoop_->assertInLoopThread();
     std::lock_guard<std::mutex> lock(mutex_);
+    return routeLocked(sessionIds);
+}
 
-    std::vector<LoopBatch> result;
-    if (sessionIds.empty()) {
-        return result;
+std::vector<BroadcastRouter::LoopBatch> BroadcastRouter::routeGroup(std::string_view groupId) const {
+    if (!baseLoop_) {
+        return {};
     }
+    baseLoop_->assertInLoopThread();
+    std::lock_guard<std::mutex> lock(mutex_);
+    return routeBucketLocked(groupId, sessionsByGroup_);
+}
 
-    std::unordered_set<std::string_view> dedup;
-    dedup.reserve(sessionIds.size());
-
-    std::unordered_map<EventLoop*, std::size_t> indexByLoop;
-    indexByLoop.reserve(sessionById_.size());
-
-    for (const auto& id : sessionIds) {
-        const auto idView = std::string_view(id);
-        if (id.empty() || dedup.find(idView) != dedup.end()) {
-            continue;
-        }
-        dedup.insert(idView);
-
-        auto it = sessionById_.find(id);
-        if (it == sessionById_.end()) {
-            continue;
-        }
-
-        auto session = it->second.connection.lock();
-        if (!session) {
-            continue;
-        }
-
-        auto* loop = it->second.loop;
-        auto idxIt = indexByLoop.find(loop);
-        if (idxIt == indexByLoop.end()) {
-            indexByLoop.emplace(loop, result.size());
-            result.push_back(LoopBatch{loop, {session}});
-        } else {
-            result[idxIt->second].connections.push_back(session);
-        }
+std::vector<BroadcastRouter::LoopBatch> BroadcastRouter::routeAoi(std::string_view aoiId) const {
+    if (!baseLoop_) {
+        return {};
     }
-
-    return result;
+    baseLoop_->assertInLoopThread();
+    std::lock_guard<std::mutex> lock(mutex_);
+    return routeBucketLocked(aoiId, sessionsByAoi_);
 }
 
 std::vector<BroadcastRouter::LoopBatch> BroadcastRouter::routeAll() const {
@@ -153,37 +281,84 @@ std::vector<BroadcastRouter::LoopBatch> BroadcastRouter::routeAll() const {
     baseLoop_->assertInLoopThread();
     std::lock_guard<std::mutex> lock(mutex_);
 
+    SessionIds all;
+    all.reserve(sessionById_.size());
+    for (const auto& [id, record] : sessionById_) {
+        (void)record;
+        all.push_back(id);
+    }
+    return routeLocked(all);
+}
+
+std::vector<BroadcastRouter::LoopBatch>
+BroadcastRouter::routeLocked(const SessionIds& sessionIds) const {
     std::vector<LoopBatch> result;
-    result.reserve(sessionsByLoop_.size());
+    if (sessionIds.empty()) {
+        return result;
+    }
+
+    std::unordered_set<std::string> dedup;
+    dedup.reserve(sessionIds.size());
 
     std::unordered_map<EventLoop*, std::size_t> indexByLoop;
-    indexByLoop.reserve(sessionsByLoop_.size());
+    indexByLoop.reserve(sessionById_.size());
 
-    for (const auto& [loop, ids] : sessionsByLoop_) {
-        auto idxIt = indexByLoop.find(loop);
-        auto idx = idxIt;
-        if (idxIt == indexByLoop.end()) {
-            const auto insertedIndex = result.size();
-            indexByLoop.emplace(loop, insertedIndex);
-            result.push_back(LoopBatch{loop, {}});
-            idx = indexByLoop.find(loop);
+    for (const auto& id : sessionIds) {
+        if (id.empty() || !dedup.insert(id).second) {
+            continue;
         }
 
-        auto& batch = result[idx->second];
-        for (const auto& id : ids) {
-            auto sessionIt = sessionById_.find(id);
-            if (sessionIt == sessionById_.end()) {
-                continue;
-            }
+        auto it = sessionById_.find(id);
+        if (it == sessionById_.end()) {
+            continue;
+        }
 
-            auto session = sessionIt->second.connection.lock();
-            if (session) {
-                batch.connections.push_back(session);
-            }
+        auto endpoint = it->second.endpoint.lock();
+        auto connection = it->second.connection.lock();
+        if (!endpoint && !connection) {
+            continue;
+        }
+
+        auto* loop = endpoint ? endpoint->getLoop() : it->second.loop;
+        if (loop == nullptr && connection) {
+            loop = connection->getLoop();
+        }
+        if (loop == nullptr) {
+            continue;
+        }
+
+        auto idxIt = indexByLoop.find(loop);
+        if (idxIt == indexByLoop.end()) {
+            indexByLoop.emplace(loop, result.size());
+            result.push_back(LoopBatch{loop, {}, {}});
+            idxIt = indexByLoop.find(loop);
+        }
+
+        auto& batch = result[idxIt->second];
+        if (endpoint) {
+            batch.endpoints.push_back(std::move(endpoint));
+        } else {
+            batch.connections.push_back(std::move(connection));
         }
     }
 
     return result;
+}
+
+std::vector<BroadcastRouter::LoopBatch> BroadcastRouter::routeBucketLocked(
+    std::string_view bucketId,
+    const std::unordered_map<std::string, std::unordered_set<std::string>>& sessionsByBucket) const {
+    auto bucketIt = sessionsByBucket.find(std::string(bucketId));
+    if (bucketIt == sessionsByBucket.end()) {
+        return {};
+    }
+
+    SessionIds sessionIds;
+    sessionIds.reserve(bucketIt->second.size());
+    for (const auto& id : bucketIt->second) {
+        sessionIds.push_back(id);
+    }
+    return routeLocked(sessionIds);
 }
 
 std::size_t BroadcastRouter::sessionCount() const {
@@ -198,6 +373,22 @@ bool BroadcastRouter::hasSession(std::string_view sessionId) const {
     return sessionById_.find(std::string(sessionId)) != sessionById_.end();
 }
 
+bool BroadcastRouter::hasGroupMember(std::string_view groupId, std::string_view sessionId) const {
+    baseLoop_->assertInLoopThread();
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = sessionsByGroup_.find(std::string(groupId));
+    return it != sessionsByGroup_.end() &&
+           it->second.find(std::string(sessionId)) != it->second.end();
+}
+
+bool BroadcastRouter::hasAoiMember(std::string_view aoiId, std::string_view sessionId) const {
+    baseLoop_->assertInLoopThread();
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = sessionsByAoi_.find(std::string(aoiId));
+    return it != sessionsByAoi_.end() &&
+           it->second.find(std::string(sessionId)) != it->second.end();
+}
+
 std::size_t BroadcastRouter::loopBucketCount() const {
     baseLoop_->assertInLoopThread();
     std::lock_guard<std::mutex> lock(mutex_);
@@ -205,7 +396,6 @@ std::size_t BroadcastRouter::loopBucketCount() const {
 }
 
 void BroadcastRouter::pruneLoopBucket(EventLoop* loop) {
-    baseLoop_->assertInLoopThread();
     auto it = sessionsByLoop_.find(loop);
     if (it == sessionsByLoop_.end()) {
         return;
@@ -213,6 +403,10 @@ void BroadcastRouter::pruneLoopBucket(EventLoop* loop) {
     if (it->second.empty()) {
         sessionsByLoop_.erase(it);
     }
+}
+
+std::string BroadcastRouter::transportSessionKey(transport::TransportSessionId sessionId) {
+    return std::to_string(sessionId);
 }
 
 }  // namespace mini::net::broadcast

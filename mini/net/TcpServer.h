@@ -51,7 +51,15 @@ public:
     void setHighWaterMarkCallback(HighWaterMarkCallback cb, std::size_t highWaterMark);
     void setWriteCompleteCallback(WriteCompleteCallback cb);
     std::size_t connectionCount() const;
+    void bindBroadcastSession(const TcpConnectionPtr& connection, std::string sessionId);
+    void unbindBroadcastSession(std::string sessionId);
+    void joinBroadcastGroup(std::string sessionId, std::string groupId);
+    void leaveBroadcastGroup(std::string sessionId, std::string groupId);
+    void joinBroadcastAoi(std::string sessionId, std::string aoiId);
+    void leaveBroadcastAoi(std::string sessionId, std::string aoiId);
     void broadcastTo(const std::vector<std::string>& sessionIds, const std::string& data);
+    void broadcastGroup(std::string groupId, const std::string& data);
+    void broadcastAoi(std::string aoiId, const std::string& data);
     void broadcast(const std::string& data);
     void broadcastToInLoop(std::vector<std::string> sessionIds, buffer::PayloadPtr payload);
     void broadcastInLoop(buffer::PayloadPtr payload);
@@ -92,6 +100,12 @@ private:
         std::vector<std::string> sessionIds,
         buffer::PayloadPtr payload,
         mini::base::Timestamp requestedAt);
+    void broadcastBucketInLoopWithMetrics(
+        std::vector<broadcast::BroadcastRouter::LoopBatch> batches,
+        buffer::PayloadPtr payload,
+        mini::base::Timestamp requestedAt,
+        bool targeted,
+        std::size_t requestedSessions);
     void broadcastInLoopWithMetrics(buffer::PayloadPtr payload, mini::base::Timestamp requestedAt);
     void configureBroadcastMetrics();
     void forceCloseAllConnections();

@@ -57,6 +57,17 @@ bool LogicLoop::submit(std::string sessionId,
     return submit(command);
 }
 
+bool LogicLoop::submit(std::string sessionId,
+                       mini::net::transport::TransportSessionId transportSessionId,
+                       std::weak_ptr<mini::net::transport::ITransportEndpoint> sourceTransport,
+                       std::string payload) {
+    auto command = std::make_shared<GameCommand>(std::move(sessionId),
+                                                 transportSessionId,
+                                                 std::move(sourceTransport),
+                                                 std::move(payload));
+    return submit(command);
+}
+
 bool LogicLoop::submit(GameCommandPtr command) {
     if (!running_.load(std::memory_order_acquire)) {
         return false;
@@ -216,6 +227,19 @@ void LogicLoop::dispatchOutputs(std::vector<GameCommand>&& outputs) {
 
 void LogicLoop::defaultOutputDispatch(std::vector<GameCommand>&& outputs) {
     for (auto& output : outputs) {
+        if (auto endpoint = output.sourceTransport.lock()) {
+            auto* endpointLoop = endpoint->getLoop();
+            if (!endpointLoop) {
+                continue;
+            }
+
+            auto payload = std::move(output.payload);
+            endpointLoop->queueInLoop([endpoint, payload = std::move(payload)]() mutable {
+                endpoint->send(payload);
+            });
+            continue;
+        }
+
         auto connection = output.sourceConnection.lock();
         if (!connection) {
             continue;

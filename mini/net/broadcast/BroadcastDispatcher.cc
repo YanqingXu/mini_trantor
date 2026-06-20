@@ -64,7 +64,7 @@ void BroadcastDispatcher::dispatchInLoop(std::vector<BroadcastRouter::LoopBatch>
     }
     if (metrics.fanoutConnections == 0) {
         for (const auto& batch : batches) {
-            metrics.fanoutConnections += batch.connections.size();
+            metrics.fanoutConnections += batch.connections.size() + batch.endpoints.size();
         }
     }
 
@@ -81,11 +81,16 @@ void BroadcastDispatcher::dispatchInLoop(std::vector<BroadcastRouter::LoopBatch>
     emitBroadcastMetric(routed);
 
     for (auto& batch : batches) {
-        if (batch.loop == nullptr || batch.connections.empty()) {
+        if (batch.loop == nullptr || (batch.connections.empty() && batch.endpoints.empty())) {
             continue;
         }
 
-        LoopBatchCommand command{std::move(batch.connections), payload, metrics, mini::base::Timestamp{}};
+        LoopBatchCommand command{
+            std::move(batch.connections),
+            std::move(batch.endpoints),
+            payload,
+            metrics,
+            mini::base::Timestamp{}};
         enqueueBatch(std::move(command));
     }
 }
@@ -94,9 +99,10 @@ void BroadcastDispatcher::enqueueBatch(LoopBatchCommand command) {
     baseLoop_->assertInLoopThread();
 
     EventLoop* loop = nullptr;
-    auto it = command.connections.begin();
-    if (it != command.connections.end()) {
-        loop = (*it)->getLoop();
+    if (!command.endpoints.empty() && command.endpoints.front()) {
+        loop = command.endpoints.front()->getLoop();
+    } else if (!command.connections.empty() && command.connections.front()) {
+        loop = command.connections.front()->getLoop();
     }
     if (!loop) {
         return;
@@ -145,15 +151,24 @@ void BroadcastDispatcher::enqueueBatch(LoopBatchCommand command) {
                     connection->send(command.payload->view());
                 }
             }
+            for (const auto& endpoint : command.endpoints) {
+                if (endpoint && endpoint->connected()) {
+                    endpoint->send(command.payload->view());
+                }
+            }
             if (metricsCallback) {
                 const auto flushedAt = mini::base::now();
                 BroadcastMetricSample sample;
                 sample.event = BroadcastMetricEvent::LoopFlushed;
-                sample.loop = command.connections.empty() ? nullptr : command.connections.front()->getLoop();
+                if (!command.endpoints.empty() && command.endpoints.front()) {
+                    sample.loop = command.endpoints.front()->getLoop();
+                } else {
+                    sample.loop = command.connections.empty() ? nullptr : command.connections.front()->getLoop();
+                }
                 sample.targeted = command.metrics.targeted;
                 sample.requestedSessions = command.metrics.requestedSessions;
                 sample.loopBatches = command.metrics.loopBatches;
-                sample.fanoutConnections = command.connections.size();
+                sample.fanoutConnections = command.connections.size() + command.endpoints.size();
                 sample.payloadBytes = command.metrics.payloadBytes;
                 sample.routeLatency = command.metrics.routeLatency;
                 sample.queueLatency = flushStartedAt - command.queuedAt;

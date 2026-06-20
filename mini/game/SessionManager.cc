@@ -214,6 +214,7 @@ bool SessionManager::onConnectionClose(mini::net::transport::TransportSessionId 
         if (mapIt != transportIndex_.end() && mapIt->second == token) {
             transportIndex_.erase(mapIt);
         }
+        endpointIndex_.erase(transportSessionId);
     }
 
     session->detachTransport();
@@ -302,6 +303,33 @@ bool SessionManager::bindTransport(std::string_view sessionToken,
     return true;
 }
 
+bool SessionManager::bindTransportEndpoint(
+    std::string_view sessionToken,
+    const std::shared_ptr<mini::net::transport::ITransportEndpoint>& endpoint) {
+    if (!endpoint) {
+        return false;
+    }
+
+    const auto transportSessionId = endpoint->sessionId();
+    if (transportSessionId == mini::net::transport::kInvalidTransportSessionId) {
+        return false;
+    }
+
+    const bool rebound = bindTransport(sessionToken, transportSessionId);
+    if (!rebound) {
+        auto existing = getSession(sessionToken);
+        if (!existing || existing->transportSessionId() != transportSessionId) {
+            return false;
+        }
+    }
+
+    {
+        std::scoped_lock lock(mutex_);
+        endpointIndex_[transportSessionId] = endpoint;
+    }
+    return true;
+}
+
 bool SessionManager::onReconnect(std::string_view sessionToken,
                                 mini::net::transport::TransportSessionId transportSessionId) {
     if (!bindTransport(sessionToken, transportSessionId)) {
@@ -326,6 +354,7 @@ bool SessionManager::removeSession(std::string_view sessionToken) {
         const auto transport = session->transportSessionId();
         if (transport != mini::net::transport::kInvalidTransportSessionId) {
             transportIndex_.erase(transport);
+            endpointIndex_.erase(transport);
         }
         reconnectEpoch_.erase(std::string(sessionToken));
         reconnectTimer_.erase(std::string(sessionToken));
@@ -451,6 +480,25 @@ PlayerSession::Milliseconds SessionManager::reconnectWindow() const {
     return reconnectWindow_;
 }
 
+std::shared_ptr<mini::net::transport::ITransportEndpoint>
+SessionManager::getTransportEndpoint(std::string_view sessionToken) const {
+    auto session = getSession(sessionToken);
+    if (!session) {
+        return nullptr;
+    }
+    return getTransportEndpoint(session->transportSessionId());
+}
+
+std::shared_ptr<mini::net::transport::ITransportEndpoint>
+SessionManager::getTransportEndpoint(mini::net::transport::TransportSessionId transportSessionId) const {
+    std::scoped_lock lock(mutex_);
+    auto it = endpointIndex_.find(transportSessionId);
+    if (it == endpointIndex_.end()) {
+        return nullptr;
+    }
+    return it->second.lock();
+}
+
 void SessionManager::scheduleReconnectWindow(const SessionToken& sessionToken) {
     const auto token = sessionToken;
     postOnLogicLoop([this, token] {
@@ -563,6 +611,7 @@ bool SessionManager::setTransportIndexLocked(const SessionToken& sessionToken,
     if (newTransportId == mini::net::transport::kInvalidTransportSessionId) {
         if (oldTransportId != mini::net::transport::kInvalidTransportSessionId) {
             transportIndex_.erase(oldTransportId);
+            endpointIndex_.erase(oldTransportId);
         }
         return session->detachTransport();
     }
@@ -582,11 +631,13 @@ bool SessionManager::setTransportIndexLocked(const SessionToken& sessionToken,
                 }
             }
             transportIndex_.erase(existing);
+            endpointIndex_.erase(newTransportId);
         }
     }
 
     if (oldTransportId != mini::net::transport::kInvalidTransportSessionId) {
         transportIndex_.erase(oldTransportId);
+        endpointIndex_.erase(oldTransportId);
     }
 
     session->bindTransportSession(newTransportId);

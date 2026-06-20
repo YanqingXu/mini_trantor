@@ -9,6 +9,7 @@
 #include "mini/base/MetricsHook.h"
 #include "mini/game/PlayerSession.h"
 #include "mini/net/EventLoop.h"
+#include "mini/net/transport/ITransport.h"
 
 #include <chrono>
 #include <memory>
@@ -84,6 +85,9 @@ public:
     bool markClosed(std::string_view sessionToken, std::string_view reason = "closed by manager");
     bool bindTransport(std::string_view sessionToken,
                       mini::net::transport::TransportSessionId transportSessionId);
+    bool bindTransportEndpoint(
+        std::string_view sessionToken,
+        const std::shared_ptr<mini::net::transport::ITransportEndpoint>& endpoint);
     bool onReconnect(std::string_view sessionToken,
                      mini::net::transport::TransportSessionId transportSessionId);
 
@@ -94,6 +98,10 @@ public:
 
     void setReconnectWindow(PlayerSession::Milliseconds reconnectWindow);
     PlayerSession::Milliseconds reconnectWindow() const;
+    std::shared_ptr<mini::net::transport::ITransportEndpoint>
+    getTransportEndpoint(std::string_view sessionToken) const;
+    std::shared_ptr<mini::net::transport::ITransportEndpoint>
+    getTransportEndpoint(mini::net::transport::TransportSessionId transportSessionId) const;
 
 private:
     template <typename Fn>
@@ -119,6 +127,10 @@ private:
     mutable std::mutex mutex_;
     std::unordered_map<std::string, PlayerSessionPtr> sessions_;
     std::unordered_map<mini::net::transport::TransportSessionId, std::string> transportIndex_;
+    std::unordered_map<
+        mini::net::transport::TransportSessionId,
+        std::weak_ptr<mini::net::transport::ITransportEndpoint>>
+        endpointIndex_;
     std::unordered_map<SessionToken, mini::net::TimerId> reconnectTimer_;
     std::unordered_map<SessionToken, std::uint64_t> reconnectEpoch_;
     std::unordered_map<SessionToken, PlayerSession::TimePoint> reconnectStartedAt_;

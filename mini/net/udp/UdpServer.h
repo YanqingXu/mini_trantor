@@ -20,6 +20,9 @@ namespace mini::net {
 
 class EventLoop;
 class InetAddress;
+namespace transport {
+class ITransportEndpoint;
+}
 
 namespace udp {
 
@@ -44,9 +47,13 @@ public:
     void sendTo(transport::TransportSessionId sessionId, std::string_view data);
     void sendTo(const InetAddress& peerAddr, std::string_view data);
     void closeSession(transport::TransportSessionId sessionId);
+    std::shared_ptr<transport::ITransportEndpoint> getTransportEndpoint(transport::TransportSessionId sessionId) const;
 
     bool started() const noexcept;
     std::size_t sessionCount() const;
+    bool hasSession(transport::TransportSessionId sessionId) const;
+    EventLoop* getLoop() const noexcept;
+    std::string_view name() const noexcept;
 
 private:
     void onPacket(std::string_view packet, const InetAddress& peerAddr);
@@ -63,6 +70,7 @@ private:
     EventLoop* loop_;
     std::string name_;
     std::unique_ptr<UdpSocket> socket_;
+    std::shared_ptr<void> lifetimeToken_;
     MessageCallback messageCallback_;
     ErrorCallback errorCallback_;
     bool started_{false};

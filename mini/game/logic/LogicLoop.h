@@ -44,6 +44,10 @@ public:
     bool submit(std::string sessionId,
                 std::weak_ptr<mini::net::TcpConnection> sourceConnection,
                 std::string payload);
+    bool submit(std::string sessionId,
+                mini::net::transport::TransportSessionId transportSessionId,
+                std::weak_ptr<mini::net::transport::ITransportEndpoint> sourceTransport,
+                std::string payload);
     bool submit(GameCommandPtr command);
 
     void start();

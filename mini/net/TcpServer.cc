@@ -173,6 +173,84 @@ std::size_t TcpServer::connectionCount() const {
     return connections_.size();
 }
 
+void TcpServer::bindBroadcastSession(const TcpConnectionPtr& connection, std::string sessionId) {
+    if (!broadcastRouter_ || !connection || sessionId.empty()) {
+        return;
+    }
+    if (!loop_->isInLoopThread()) {
+        loop_->queueInLoop([this, connection, sessionId = std::move(sessionId)]() mutable {
+            bindBroadcastSession(connection, std::move(sessionId));
+        });
+        return;
+    }
+    broadcastRouter_->registerSession(std::move(sessionId), connection);
+}
+
+void TcpServer::unbindBroadcastSession(std::string sessionId) {
+    if (!broadcastRouter_ || sessionId.empty()) {
+        return;
+    }
+    if (!loop_->isInLoopThread()) {
+        loop_->queueInLoop([this, sessionId = std::move(sessionId)]() mutable {
+            unbindBroadcastSession(std::move(sessionId));
+        });
+        return;
+    }
+    broadcastRouter_->deregisterSession(sessionId);
+}
+
+void TcpServer::joinBroadcastGroup(std::string sessionId, std::string groupId) {
+    if (!broadcastRouter_ || sessionId.empty() || groupId.empty()) {
+        return;
+    }
+    if (!loop_->isInLoopThread()) {
+        loop_->queueInLoop([this, sessionId = std::move(sessionId), groupId = std::move(groupId)]() mutable {
+            joinBroadcastGroup(std::move(sessionId), std::move(groupId));
+        });
+        return;
+    }
+    broadcastRouter_->joinGroup(std::move(sessionId), std::move(groupId));
+}
+
+void TcpServer::leaveBroadcastGroup(std::string sessionId, std::string groupId) {
+    if (!broadcastRouter_ || sessionId.empty() || groupId.empty()) {
+        return;
+    }
+    if (!loop_->isInLoopThread()) {
+        loop_->queueInLoop([this, sessionId = std::move(sessionId), groupId = std::move(groupId)]() mutable {
+            leaveBroadcastGroup(std::move(sessionId), std::move(groupId));
+        });
+        return;
+    }
+    broadcastRouter_->leaveGroup(sessionId, groupId);
+}
+
+void TcpServer::joinBroadcastAoi(std::string sessionId, std::string aoiId) {
+    if (!broadcastRouter_ || sessionId.empty() || aoiId.empty()) {
+        return;
+    }
+    if (!loop_->isInLoopThread()) {
+        loop_->queueInLoop([this, sessionId = std::move(sessionId), aoiId = std::move(aoiId)]() mutable {
+            joinBroadcastAoi(std::move(sessionId), std::move(aoiId));
+        });
+        return;
+    }
+    broadcastRouter_->joinAoi(std::move(sessionId), std::move(aoiId));
+}
+
+void TcpServer::leaveBroadcastAoi(std::string sessionId, std::string aoiId) {
+    if (!broadcastRouter_ || sessionId.empty() || aoiId.empty()) {
+        return;
+    }
+    if (!loop_->isInLoopThread()) {
+        loop_->queueInLoop([this, sessionId = std::move(sessionId), aoiId = std::move(aoiId)]() mutable {
+            leaveBroadcastAoi(std::move(sessionId), std::move(aoiId));
+        });
+        return;
+    }
+    broadcastRouter_->leaveAoi(sessionId, aoiId);
+}
+
 void TcpServer::broadcastTo(const std::vector<std::string>& sessionIds, const std::string& data) {
     if (!broadcastRouter_) {
         return;
@@ -195,6 +273,42 @@ void TcpServer::broadcastTo(const std::vector<std::string>& sessionIds, const st
 
     auto payload = payloadPool_->acquire(data);
     broadcastToInLoopWithMetrics(sessionIds, std::move(payload), requestedAt);
+}
+
+void TcpServer::broadcastGroup(std::string groupId, const std::string& data) {
+    if (!broadcastRouter_ || !broadcastDispatcher_ || !payloadPool_ || groupId.empty()) {
+        return;
+    }
+    const auto requestedAt = mini::base::now();
+    auto payload = payloadPool_->acquire(data);
+    if (!loop_->isInLoopThread()) {
+        loop_->queueInLoop([this, groupId = std::move(groupId), payload = std::move(payload), requestedAt]() mutable {
+            auto batches = broadcastRouter_->routeGroup(groupId);
+            broadcastBucketInLoopWithMetrics(std::move(batches), std::move(payload), requestedAt, true, 0);
+        });
+        return;
+    }
+
+    auto batches = broadcastRouter_->routeGroup(groupId);
+    broadcastBucketInLoopWithMetrics(std::move(batches), std::move(payload), requestedAt, true, 0);
+}
+
+void TcpServer::broadcastAoi(std::string aoiId, const std::string& data) {
+    if (!broadcastRouter_ || !broadcastDispatcher_ || !payloadPool_ || aoiId.empty()) {
+        return;
+    }
+    const auto requestedAt = mini::base::now();
+    auto payload = payloadPool_->acquire(data);
+    if (!loop_->isInLoopThread()) {
+        loop_->queueInLoop([this, aoiId = std::move(aoiId), payload = std::move(payload), requestedAt]() mutable {
+            auto batches = broadcastRouter_->routeAoi(aoiId);
+            broadcastBucketInLoopWithMetrics(std::move(batches), std::move(payload), requestedAt, true, 0);
+        });
+        return;
+    }
+
+    auto batches = broadcastRouter_->routeAoi(aoiId);
+    broadcastBucketInLoopWithMetrics(std::move(batches), std::move(payload), requestedAt, true, 0);
 }
 
 void TcpServer::broadcast(const std::string& data) {
@@ -251,9 +365,35 @@ void TcpServer::broadcastToInLoopWithMetrics(
     metrics.payloadBytes = payload->size();
     metrics.routeLatency = routedAt - routeStartedAt;
     for (const auto& batch : batches) {
-        metrics.fanoutConnections += batch.connections.size();
+        metrics.fanoutConnections += batch.connections.size() + batch.endpoints.size();
     }
 
+    broadcastDispatcher_->dispatch(std::move(batches), std::move(payload), metrics);
+}
+
+void TcpServer::broadcastBucketInLoopWithMetrics(
+    std::vector<broadcast::BroadcastRouter::LoopBatch> batches,
+    buffer::PayloadPtr payload,
+    mini::base::Timestamp requestedAt,
+    bool targeted,
+    std::size_t requestedSessions) {
+    if (!broadcastDispatcher_ || !payload || batches.empty()) {
+        return;
+    }
+    broadcast::BroadcastDispatcher::DispatchMetricContext metrics;
+    metrics.requestedAt = requestedAt;
+    metrics.routedAt = mini::base::now();
+    metrics.targeted = targeted;
+    metrics.requestedSessions = requestedSessions;
+    metrics.loopBatches = batches.size();
+    metrics.payloadBytes = payload->size();
+    metrics.routeLatency = metrics.routedAt - requestedAt;
+    for (const auto& batch : batches) {
+        metrics.fanoutConnections += batch.connections.size() + batch.endpoints.size();
+    }
+    if (metrics.requestedSessions == 0) {
+        metrics.requestedSessions = metrics.fanoutConnections;
+    }
     broadcastDispatcher_->dispatch(std::move(batches), std::move(payload), metrics);
 }
 
@@ -273,7 +413,7 @@ void TcpServer::broadcastInLoopWithMetrics(buffer::PayloadPtr payload, mini::bas
     metrics.payloadBytes = payload->size();
     metrics.routeLatency = routedAt - routeStartedAt;
     for (const auto& batch : batches) {
-        metrics.fanoutConnections += batch.connections.size();
+        metrics.fanoutConnections += batch.connections.size() + batch.endpoints.size();
     }
     metrics.requestedSessions = metrics.fanoutConnections;
 

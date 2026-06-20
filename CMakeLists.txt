@@ -49,6 +49,7 @@ add_library(mini_trantor
     mini/net/kcp/KcpSession.cc
     mini/game/PlayerSession.cc
     mini/game/SessionManager.cc
+    mini/game/GameServerPipeline.cc
     mini/game/logic/GameCommandQueue.cc
     mini/game/logic/LogicLoop.cc
     mini/net/DnsResolver.cc

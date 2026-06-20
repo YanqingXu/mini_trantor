@@ -32,14 +32,17 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - ✅ `v4-gamma`：RPC 支持完成 — RpcCodec（长度前缀二进制帧编解码）/ RpcChannel（per-connection 请求-响应关联 + 超时管理）/ RpcServer（TcpServer 协议适配器 + method 注册分发）/ RpcClient（TcpClient 包装 + callback 和 coroutine 双模式调用）
 - ✅ `v4-delta`：协程版 RPC 完成 — RpcServer `registerCoroMethod()`（协程返回值即响应，异常即错误）/ RpcClient `coroCall()`（返回 payload 直接，错误抛 `RpcError`）/ `dispatchCoroHandler` 安全桥接（free function 保证帧生命周期）/ 支持 handler 内 `co_await` 异步操作（SleepAwaitable 等）
 
-当前 build 树中 72/72 测试全部通过（unit × 25 + contract × 29 + integration × 16）。
-
 ### v5-alpha（已完成）
 - ✅ 统一取消原语（`CancellationToken` / `CancellationSource`）、`WhenAny` loser cancel、DNS cancel、显式 `NetError`（`PeerClosed` / `ConnectionReset` / `NotConnected` / `Cancelled` / `TimedOut` / `ResolveFailed`）、`withTimeout()` 已进入主线
 - ✅ 退出信号全部满足：
   - `asyncReadSome`、`asyncWrite`、`asyncSleep`、DNS resolve、`WhenAny` 共享一致取消模型
   - 调用者可区分 peer close、timeout、主动 cancel、I/O error
   - close/error/cancel 路径不会 double-resume 或泄漏协程句柄
+
+### v5-beta / v5-gamma / v5-delta（已完成）
+- ✅ `v5-beta`：优雅关闭与信号集成 — `SignalWatcher` / SIGPIPE 屏蔽 / `Acceptor::stop()` / `EventLoopThreadPool::stop()` / `TcpServer::stop(Duration)`
+- ✅ `v5-gamma`：IPv6 与地址模型补全 — `InetAddress` 基于 `sockaddr_storage`，`Connector` / `DnsResolver` 支持 family-aware 双栈路径
+- ✅ `v5-delta`：配置体系与可观测性 — `ConnectorOptions` / `DnsResolverOptions` / `TcpServerOptions` / `TcpClientOptions`，以及连接、背压、TLS、广播、EventLoop、Session、LogicLoop 指标 hook
 
 ### v5-epsilon（已完成）
 - ✅ 协议层与传输层进一步解耦：HTTP / WebSocket / RPC 不再直接依赖 `TcpConnection` 宽接口
@@ -55,58 +58,39 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
   - 新增 `intents/architecture/v5_zeta_engineering_guardrails.intent.md` 设计意图文档
   - 修复 3 个测试：acceptor stop 超时、HTTP server 线程关联断言、awaiter registry segfault
   - CI 中包含 install + find_package 消费验证
-  - 所有现有 72 个 CTest 用例通过（unit ×25 + contract ×29 + integration ×16），无 regression
-  - Fuzz 入口与 benchmark 暂未纳入（可后续补充）
+  - Fuzz 入口仍未纳入；轻量 benchmark 已有 `tests/integration/benchmark/test_fps_like_broadcast_latency.cpp`
+
+### v6-alpha：客户端生态（主链路完成，示例收尾待补）
+- ✅ **Phase A — 基础设施**：`HttpResponseContext` + `RpcPoolOptions`
+- ✅ **Phase B — HTTP Client**：`HttpClient` 已实现 keep-alive 复用、连接重建、协程 API、超时，并有 contract + integration 回归
+- ✅ **Phase C — RPC 连接池**：`RpcConnectionPool` 已实现 round-robin、生命周期、重建续发、停止 fail-all pending，并有 contract 覆盖
+- ⚠️ **Phase D — 收尾**：`examples/http_client.cpp`、`examples/rpc_pool_client.cpp` 与快速上手文档仍未完成
+
+### v6-alpha：游戏服务器网络底座（进行中）
+- ✅ **Task-01 统一传输抽象**：`ITransportEndpoint` / `TransportManager` 已成为 TCP / UDP / KCP 的统一注册、查询、发送、关闭入口；`SessionManager`、`LogicLoop`、`BroadcastRouter` 已支持面向 `TransportSessionId + ITransportEndpoint` 的默认路径
+- ✅ **Task-02 / Task-03 传输基线**：`UdpServer` / `UdpSocket`、`UdpTransportEndpoint`、`KcpTransport` / `KcpSession` 已有 loopback / reliable-flow / transport contract 覆盖
+- ✅ **Task-04 / Task-05 / Task-06 广播链路**：`BroadcastRouter` + `BroadcastDispatcher` + `PayloadPool` 已支持按 owner loop 分桶、payload 共享、端点 fanout；广播路由从 connection-name 扩展到 PlayerSession、room/group、AOI bucket
+- ✅ **Task-07 / Task-08 协议与序列化**：`PacketFramer` 已统一粘包/半包帧结构；`CodecAdapter`、Protobuf-style、FlatBuffers-style adapter 已有 unit / contract / integration 覆盖
+- ✅ **Task-09 / Task-10 会话与重连**：`PlayerSession` + `SessionManager` 支持 auth、online、closing、reconnect window、transport rebind 与 replay auth 集成路径
+- ✅ **Task-11 逻辑线程化**：`LogicLoop` + `GameCommandQueue` 已按 fixed-step 消费命令，并能通过 endpoint 回写到 owner loop
+- ✅ **Task-12 指标升级**：广播 fanout/route/queue/fanout latency、Session reconnect、LogicLoop backlog/lag、EventLoop pending functor 等 hook 已接入；广播 benchmark 已绑定明确延迟阈值
+- ✅ **端到端 vertical slice**：`GameServerPipeline` 已接通 `TCP framed packet -> codec decode -> auth/session -> LogicLoop command -> response/broadcast -> owner loop send`
+- ⚠️ **仍未完成的边界**：生产级 AOI 空间索引、UDP/KCP 拥塞/重传策略打磨、示例化游戏服务器 main、压力测试规模化、fuzz 与文档/diagram 收尾仍需继续推进
+
+当前 build 树中 109/109 CTest 用例全部通过（unit × 36 + contract × 39 + integration × 34）。
 
 ## 下一阶段方向
 
-下一阶段不再以零散候选项维护，而是统一收敛到路线图文档：
+下一阶段统一围绕“通用游戏服务器底座”推进：
 
-- 详细规划见 [docs/roadmap.md](docs/roadmap.md)
-- 阶段边界见 `intents/architecture/v5_stages.intent.md` 与 `intents/architecture/v6_stages.intent.md`
+- 详细规划见 [docs/roadmap_game_server_network_base_execution_plan.md](docs/roadmap_game_server_network_base_execution_plan.md)
+- 阶段边界见 `intents/architecture/v6_stages.intent.md`
 
 当前推荐的推进顺序为：
 
-- **G0**：文档与 Intent 对齐
-  - 收敛 README / docs / intent / 目录说明之间的漂移
-- **v5-alpha**：统一取消与错误语义
-  - 为 coroutine、TcpConnection、DNS 等异步接口建立一致的 cancellation / error surface
-- **v5-beta**：优雅关闭与信号集成（已完成）
-  - `SignalWatcher` 通过 signalfd + Channel 将 SIGINT/SIGTERM 接入 EventLoop，全局屏蔽 SIGPIPE
-  - `Acceptor::stop()` / `EventLoopThreadPool::stop()` / `TcpServer::stop()` 实现有序关闭序列
-- **v5-gamma**：IPv6 与地址模型补全（已完成）
-  - `InetAddress` 内部存储升级为 `sockaddr_storage` + `sa_family_t`，支持 IPv4/IPv6 双栈
-  - `SocketsOps` 全族升级：`createNonblockingOrDie(family)`、`sockaddr_storage` 签名
-  - `Connector` / `DnsResolver` 支持 family-aware 连接和双栈解析
-  - 新增 IPv6 测试：unit / contract / integration 三层覆盖，所有 IPv4 测试无回归
-- **v5-delta**：配置体系与可观测性（已完成）
-  - `ConnectorOptions` / `DnsResolverOptions` / `TcpServerOptions` / `TcpClientOptions` 四个 Options 结构体
-  - `MetricsHook` 回调接口：`ConnectionEvent` / `BackpressureEvent` / `ConnectorEvent` / `TlsEvent`
-  - `Connector` 连接超时：`connectTimeout` > 0 时 EventLoop 定时器自动管理
-  - `TcpServer` drain-aware stop：`stop(Duration)` 等待在飞连接关闭
-  - 所有 hook 在 owner loop 线程调用，不设 hook 时零开销
-  - 所有现有 API 向后兼容
-- **v5-epsilon**：协议层与传输层进一步解耦 ✅ **已完成**
-  - 新增 `IProtocolConnection` 窄接口（send/shutdown/forceClose/connected/getLoop/name/setProtocolContext/getProtocolContext）
-  - 新增 `ProtocolConnectionAdapter` 适配器，通过 TcpConnection::setContext() 绑定到连接生命周期
-  - HTTP、WebSocket、RPC 协议层不再直接调用 TcpConnection 宽接口的 send/shutdown/forceClose/setContext
-  - 协议状态通过 `adapter->setProtocolContext()` / `adapter->getProtocolContext()` 存储，与传输层解耦
-  - 新增 7 个 ProtocolConnectionAdapter 单元测试 + 4 个 HTTP transport contract 测试，全部通过
-  - 为后续 HTTP client 和更多协议扩展清理抽象边界
-- **v5-zeta**：工程护栏补齐 ✅ **已完成**
-  - CI（GitHub Actions Debug + Release）、ASan + UBSan、install 校验
-- **v6-alpha**：客户端生态 ✅ **进行中**
-  - **Phase A — 基础设施**（并行）：`HttpResponseContext` + `RpcPoolOptions`（已完成）
-  - **Phase B — HTTP Client**（并行）：`HttpClient` 已实现（keep-alive 复用、连接重建、协程 API、超时）并有 contract + integration 回归
-  - **Phase C — RPC 连接池**（并行）：`RpcConnectionPool` 已实现（round-robin 分发、生命周期、重建续发、停止 fail-all pending）并有 contract 覆盖
-  - **Phase D — 收尾**：`examples/http_client.cpp`、`examples/rpc_pool_client.cpp` 及示例/快速上手文档（未完成）
-  - 设计意图见 `intents/architecture/v6_alpha_client_ecosystem.intent.md`
-
-如果只优先做最关键的三件事，建议顺序是：
-
-1. `v6-alpha`：HTTP client 和 RPC 连接池 ✅ 进行中
-2. `v6-beta`：服务发现与上层复用能力（下一步）
-3. `v6-gamma`：更多协议扩展
+1. 固化 `GameServerPipeline` 的示例入口与架构图，避免 vertical slice 只停留在测试中
+2. 扩大广播压测规模，加入 payload reuse、重连窗口、AOI bucket 的持续 benchmark
+3. 将 UDP/KCP 从 loopback/reliable-flow 基线推进到可配置策略与真实游戏消息路径
 
 ## 核心理念
 对于重要模块，不先写代码，先写：
@@ -121,9 +105,15 @@ mini-trantor 是一个参考 trantor 思想、以学习和演进为目标的 C++
 - `intents/`: 设计意图与模块宪法（architecture / modules / usecases）
 - `rules/`: 项目级约束规则（线程亲和、所有权、测试、编码、Review）
 - `mini/net/`: Reactor 核心实现（EventLoop、Channel、Poller、EPollPoller、Buffer、Callbacks、TcpConnection、TcpServer、TcpClient、Connector、Acceptor、InetAddress、Socket、SocketsOps、TimerQueue、TimerId、EventLoopThread、EventLoopThreadPool、TlsContext、DnsResolver、NetError、SignalWatcher、`detail/` 内部辅助模块等）
+- `mini/net/transport/`: 统一传输抽象（`ITransportEndpoint`、`TransportEndpoint`、`UdpTransportEndpoint`、`TransportManager`）
+- `mini/net/udp/` / `mini/net/kcp/`: UDP 基线与 KCP preview 传输实现
+- `mini/net/broadcast/` / `mini/net/buffer/`: 广播路由、ioLoop 分桶批量发送、共享 payload 与 payload pool
+- `mini/net/framing/`: 通用 `PacketFramer` 帧协议（magic + len + msgId + flags + seq + payload）
 - `mini/http/`: HTTP/1.1 协议层（HttpRequest、HttpResponse、HttpResponseContext、HttpClient、HttpContext、HttpServer）
 - `mini/ws/`: WebSocket 协议层（WebSocketCodec、WebSocketHandshake、WebSocketConnection、WebSocketServer）
 - `mini/rpc/`: RPC 协议层（RpcCodec、RpcChannel、RpcServer、RpcClient、RpcPoolOptions、RpcConnectionPool）
+- `mini/codec/`: Protobuf-style / FlatBuffers-style codec adapter 抽象
+- `mini/game/`: 游戏服务器底座模块（`PlayerSession`、`SessionManager`、`GameServerPipeline`、`LogicLoop`、`GameCommandQueue`）
 - `mini/coroutine/`: 协程桥接层（`Task.h` 协程结果对象、`CancellationToken.h` 取消原语、`SleepAwaitable.h` 定时器 awaitable、`WhenAll.h` 多任务并发等待、`WhenAny.h` 多任务竞争等待、`Timeout.h` 统一 timeout 包装、`ResolveAwaitable.h` DNS 解析 awaitable）
 - `mini/base/`: 基础工具（Timestamp、noncopyable、Logger）
 - `tests/`: 按 `unit/`、`contract/`、`integration/` 分层的测试
@@ -185,6 +175,8 @@ target_link_libraries(my_app PRIVATE mini_trantor::mini_trantor)
 #include "mini/ws/WebSocketServer.h"
 #include "mini/rpc/RpcServer.h"
 #include "mini/rpc/RpcClient.h"
+#include "mini/net/transport/TransportManager.h"
+#include "mini/game/GameServerPipeline.h"
 ```
 
 ### TLS/SSL 使用示例
@@ -402,26 +394,28 @@ loop.loop();
 - `EventLoopThread / EventLoopThreadPool` 的分发与生命周期链路稳定，配合 `TcpServer / TcpClient / Connector`，使得跨线程访问有明确的单一入口（`runInLoop / queueInLoop`）。
 - 协程桥接（`Task<T>`、`CancellationToken`、`SleepAwaitable`、`WhenAny/WhenAll`）无独立调度器，恢复操作回归 `EventLoop`，没有绕开底层事件循环。
 - v6-alpha 客户端生态（`HttpClient` + `RpcConnectionPool`）在协议特性之外，优先复用了现有连接与回收机制，保持了“可复用而非并行体系”原则。
+- v6-alpha 游戏服务器底座已出现可运行默认路径：统一 transport、session/auth、PacketFramer、LogicLoop、room/group/AOI 广播、owner-loop send 串成了端到端 vertical slice。
 
 ### 2) 工程化与方法论（v5-zeta 价值）
 
 - CI 已覆盖 `Debug` 与 `Release` 双矩阵；Debug 路径接入 `ASan/UBSan`，并带来生命周期与指针错误的前置暴露能力。
 - 安装链路已通过 `cmake --install` + `find_package` 验证，消费方可用性从“编译”提升为“可集成”。
-- `72` 个测试（unit/contract/integration）分层结构完整，且新增契约变更持续通过测试闭环验证。
-- 仍需跟进的 gap：`v5-zeta` 目标中“fuzz/benchmark 入口”仍未在仓库落地（当前更偏守护层面的基本闭环，协议稳定性可再加一层鲁棒性保险）。
+- `109` 个测试（unit/contract/integration）分层结构完整，且新增契约变更持续通过测试闭环验证。
+- 仍需跟进的 gap：fuzz 入口尚未纳入；benchmark 已有轻量广播延迟阈值，但还不是生产级大规模压测矩阵。
 
 ### 3) 功能完备性评估（HTTP/WS/RPC/TLS/DNS + v6-alpha）
 
 - HTTP/1.1、WebSocket、RPC、TLS、DNS、IPv6 已具备可运行主链路，能支撑真实服务中的核心交互路径。
 - v6-alpha 已形成可复用客户端核心能力：HTTP 请求生命周期、连接重建、keep-alive 与超时；RPC 具备连接池、续发与 `stop` fail-all。
-- 目前的边界是“轻量客户端化”：尚未覆盖服务发现、负载均衡、HTTP/2、网关高级协议策略（如 redirect/cookie/chunked 等），因此适合用作核心网联接层，不宜直接宣称全场景网关替代。
+- 游戏服务器方向已覆盖 TCP/UDP/KCP transport baseline、会话重连、fixed-step 逻辑线程、PacketFramer、codec adapter、广播路由与指标 hook。
+- 目前的边界是“游戏底座 preview”：AOI 仍是 bucket 语义而非空间索引，UDP/KCP 仍偏基线验证，压力测试规模和生产策略还需继续补齐。
 
 ### 4) 未来演进潜力与挑战
 
-- `v6-beta`（服务发现与上层复用）顺序合理，建议优先补齐 endpoint/健康语义与连接池策略的契约化。
-- `v7` 的 HTTP/2 可行，但会带来流语义与 head-of-line、状态机复杂度，必须先固化 `v6` 客户端复用协议边界再推进。
-- 负载均衡方向可循序渐进：先从池内策略与可观测指标入手，避免全局状态打破 one-loop-per-thread 所有权边界。
+- 游戏底座的下一步应优先把测试中的 vertical slice 示例化，并为 room/group/AOI、reconnect、payload reuse 建立持续 benchmark。
+- UDP/KCP 可以继续演进为真实游戏消息路径，但必须保持“独立传输实例挂到 EventLoop”，不能绕开 Reactor 线程亲和。
+- 服务发现、负载均衡、HTTP/2 仍可作为后续方向，但应排在游戏底座 P0 语义和压力测试稳定之后。
 
 ### 5) 结论
 
-当前阶段最值得肯定的是：库已从“能跑”进入“可持续维护”的状态，尤其在生命周期、线程亲和、取消/错误语义、测试契约方面形成了统一语言。下一步应继续遵循 Intent 先行与契约优先：先补齐客户端生态缺口与关键边界契约，再扩展高级协议与服务治理能力，可显著降低后续重构成本。
+当前阶段最值得肯定的是：库已从“通用网络库”进入“游戏服务器底座 preview”的状态，尤其在线程亲和、生命周期、取消/错误语义、会话重连、逻辑线程与广播指标方面形成了统一语言。下一步应继续遵循 Intent 先行与契约优先：先把 vertical slice 示例化、压测化，再推进更复杂的 AOI、UDP/KCP 策略与服务治理能力。

@@ -3,6 +3,7 @@
 #include "mini/base/Logger.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/InetAddress.h"
+#include "mini/net/transport/UdpTransportEndpoint.h"
 #include "mini/net/udp/UdpSocket.h"
 
 namespace mini::net::udp {
@@ -21,13 +22,15 @@ UdpServer::UdpServer(EventLoop* loop,
                      bool reusePort)
     : loop_(loop),
       name_(std::move(name)),
-      socket_(std::make_unique<UdpSocket>(loop, listenAddr, reusePort, name_ + "/socket")) {
+      socket_(std::make_unique<UdpSocket>(loop, listenAddr, reusePort, name_ + "/socket")),
+      lifetimeToken_(std::make_shared<int>(0)) {
     socket_->setPacketCallback([this](std::string_view packet, const InetAddress& peerAddr) {
         onPacket(packet, peerAddr);
     });
 }
 
 UdpServer::~UdpServer() {
+    lifetimeToken_.reset();
     if (started_) {
         stop();
     }
@@ -110,12 +113,38 @@ void UdpServer::closeSession(transport::TransportSessionId sessionId) {
     post([this, sid]() { removeSession(sid); });
 }
 
+std::shared_ptr<transport::ITransportEndpoint>
+UdpServer::getTransportEndpoint(transport::TransportSessionId sessionId) const {
+    if (sessionId == transport::kInvalidTransportSessionId) {
+        return nullptr;
+    }
+    if (!hasSession(sessionId)) {
+        return nullptr;
+    }
+    return std::make_shared<transport::UdpTransportEndpoint>(
+        const_cast<UdpServer*>(this),
+        lifetimeToken_,
+        sessionId);
+}
+
 bool UdpServer::started() const noexcept {
     return started_;
 }
 
 std::size_t UdpServer::sessionCount() const {
     return peerBySession_.size();
+}
+
+bool UdpServer::hasSession(transport::TransportSessionId sessionId) const {
+    return peerBySession_.find(sessionId) != peerBySession_.end();
+}
+
+EventLoop* UdpServer::getLoop() const noexcept {
+    return loop_;
+}
+
+std::string_view UdpServer::name() const noexcept {
+    return name_;
 }
 
 void UdpServer::onPacket(std::string_view packet, const InetAddress& peerAddr) {

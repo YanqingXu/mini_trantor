@@ -4,6 +4,7 @@
 #include "mini/net/TcpServer.h"
 #include "mini/net/TcpServerOptions.h"
 
+#include <algorithm>
 #include <arpa/inet.h>
 #include <atomic>
 #include <cassert>
@@ -22,6 +23,10 @@
 #include <vector>
 
 namespace {
+
+constexpr auto kRouteLatencyThreshold = std::chrono::milliseconds(500);
+constexpr auto kQueueLatencyThreshold = std::chrono::milliseconds(500);
+constexpr auto kFanoutLatencyThreshold = std::chrono::seconds(1);
 
 uint16_t allocateTestPort() {
     const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
@@ -102,6 +107,9 @@ int main() {
     bool payloadSizeObserved = false;
     bool fanoutObserved = false;
     bool latencyObserved = false;
+    mini::net::BroadcastMetricSample::Duration maxRouteLatency{};
+    mini::net::BroadcastMetricSample::Duration maxQueueLatency{};
+    mini::net::BroadcastMetricSample::Duration maxFanoutLatency{};
 
     serverRaw->setBroadcastMetricCallback(
         [&](const mini::net::BroadcastMetricSample& sample) {
@@ -111,6 +119,7 @@ int main() {
                 assert(sample.payloadBytes == payload.size());
                 assert(sample.fanoutConnections == static_cast<std::size_t>(kClientCount));
                 assert(sample.routeLatency >= mini::net::BroadcastMetricSample::Duration::zero());
+                maxRouteLatency = std::max(maxRouteLatency, sample.routeLatency);
                 ++routedSamples;
                 payloadSizeObserved = true;
                 fanoutObserved = true;
@@ -119,6 +128,8 @@ int main() {
                 assert(sample.fanoutConnections > 0);
                 assert(sample.queueLatency >= mini::net::BroadcastMetricSample::Duration::zero());
                 assert(sample.fanoutLatency >= mini::net::BroadcastMetricSample::Duration::zero());
+                maxQueueLatency = std::max(maxQueueLatency, sample.queueLatency);
+                maxFanoutLatency = std::max(maxFanoutLatency, sample.fanoutLatency);
                 ++flushedSamples;
                 latencyObserved = true;
             }
@@ -182,6 +193,9 @@ int main() {
                    fanoutObserved &&
                    latencyObserved;
         }));
+        assert(maxRouteLatency <= kRouteLatencyThreshold);
+        assert(maxQueueLatency <= kQueueLatencyThreshold);
+        assert(maxFanoutLatency <= kFanoutLatencyThreshold);
     }
 
     auto stopped = std::make_shared<std::promise<void>>();

@@ -66,6 +66,7 @@ public:
 private:
     struct LoopBatchCommand {
         std::vector<TcpConnectionPtr> connections;
+        std::vector<std::shared_ptr<transport::ITransportEndpoint>> endpoints;
         mini::net::buffer::PayloadPtr payload;
         DispatchMetricContext metrics;
         mini::base::Timestamp queuedAt{};

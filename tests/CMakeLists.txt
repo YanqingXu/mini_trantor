@@ -75,6 +75,7 @@ add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_timeout_contract.cpp)
 add_mini_test(contract dns ${CMAKE_CURRENT_SOURCE_DIR}/contract/dns/test_dns_contract.cpp)
 add_mini_test(contract signal ${CMAKE_CURRENT_SOURCE_DIR}/contract/signal/test_signal_handling.cpp)
+add_mini_test(contract transport ${CMAKE_CURRENT_SOURCE_DIR}/contract/transport/test_transport_contract.cpp)
 
 add_mini_test(integration tcp_server ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_server/test_tcp_server.cpp)
 add_mini_test(
@@ -101,6 +102,11 @@ add_mini_test(
     integration
     tcp_server
     ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_server/test_tcp_server_broadcast_stress_reconnect.cpp
+)
+add_mini_test(
+    integration
+    tcp_server
+    ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_server/test_tcp_server_broadcast_session_group.cpp
 )
 add_mini_test(
     integration
@@ -198,8 +204,10 @@ add_mini_test(contract rpc ${CMAKE_CURRENT_SOURCE_DIR}/contract/rpc/test_rpc_cli
 add_mini_test(integration rpc ${CMAKE_CURRENT_SOURCE_DIR}/integration/rpc/test_rpc.cpp)
 add_mini_test(integration codec ${CMAKE_CURRENT_SOURCE_DIR}/integration/codec/test_game_message_roundtrip.cpp)
 add_mini_test(integration transport ${CMAKE_CURRENT_SOURCE_DIR}/integration/transport/test_framing_halfpack.cpp)
+add_mini_test(integration transport ${CMAKE_CURRENT_SOURCE_DIR}/integration/transport/test_transport_adapter_loopback.cpp)
 add_mini_test(integration game ${CMAKE_CURRENT_SOURCE_DIR}/integration/game/test_connect_auth_replay.cpp)
 add_mini_test(integration game ${CMAKE_CURRENT_SOURCE_DIR}/integration/game/test_reconnect_flow.cpp)
+add_mini_test(integration game ${CMAKE_CURRENT_SOURCE_DIR}/integration/game/test_game_server_vertical_slice.cpp)
 add_mini_test(integration logic ${CMAKE_CURRENT_SOURCE_DIR}/integration/logic/test_network_to_logic_roundtrip.cpp)
 
 # --- IPv6 dual-stack tests (v5-gamma) ---
