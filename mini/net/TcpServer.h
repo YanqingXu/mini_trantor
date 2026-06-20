@@ -7,6 +7,7 @@
 //           drain-aware stop(Duration)。
 
 #include "mini/base/MetricsHook.h"
+#include "mini/base/Timestamp.h"
 #include "mini/base/noncopyable.h"
 #include "mini/net/Acceptor.h"
 #include "mini/net/Callbacks.h"
@@ -66,6 +67,12 @@ public:
     /// Set TLS handshake event hook. Callback fires on owner loop thread.
     void setTlsEventCallback(TlsEventCallback cb);
 
+    /// Set broadcast fanout / latency metric hook. Callback fires on base or target ioLoop thread.
+    void setBroadcastMetricCallback(BroadcastMetricCallback cb);
+
+    /// Set EventLoop queue / wakeup metric hook for base and worker loops.
+    void setEventLoopMetricCallback(EventLoopMetricCallback cb);
+
     // ── Lifecycle ──
 
     void start();
@@ -81,6 +88,12 @@ private:
     void newConnection(int sockfd, const InetAddress& peerAddr);
     void removeConnection(const TcpConnectionPtr& connection);
     void removeConnectionInLoop(const TcpConnectionPtr& connection);
+    void broadcastToInLoopWithMetrics(
+        std::vector<std::string> sessionIds,
+        buffer::PayloadPtr payload,
+        mini::base::Timestamp requestedAt);
+    void broadcastInLoopWithMetrics(buffer::PayloadPtr payload, mini::base::Timestamp requestedAt);
+    void configureBroadcastMetrics();
     void forceCloseAllConnections();
     void onDrainTimeout();
 
@@ -99,10 +112,14 @@ private:
     ConnectionEventCallback connectionEventCallback_;
     BackpressureEventCallback backpressureEventCallback_;
     TlsEventCallback tlsEventCallback_;
+    BroadcastMetricCallback broadcastMetricCallback_;
+    EventLoopMetricCallback eventLoopMetricCallback_;
 
     std::atomic<bool> started_;
     bool stopped_;
     bool draining_;
+    bool broadcastMetricsEnabled_;
+    bool eventLoopQueueMetricsEnabled_;
     int nextConnId_;
     std::size_t highWaterMark_;
     std::size_t backpressureHighWaterMark_;

@@ -230,10 +230,23 @@ bool SessionManager::markReconnecting(std::string_view sessionToken) {
     }
 
     const auto old = session->state();
+    SessionMetricSample metric;
+    metric.event = SessionMetricEvent::ReconnectSucceeded;
+    metric.sessionToken = std::string(sessionToken);
+    metric.success = true;
+    {
+        std::scoped_lock lock(mutex_);
+        const auto startedIt = reconnectStartedAt_.find(std::string(sessionToken));
+        if (startedIt != reconnectStartedAt_.end()) {
+            metric.reconnectDuration = mini::base::now() - startedIt->second;
+            reconnectStartedAt_.erase(startedIt);
+        }
+    }
     cancelReconnectWindow(std::string(sessionToken));
     const bool changed = session->markReconnecting();
     if (changed) {
         emitState(std::string(sessionToken), old, session->state(), "reconnecting");
+        emitSessionMetric(std::move(metric));
     }
     return changed;
 }
@@ -316,6 +329,7 @@ bool SessionManager::removeSession(std::string_view sessionToken) {
         }
         reconnectEpoch_.erase(std::string(sessionToken));
         reconnectTimer_.erase(std::string(sessionToken));
+        reconnectStartedAt_.erase(std::string(sessionToken));
     }
 
     const auto token = session->sessionId();
@@ -404,6 +418,26 @@ void SessionManager::emitState(const SessionToken& sessionToken,
     });
 }
 
+void SessionManager::emitSessionMetric(SessionMetricSample sample) {
+    SessionMetricCallback callback;
+    {
+        std::scoped_lock lock(mutex_);
+        callback = metricCallback_;
+    }
+    if (!callback) {
+        return;
+    }
+
+    if (!logicLoop_ || logicLoop_->isInLoopThread()) {
+        callback(sample);
+        return;
+    }
+
+    postOnLogicLoop([callback = std::move(callback), sample = std::move(sample)]() mutable {
+        callback(sample);
+    });
+}
+
 void SessionManager::setReconnectWindow(PlayerSession::Milliseconds reconnectWindow) {
     if (reconnectWindow <= PlayerSession::Milliseconds::zero()) {
         reconnectWindow = kDefaultReconnectWindow;
@@ -424,28 +458,40 @@ void SessionManager::scheduleReconnectWindow(const SessionToken& sessionToken) {
             return;
         }
 
-        if (reconnectWindow_ <= PlayerSession::Milliseconds::zero()) {
-            return;
+        {
+            std::scoped_lock lock(mutex_);
+            if (reconnectWindow_ <= PlayerSession::Milliseconds::zero()) {
+                return;
+            }
+
+            auto& epoch = reconnectEpoch_[token];
+            ++epoch;
+            const auto currentEpoch = epoch;
+
+            const auto it = reconnectTimer_.find(token);
+            if (it != reconnectTimer_.end() && it->second.valid()) {
+                logicLoop_->cancel(it->second);
+            }
+
+            const auto timerId = logicLoop_->runAfter(reconnectWindow_, [this, token, currentEpoch] {
+                onReconnectWindowExpired(token, currentEpoch);
+            });
+            reconnectTimer_[token] = timerId;
+            reconnectStartedAt_[token] = mini::base::now();
         }
 
-        auto& epoch = reconnectEpoch_[token];
-        ++epoch;
-        const auto currentEpoch = epoch;
-
-        const auto it = reconnectTimer_.find(token);
-        if (it != reconnectTimer_.end() && it->second.valid()) {
-            logicLoop_->cancel(it->second);
-        }
-
-        const auto timerId = logicLoop_->runAfter(reconnectWindow_, [this, token, currentEpoch] {
-            onReconnectWindowExpired(token, currentEpoch);
-        });
-        reconnectTimer_[token] = timerId;
+        SessionMetricSample sample;
+        sample.event = SessionMetricEvent::ReconnectWindowStarted;
+        sample.sessionToken = token;
+        emitSessionMetric(std::move(sample));
     });
 }
 
 void SessionManager::cancelReconnectWindow(const SessionToken& sessionToken) {
-    postOnLogicLoop([this, token = sessionToken] { cancelReconnectWindowLocked(token); });
+    postOnLogicLoop([this, token = sessionToken] {
+        std::scoped_lock lock(mutex_);
+        cancelReconnectWindowLocked(token);
+    });
 }
 
 void SessionManager::cancelReconnectWindowLocked(const SessionToken& sessionToken) {
@@ -461,6 +507,7 @@ void SessionManager::cancelReconnectWindowLocked(const SessionToken& sessionToke
 
     reconnectTimer_.erase(it);
     reconnectEpoch_.erase(sessionToken);
+    reconnectStartedAt_.erase(sessionToken);
 }
 
 void SessionManager::onReconnectWindowExpired(const SessionToken& sessionToken, std::uint64_t epoch) {
@@ -489,11 +536,21 @@ void SessionManager::onReconnectWindowExpired(const SessionToken& sessionToken, 
     }
 
     const auto old = session->state();
+    SessionMetricSample metric;
+    metric.event = SessionMetricEvent::ReconnectExpired;
+    metric.sessionToken = sessionToken;
+    metric.success = false;
+    const auto startedIt = reconnectStartedAt_.find(sessionToken);
+    if (startedIt != reconnectStartedAt_.end()) {
+        metric.reconnectDuration = mini::base::now() - startedIt->second;
+        reconnectStartedAt_.erase(startedIt);
+    }
     lock.unlock();
 
     const bool changed = session->close("reconnect timeout");
     if (changed) {
         emitState(sessionToken, old, session->state(), "reconnect timeout");
+        emitSessionMetric(std::move(metric));
     }
     cancelReconnectWindow(sessionToken);
     removeSession(sessionToken);

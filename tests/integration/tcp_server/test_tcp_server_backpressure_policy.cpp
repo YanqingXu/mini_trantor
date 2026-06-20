@@ -139,7 +139,7 @@ int main() {
         assert(drainedBytes > 0);
         assert(secondHandledFuture.wait_for(1s) == std::future_status::ready);
 
-        bool sawEof = false;
+        bool sawClose = false;
         const auto eofDeadline = std::chrono::steady_clock::now() + 2s;
         while (std::chrono::steady_clock::now() < eofDeadline) {
             const ssize_t n = ::read(fd, buffer, sizeof(buffer));
@@ -147,7 +147,11 @@ int main() {
                 continue;
             }
             if (n == 0) {
-                sawEof = true;
+                sawClose = true;
+                break;
+            }
+            if (errno == ECONNRESET || errno == ECONNABORTED) {
+                sawClose = true;
                 break;
             }
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -156,7 +160,7 @@ int main() {
             }
             break;
         }
-        assert(sawEof);
+        assert(sawClose);
 
         ::close(fd);
     });

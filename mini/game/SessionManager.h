@@ -6,6 +6,7 @@
 // 2) 网络侧只提交 sessionToken/transportId，状态推进在 manager 统一入口。
 // 3) 状态变更回调默认投递到逻辑 loop，避免跨线程回调重入。
 
+#include "mini/base/MetricsHook.h"
 #include "mini/game/PlayerSession.h"
 #include "mini/net/EventLoop.h"
 
@@ -49,6 +50,11 @@ public:
     void setStateCallback(SessionStateCallback callback) {
         std::scoped_lock lock(mutex_);
         stateCallback_ = std::move(callback);
+    }
+
+    void setMetricCallback(SessionMetricCallback callback) {
+        std::scoped_lock lock(mutex_);
+        metricCallback_ = std::move(callback);
     }
 
     PlayerSessionPtr ensureSession(
@@ -97,6 +103,7 @@ private:
                    State oldState,
                    State newState,
                    std::string_view reason);
+    void emitSessionMetric(SessionMetricSample sample);
 
     bool setTransportIndexLocked(
         const SessionToken& sessionToken,
@@ -114,8 +121,10 @@ private:
     std::unordered_map<mini::net::transport::TransportSessionId, std::string> transportIndex_;
     std::unordered_map<SessionToken, mini::net::TimerId> reconnectTimer_;
     std::unordered_map<SessionToken, std::uint64_t> reconnectEpoch_;
+    std::unordered_map<SessionToken, PlayerSession::TimePoint> reconnectStartedAt_;
 
     SessionStateCallback stateCallback_;
+    SessionMetricCallback metricCallback_;
     mini::net::EventLoop* logicLoop_{nullptr};
     PlayerSession::Milliseconds reconnectWindow_{kDefaultReconnectWindow};
 };

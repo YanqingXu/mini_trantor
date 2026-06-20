@@ -42,6 +42,7 @@ add_mini_test(unit framing ${CMAKE_CURRENT_SOURCE_DIR}/unit/framing/test_framer.
 add_mini_test(unit acceptor ${CMAKE_CURRENT_SOURCE_DIR}/unit/acceptor/test_acceptor_stop.cpp)
 add_mini_test(unit event_loop_thread_pool ${CMAKE_CURRENT_SOURCE_DIR}/unit/event_loop_thread_pool/test_thread_pool_stop.cpp)
 add_mini_test(unit broadcast ${CMAKE_CURRENT_SOURCE_DIR}/unit/broadcast/test_dispatcher_batch.cpp)
+add_mini_test(unit metrics ${CMAKE_CURRENT_SOURCE_DIR}/unit/metrics/test_metrics_hook_ext.cpp)
 
 add_mini_test(contract acceptor ${CMAKE_CURRENT_SOURCE_DIR}/contract/acceptor/test_acceptor.cpp)
 add_mini_test(contract connector ${CMAKE_CURRENT_SOURCE_DIR}/contract/connector/test_connector.cpp)
@@ -209,6 +210,8 @@ add_mini_test(integration tcp_server ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp
 # --- Configuration and observability tests (v5-delta) ---
 add_mini_test(contract net ${CMAKE_CURRENT_SOURCE_DIR}/contract/net/test_options_contract.cpp)
 add_mini_test(contract net ${CMAKE_CURRENT_SOURCE_DIR}/contract/net/test_metrics_hook_contract.cpp)
+add_mini_test(contract net ${CMAKE_CURRENT_SOURCE_DIR}/contract/net/test_game_metrics_contract.cpp)
+add_mini_test(integration benchmark ${CMAKE_CURRENT_SOURCE_DIR}/integration/benchmark/test_fps_like_broadcast_latency.cpp)
 
 get_property(unit_targets GLOBAL PROPERTY MINI_UNIT_TEST_TARGETS)
 get_property(contract_targets GLOBAL PROPERTY MINI_CONTRACT_TEST_TARGETS)

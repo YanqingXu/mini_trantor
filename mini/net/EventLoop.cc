@@ -6,6 +6,7 @@
 
 #include "mini/base/Logger.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <stdexcept>
@@ -39,7 +40,9 @@ EventLoop::EventLoop()
       timerQueue_(std::make_unique<TimerQueue>(this)),
       wakeupFd_(createEventfd()),
       wakeupChannel_(std::make_unique<Channel>(this, wakeupFd_)),
-      currentActiveChannel_(nullptr) {
+      currentActiveChannel_(nullptr),
+      pendingFunctorPeak_(0),
+      wakeupCount_(0) {
     if (t_loopInThisThread != nullptr) {
         throw std::runtime_error("another EventLoop already exists in this thread");
     }
@@ -114,14 +117,29 @@ void EventLoop::runInLoop(Functor cb) {
 }
 
 void EventLoop::queueInLoop(Functor cb) {
+    const auto enqueuedAt = mini::base::now();
     {
         std::lock_guard lock(mutex_);
-        pendingFunctors_.push_back(std::move(cb));
+        pendingFunctors_.push_back(PendingFunctor{std::move(cb), enqueuedAt});
+        const auto pendingSize = pendingFunctors_.size();
+        auto observedPeak = pendingFunctorPeak_.load(std::memory_order_relaxed);
+        while (pendingSize > observedPeak &&
+               !pendingFunctorPeak_.compare_exchange_weak(
+                   observedPeak,
+                   pendingSize,
+                   std::memory_order_relaxed,
+                   std::memory_order_relaxed)) {
+        }
     }
 
     if (!isInLoopThread() || callingPendingFunctors_) {
         wakeup();
     }
+}
+
+void EventLoop::setEventLoopMetricCallback(EventLoopMetricCallback cb) {
+    assertInLoopThread();
+    eventLoopMetricCallback_ = std::move(cb);
 }
 
 TimerId EventLoop::runAt(mini::base::Timestamp time, Functor cb) {
@@ -144,6 +162,7 @@ void EventLoop::cancel(TimerId timerId) {
 }
 
 void EventLoop::wakeup() {
+    wakeupCount_.fetch_add(1, std::memory_order_relaxed);
     const uint64_t one = 1;
     const ssize_t written = ::write(wakeupFd_, &one, sizeof(one));
     if (written != static_cast<ssize_t>(sizeof(one)) && errno != EAGAIN) {
@@ -183,22 +202,49 @@ void EventLoop::handleRead(mini::base::Timestamp receiveTime) {
     if (n != static_cast<ssize_t>(sizeof(one)) && errno != EAGAIN) {
         LOG_SYSERR << "EventLoop::handleRead: " << std::strerror(errno);
     }
+    EventLoopMetricSample sample;
+    sample.event = EventLoopMetricEvent::WakeupHandled;
+    sample.loop = this;
+    sample.wakeupCount = wakeupCount_.load(std::memory_order_relaxed);
+    emitEventLoopMetric(sample);
 }
 
 void EventLoop::doPendingFunctors() {
-    std::vector<Functor> functors;
+    std::vector<PendingFunctor> functors;
+    std::size_t pendingPeak = 0;
     callingPendingFunctors_ = true;
 
     {
         std::lock_guard lock(mutex_);
         functors.swap(pendingFunctors_);
+        pendingPeak = pendingFunctorPeak_.exchange(0, std::memory_order_relaxed);
+    }
+
+    if (!functors.empty()) {
+        const auto now = mini::base::now();
+        EventLoopMetricSample sample;
+        sample.event = EventLoopMetricEvent::PendingFunctorsDrained;
+        sample.loop = this;
+        sample.pendingFunctors = functors.size();
+        sample.pendingFunctorPeak = std::max(pendingPeak, functors.size());
+        sample.wakeupCount = wakeupCount_.load(std::memory_order_relaxed);
+        sample.oldestPendingLatency = now - functors.front().enqueuedAt;
+        emitEventLoopMetric(sample);
     }
 
     for (auto& functor : functors) {
-        functor();
+        functor.functor();
     }
 
     callingPendingFunctors_ = false;
+}
+
+void EventLoop::emitEventLoopMetric(EventLoopMetricSample sample) {
+    if (!eventLoopMetricCallback_) {
+        return;
+    }
+    sample.loop = this;
+    eventLoopMetricCallback_(sample);
 }
 
 }  // namespace mini::net

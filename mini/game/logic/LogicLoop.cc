@@ -43,6 +43,11 @@ void LogicLoop::setOutputDispatcher(OutputDispatcher dispatcher) {
     }
 }
 
+void LogicLoop::setMetricCallback(LogicLoopMetricCallback callback) {
+    std::scoped_lock lock(stateMutex_);
+    metricCallback_ = std::move(callback);
+}
+
 bool LogicLoop::submit(std::string sessionId,
                        std::weak_ptr<mini::net::TcpConnection> sourceConnection,
                        std::string payload) {
@@ -61,6 +66,19 @@ bool LogicLoop::submit(GameCommandPtr command) {
     }
 
     queue_->enqueue(std::move(command));
+    auto callback = resolveMetricCallback();
+    auto* loop = logicLoop_.load(std::memory_order_acquire);
+    if (callback && loop) {
+        auto queue = queue_;
+        loop->queueInLoop([loop, queue = std::move(queue), callback = std::move(callback)] {
+            LogicLoopMetricSample sample;
+            sample.event = LogicLoopMetricEvent::CommandEnqueued;
+            sample.loop = loop;
+            sample.backlog = queue->size();
+            sample.oldestLag = queue->oldestLag();
+            callback(sample);
+        });
+    }
     return true;
 }
 
@@ -128,9 +146,33 @@ LogicLoop::OutputDispatcher LogicLoop::resolveOutputDispatcher() const {
     return outputDispatcher_;
 }
 
+LogicLoopMetricCallback LogicLoop::resolveMetricCallback() const {
+    std::scoped_lock lock(stateMutex_);
+    return metricCallback_;
+}
+
 void LogicLoop::onLogicTick() {
+    const auto tickStartedAt = mini::base::now();
+    auto tickJitter = TickDuration::zero();
+    if (lastTickAt_ != mini::base::Timestamp{}) {
+        const auto elapsed = tickStartedAt - lastTickAt_;
+        tickJitter = elapsed >= fixedStep_ ? elapsed - fixedStep_ : fixedStep_ - elapsed;
+    }
+    lastTickAt_ = tickStartedAt;
+
+    auto metricCallback = resolveMetricCallback();
     const auto commands = queue_->drain(maxCommandsPerTick_);
     if (commands.empty()) {
+        if (metricCallback) {
+            LogicLoopMetricSample sample;
+            sample.event = LogicLoopMetricEvent::TickCompleted;
+            sample.loop = logicLoop_.load(std::memory_order_acquire);
+            sample.backlog = queue_->size();
+            sample.oldestLag = queue_->oldestLag();
+            sample.tickDuration = mini::base::now() - tickStartedAt;
+            sample.tickJitter = tickJitter;
+            metricCallback(sample);
+        }
         return;
     }
 
@@ -150,6 +192,18 @@ void LogicLoop::onLogicTick() {
     }
 
     processedCount_.fetch_add(commands.size());
+
+    if (metricCallback) {
+        LogicLoopMetricSample sample;
+        sample.event = LogicLoopMetricEvent::TickCompleted;
+        sample.loop = logicLoop_.load(std::memory_order_acquire);
+        sample.backlog = queue_->size();
+        sample.drainedCommands = commands.size();
+        sample.oldestLag = queue_->oldestLag();
+        sample.tickDuration = mini::base::now() - tickStartedAt;
+        sample.tickJitter = tickJitter;
+        metricCallback(sample);
+    }
 }
 
 void LogicLoop::dispatchOutputs(std::vector<GameCommand>&& outputs) {

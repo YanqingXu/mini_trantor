@@ -3,6 +3,7 @@
 // EventLoop 是单线程 Reactor 调度核心，负责 poll、事件分发与跨线程任务回流。
 // 所有 loop-owned 可变状态都必须只在 owner 线程上访问与销毁。
 
+#include "mini/base/MetricsHook.h"
 #include "mini/base/Timestamp.h"
 #include "mini/base/noncopyable.h"
 #include "mini/net/TimerId.h"
@@ -36,6 +37,7 @@ public:
 
     void runInLoop(Functor cb);
     void queueInLoop(Functor cb);
+    void setEventLoopMetricCallback(EventLoopMetricCallback cb);
     TimerId runAt(mini::base::Timestamp time, Functor cb);
     TimerId runAfter(TimerDuration delay, Functor cb);
     TimerId runEvery(TimerDuration interval, Functor cb);
@@ -50,8 +52,14 @@ public:
     void assertInLoopThread() const;
 
 private:
+    struct PendingFunctor {
+        Functor functor;
+        mini::base::Timestamp enqueuedAt;
+    };
+
     void handleRead(mini::base::Timestamp receiveTime);
     void doPendingFunctors();
+    void emitEventLoopMetric(EventLoopMetricSample sample);
 
     using ChannelList = std::vector<Channel*>;
 
@@ -67,8 +75,11 @@ private:
     std::unique_ptr<Channel> wakeupChannel_;
     ChannelList activeChannels_;
     Channel* currentActiveChannel_;
+    EventLoopMetricCallback eventLoopMetricCallback_;
+    std::atomic<std::size_t> pendingFunctorPeak_;
+    std::atomic<std::uint64_t> wakeupCount_;
     mutable std::mutex mutex_;
-    std::vector<Functor> pendingFunctors_;
+    std::vector<PendingFunctor> pendingFunctors_;
 };
 
 }  // namespace mini::net

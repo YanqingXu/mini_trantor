@@ -81,6 +81,8 @@ TcpServer::TcpServer(EventLoop* loop, const InetAddress& listenAddr, std::string
       started_(false),
       stopped_(false),
       draining_(false),
+      broadcastMetricsEnabled_(options.metrics.enableBroadcastMetrics),
+      eventLoopQueueMetricsEnabled_(options.metrics.enableEventLoopQueueMetrics),
       nextConnId_(1),
       highWaterMark_(0),
       backpressureHighWaterMark_(options.backpressureHighWaterMark),
@@ -182,16 +184,17 @@ void TcpServer::broadcastTo(const std::vector<std::string>& sessionIds, const st
         return;
     }
 
+    const auto requestedAt = mini::base::now();
     if (!loop_->isInLoopThread()) {
         auto payload = payloadPool_->acquire(data);
-        loop_->queueInLoop([this, sessionIds, payload = std::move(payload)]() mutable {
-            broadcastToInLoop(sessionIds, std::move(payload));
+        loop_->queueInLoop([this, sessionIds, payload = std::move(payload), requestedAt]() mutable {
+            broadcastToInLoopWithMetrics(sessionIds, std::move(payload), requestedAt);
         });
         return;
     }
 
     auto payload = payloadPool_->acquire(data);
-    broadcastToInLoop(sessionIds, std::move(payload));
+    broadcastToInLoopWithMetrics(sessionIds, std::move(payload), requestedAt);
 }
 
 void TcpServer::broadcast(const std::string& data) {
@@ -204,33 +207,77 @@ void TcpServer::broadcast(const std::string& data) {
     if (!payloadPool_) {
         return;
     }
+    const auto requestedAt = mini::base::now();
     if (!loop_->isInLoopThread()) {
         auto payload = payloadPool_->acquire(data);
-        loop_->queueInLoop([this, payload = std::move(payload)]() mutable { broadcastInLoop(std::move(payload)); });
+        loop_->queueInLoop([this, payload = std::move(payload), requestedAt]() mutable {
+            broadcastInLoopWithMetrics(std::move(payload), requestedAt);
+        });
         return;
     }
 
     auto payload = payloadPool_->acquire(data);
-    broadcastInLoop(std::move(payload));
+    broadcastInLoopWithMetrics(std::move(payload), requestedAt);
 }
 
 void TcpServer::broadcastToInLoop(std::vector<std::string> sessionIds, buffer::PayloadPtr payload) {
+    broadcastToInLoopWithMetrics(std::move(sessionIds), std::move(payload), mini::base::now());
+}
+
+void TcpServer::broadcastInLoop(buffer::PayloadPtr payload) {
+    broadcastInLoopWithMetrics(std::move(payload), mini::base::now());
+}
+
+void TcpServer::broadcastToInLoopWithMetrics(
+    std::vector<std::string> sessionIds,
+    buffer::PayloadPtr payload,
+    mini::base::Timestamp requestedAt) {
     if (!broadcastRouter_ || !broadcastDispatcher_ || !payload) {
         return;
     }
     if (sessionIds.empty()) {
         return;
     }
+    const auto routeStartedAt = mini::base::now();
     auto batches = broadcastRouter_->route(sessionIds);
-    broadcastDispatcher_->dispatch(std::move(batches), std::move(payload));
+    const auto routedAt = mini::base::now();
+
+    broadcast::BroadcastDispatcher::DispatchMetricContext metrics;
+    metrics.requestedAt = requestedAt;
+    metrics.routedAt = routedAt;
+    metrics.targeted = true;
+    metrics.requestedSessions = sessionIds.size();
+    metrics.loopBatches = batches.size();
+    metrics.payloadBytes = payload->size();
+    metrics.routeLatency = routedAt - routeStartedAt;
+    for (const auto& batch : batches) {
+        metrics.fanoutConnections += batch.connections.size();
+    }
+
+    broadcastDispatcher_->dispatch(std::move(batches), std::move(payload), metrics);
 }
 
-void TcpServer::broadcastInLoop(buffer::PayloadPtr payload) {
+void TcpServer::broadcastInLoopWithMetrics(buffer::PayloadPtr payload, mini::base::Timestamp requestedAt) {
     if (!broadcastRouter_ || !broadcastDispatcher_ || !payload) {
         return;
     }
+    const auto routeStartedAt = mini::base::now();
     auto batches = broadcastRouter_->routeAll();
-    broadcastDispatcher_->dispatch(std::move(batches), std::move(payload));
+    const auto routedAt = mini::base::now();
+
+    broadcast::BroadcastDispatcher::DispatchMetricContext metrics;
+    metrics.requestedAt = requestedAt;
+    metrics.routedAt = routedAt;
+    metrics.targeted = false;
+    metrics.loopBatches = batches.size();
+    metrics.payloadBytes = payload->size();
+    metrics.routeLatency = routedAt - routeStartedAt;
+    for (const auto& batch : batches) {
+        metrics.fanoutConnections += batch.connections.size();
+    }
+    metrics.requestedSessions = metrics.fanoutConnections;
+
+    broadcastDispatcher_->dispatch(std::move(batches), std::move(payload), metrics);
 }
 
 // ── Metrics hooks ──
@@ -247,13 +294,54 @@ void TcpServer::setTlsEventCallback(TlsEventCallback cb) {
     tlsEventCallback_ = std::move(cb);
 }
 
+void TcpServer::setBroadcastMetricCallback(BroadcastMetricCallback cb) {
+    broadcastMetricCallback_ = std::move(cb);
+    if (broadcastMetricCallback_) {
+        broadcastMetricsEnabled_ = true;
+    }
+    configureBroadcastMetrics();
+}
+
+void TcpServer::setEventLoopMetricCallback(EventLoopMetricCallback cb) {
+    eventLoopMetricCallback_ = std::move(cb);
+    if (eventLoopMetricCallback_) {
+        eventLoopQueueMetricsEnabled_ = true;
+    }
+}
+
+void TcpServer::configureBroadcastMetrics() {
+    if (!broadcastDispatcher_) {
+        return;
+    }
+    if (broadcastMetricsEnabled_ && broadcastMetricCallback_) {
+        broadcastDispatcher_->setBroadcastMetricCallback(broadcastMetricCallback_);
+        return;
+    }
+    broadcastDispatcher_->setBroadcastMetricCallback({});
+}
+
 // ── Lifecycle ──
 
 void TcpServer::start() {
     bool expected = false;
     if (started_.compare_exchange_strong(expected, true)) {
         stopped_ = false;
-        threadPool_->start(threadInitCallback_);
+        configureBroadcastMetrics();
+        auto loopMetricCallback = eventLoopQueueMetricsEnabled_
+            ? eventLoopMetricCallback_
+            : EventLoopMetricCallback{};
+        if (loopMetricCallback) {
+            loop_->setEventLoopMetricCallback(loopMetricCallback);
+        }
+        auto threadInitCallback = threadInitCallback_;
+        threadPool_->start([loopMetricCallback, threadInitCallback](EventLoop* loop) {
+            if (loopMetricCallback) {
+                loop->setEventLoopMetricCallback(loopMetricCallback);
+            }
+            if (threadInitCallback) {
+                threadInitCallback(loop);
+            }
+        });
         loop_->runInLoop([this] { acceptor_->listen(); });
     }
 }

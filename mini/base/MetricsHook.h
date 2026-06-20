@@ -7,12 +7,16 @@
 // 注意：TcpConnectionPtr 定义在 mini/net/Callbacks.h 中。
 // 本头文件仅前向声明，回调签名使用 std::shared_ptr<TcpConnection>。
 
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 
 namespace mini::net {
 
+class EventLoop;
 class TcpConnection;
 class InetAddress;
 
@@ -62,4 +66,96 @@ enum class TlsEvent {
 using TlsEventCallback =
     std::function<void(const std::shared_ptr<TcpConnection>&, TlsEvent)>;
 
+// ── 广播分发指标 ──
+
+enum class BroadcastMetricEvent {
+    Routed,       ///< base loop 已完成目标分桶
+    LoopFlushed,  ///< owner ioLoop 已执行本 loop 的批量发送
+};
+
+struct BroadcastMetricSample {
+    using Duration = std::chrono::steady_clock::duration;
+
+    BroadcastMetricEvent event{BroadcastMetricEvent::Routed};
+    EventLoop* loop{nullptr};
+    bool targeted{false};
+    std::size_t requestedSessions{0};
+    std::size_t loopBatches{0};
+    std::size_t fanoutConnections{0};
+    std::size_t payloadBytes{0};
+    Duration routeLatency{Duration::zero()};
+    Duration queueLatency{Duration::zero()};
+    Duration fanoutLatency{Duration::zero()};
+};
+
+using BroadcastMetricCallback = std::function<void(const BroadcastMetricSample&)>;
+
+// ── EventLoop 队列 / wakeup 指标 ──
+
+enum class EventLoopMetricEvent {
+    PendingFunctorsDrained,  ///< owner loop 开始执行一批 pending functors
+    WakeupHandled,           ///< owner loop 消费了一次 wakeup 信号
+};
+
+struct EventLoopMetricSample {
+    using Duration = std::chrono::steady_clock::duration;
+
+    EventLoopMetricEvent event{EventLoopMetricEvent::PendingFunctorsDrained};
+    EventLoop* loop{nullptr};
+    std::size_t pendingFunctors{0};
+    std::size_t pendingFunctorPeak{0};
+    std::uint64_t wakeupCount{0};
+    Duration oldestPendingLatency{Duration::zero()};
+};
+
+using EventLoopMetricCallback = std::function<void(const EventLoopMetricSample&)>;
+
 }  // namespace mini::net
+
+namespace mini::game {
+
+// ── 会话重连指标 ──
+
+enum class SessionMetricEvent {
+    ReconnectWindowStarted,  ///< session 进入可重连窗口
+    ReconnectSucceeded,      ///< session 在窗口内重绑 transport
+    ReconnectExpired,        ///< session 重连窗口超时
+};
+
+struct SessionMetricSample {
+    using Duration = std::chrono::steady_clock::duration;
+
+    SessionMetricEvent event{SessionMetricEvent::ReconnectWindowStarted};
+    std::string sessionToken;
+    bool success{false};
+    Duration reconnectDuration{Duration::zero()};
+};
+
+using SessionMetricCallback = std::function<void(const SessionMetricSample&)>;
+
+namespace logic {
+
+// ── 固定步逻辑队列指标 ──
+
+enum class LogicLoopMetricEvent {
+    CommandEnqueued,  ///< 命令进入逻辑队列后，在 logic loop 上观测
+    TickCompleted,    ///< 一个 fixed-step tick 完成
+};
+
+struct LogicLoopMetricSample {
+    using Duration = std::chrono::steady_clock::duration;
+
+    LogicLoopMetricEvent event{LogicLoopMetricEvent::CommandEnqueued};
+    mini::net::EventLoop* loop{nullptr};
+    std::size_t backlog{0};
+    std::size_t drainedCommands{0};
+    std::chrono::milliseconds oldestLag{std::chrono::milliseconds::zero()};
+    Duration tickDuration{Duration::zero()};
+    Duration tickJitter{Duration::zero()};
+};
+
+using LogicLoopMetricCallback = std::function<void(const LogicLoopMetricSample&)>;
+
+}  // namespace logic
+
+}  // namespace mini::game

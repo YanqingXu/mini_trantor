@@ -3,6 +3,8 @@
 // LogicLoop —— 逻辑线程化入口。
 // 目标：将高频 I/O 消息解耦到独占 loop，按 fixed-step 执行，避免阻塞 I/O loop。
 
+#include "mini/base/MetricsHook.h"
+#include "mini/base/Timestamp.h"
 #include "mini/base/noncopyable.h"
 #include "mini/game/logic/GameCommandQueue.h"
 #include "mini/net/EventLoop.h"
@@ -37,6 +39,7 @@ public:
 
     void setProcessor(CommandProcessor processor);
     void setOutputDispatcher(OutputDispatcher dispatcher);
+    void setMetricCallback(LogicLoopMetricCallback callback);
 
     bool submit(std::string sessionId,
                 std::weak_ptr<mini::net::TcpConnection> sourceConnection,
@@ -56,6 +59,7 @@ private:
     void dispatchOutputs(std::vector<GameCommand>&& outputs);
     CommandProcessor resolveProcessor() const;
     OutputDispatcher resolveOutputDispatcher() const;
+    LogicLoopMetricCallback resolveMetricCallback() const;
 
     static void defaultOutputDispatch(std::vector<GameCommand>&& outputs);
 
@@ -67,10 +71,12 @@ private:
     mini::net::TimerId tickTimerId_;
     std::atomic<mini::net::EventLoop*> logicLoop_;
     std::atomic<std::size_t> processedCount_{0};
+    mini::base::Timestamp lastTickAt_{};
 
     mutable std::mutex stateMutex_;
     CommandProcessor processor_;
     OutputDispatcher outputDispatcher_;
+    LogicLoopMetricCallback metricCallback_;
 };
 
 }  // namespace mini::game::logic

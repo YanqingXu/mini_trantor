@@ -13,6 +13,14 @@ namespace mini::net {
 struct TcpServerOptions {
     using Duration = std::chrono::steady_clock::duration;
 
+    struct MetricsOptions {
+        /// Enable broadcast fanout / payload / latency samples when a callback is installed.
+        bool enableBroadcastMetrics = false;
+
+        /// Enable EventLoop pending-functor / wakeup samples for base and worker loops.
+        bool enableEventLoopQueueMetrics = false;
+    };
+
     /// IO 线程数（含 base loop）。默认 1（单线程模式）。
     int numThreads = 1;
 
@@ -28,6 +36,9 @@ struct TcpServerOptions {
 
     /// 是否允许端口复用（SO_REUSEPORT）。默认 true。
     bool reusePort = true;
+
+    /// 网络行为指标开关。默认关闭，保持历史路径的最小开销。
+    MetricsOptions metrics{};
 
     /// 验证选项合法性。不合法时抛 std::invalid_argument。
     void validate() const {
