@@ -28,6 +28,15 @@ int createNonblockingOrDie(sa_family_t family) {
     return sockfd;
 }
 
+int createNonblockingDatagramOrDie(sa_family_t family) {
+    const int sockfd =
+        ::socket(family, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_UDP);
+    if (sockfd < 0) {
+        die("socket");
+    }
+    return sockfd;
+}
+
 void bindOrDie(int sockfd, const sockaddr_storage& addr) {
     socklen_t addrLen = 0;
     if (addr.ss_family == AF_INET6) {

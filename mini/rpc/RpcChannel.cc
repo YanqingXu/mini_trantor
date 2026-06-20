@@ -1,9 +1,12 @@
 #include "mini/rpc/RpcChannel.h"
 
 #include "mini/net/Buffer.h"
+#include "mini/net/framing/PacketFramer.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/ProtocolConnectionAdapter.h"
 #include "mini/net/TcpConnection.h"  // lifecycle: onMessage signature
+#include <any>
+#include <array>
 
 #include <utility>
 
@@ -14,20 +17,10 @@ RpcChannel::RpcChannel(mini::net::EventLoop* loop)
 }
 
 bool RpcChannel::onMessage(const mini::net::TcpConnectionPtr& conn, mini::net::Buffer* buf) {
-    while (buf->readableBytes() > 0) {
-        RpcMessage msg;
-        std::size_t consumed = 0;
-        auto result = codec::decode(buf->peek(), buf->readableBytes(), msg, consumed);
+    static constexpr std::size_t kMaxFramesPerRead = 32;
+    static const mini::net::framing::PacketFramer kFrameFramer;
 
-        if (result == RpcDecodeResult::kIncomplete) {
-            break;
-        }
-        if (result == RpcDecodeResult::kError) {
-            return false;
-        }
-
-        buf->retrieve(consumed);
-
+    const auto dispatchMessage = [this, &conn](const RpcMessage& msg) {
         if (msg.msgType == RpcMsgType::kResponse || msg.msgType == RpcMsgType::kError) {
             // Client side: match to pending call.
             auto it = pendingCalls_.find(msg.requestId);
@@ -48,28 +41,81 @@ bool RpcChannel::onMessage(const mini::net::TcpConnectionPtr& conn, mini::net::B
                     }
                 }
             }
-            // Response without matching request: silently discard.
-        } else {
+        } else if (requestCallback_) {
             // Server side: dispatch to request handler.
-            if (requestCallback_) {
-                std::uint64_t reqId = msg.requestId;
-                auto proto = mini::net::ProtocolConnectionAdapter::sharedFrom(conn);
+            const auto reqId = msg.requestId;
+            auto proto = mini::net::ProtocolConnectionAdapter::sharedFrom(conn);
 
-                auto respond = [proto, reqId](std::string_view payload) {
-                    if (proto) {
-                        proto->send(codec::encodeResponse(reqId, payload));
-                    }
-                };
+            auto respond = [proto, reqId](std::string_view payload) {
+                if (proto) {
+                    proto->send(codec::encodeResponse(reqId, payload));
+                }
+            };
 
-                auto respondError = [proto, reqId](std::string_view errorMsg) {
-                    if (proto) {
-                        proto->send(codec::encodeError(reqId, errorMsg));
-                    }
-                };
+            auto respondError = [proto, reqId](std::string_view errorMsg) {
+                if (proto) {
+                    proto->send(codec::encodeError(reqId, errorMsg));
+                }
+            };
 
-                requestCallback_(msg.method, msg.payload,
-                                 std::move(respond), std::move(respondError));
+            requestCallback_(msg.method, msg.payload, std::move(respond), std::move(respondError));
+        }
+    };
+
+    while (buf->readableBytes() > 0) {
+        std::array<mini::net::framing::Packet, kMaxFramesPerRead> packets{};
+        const auto batch = kFrameFramer.decodeBatch(
+            buf->peek(),
+            buf->readableBytes(),
+            packets.data(),
+            packets.size(),
+            kMaxFramesPerRead);
+
+        if (batch.status == mini::net::framing::PacketDecodeState::kInvalid ||
+            batch.status == mini::net::framing::PacketDecodeState::kOverLimit) {
+            return false;
+        }
+
+        for (std::size_t i = 0; i < batch.frameCount; ++i) {
+            if (packets[i].header.msgId != codec::kRpcMsgId) {
+                return false;
             }
+
+            RpcMessage msg;
+            if (codec::decodePayload(packets[i].payload, msg) != RpcDecodeResult::kComplete) {
+                return false;
+            }
+
+            dispatchMessage(msg);
+        }
+
+        buf->retrieve(batch.consumed);
+
+        if (batch.status == mini::net::framing::PacketDecodeState::kNeedMore) {
+            if (batch.hitLimit && batch.frameCount > 0) {
+                auto connShared = conn;
+                loop_->queueInLoop([connShared, buf] {
+                    if (!connShared->connected()) {
+                        return;
+                    }
+
+                    auto* channel = std::any_cast<RpcChannel>(&connShared->getContext());
+                    if (!channel) {
+                        auto* adapter = mini::net::ProtocolConnectionAdapter::getFrom(connShared);
+                        if (!adapter) {
+                            return;
+                        }
+
+                        channel = std::any_cast<RpcChannel>(&adapter->getProtocolContext());
+                        if (!channel) {
+                            return;
+                        }
+                    }
+
+                    channel->onMessage(connShared, buf);
+                });
+            }
+            break;
         }
     }
     return true;

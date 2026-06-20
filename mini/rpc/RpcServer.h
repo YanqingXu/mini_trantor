@@ -10,6 +10,7 @@
 #include "mini/net/Callbacks.h"
 #include "mini/net/TcpServer.h"
 
+#include <memory>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -18,9 +19,14 @@
 namespace mini::net {
 class EventLoop;
 class InetAddress;
+class ProtocolConnectionAdapter;
 }  // namespace mini::net
 
 namespace mini::rpc {
+
+using TransportSessionHook = std::function<void(const mini::net::TcpConnectionPtr&,
+                                               std::weak_ptr<mini::net::ProtocolConnectionAdapter>,
+                                               bool)>;
 
 /// Handler for a single RPC method.
 /// @param payload   The request payload.
@@ -49,6 +55,7 @@ public:
     void registerCoroMethod(std::string method, RpcCoroHandler handler);
 
     void setThreadNum(int numThreads) { server_.setThreadNum(numThreads); }
+    void setTransportSessionHook(TransportSessionHook hook);
 
     void start();
 
@@ -57,6 +64,7 @@ private:
     void onMessage(const mini::net::TcpConnectionPtr& conn, mini::net::Buffer* buf);
 
     mini::net::TcpServer server_;
+    TransportSessionHook transportSessionHook_;
     std::unordered_map<std::string, RpcMethodHandler> methods_;
     std::unordered_map<std::string, RpcCoroHandler> coroMethods_;
 };

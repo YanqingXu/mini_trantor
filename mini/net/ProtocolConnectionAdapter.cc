@@ -1,44 +1,49 @@
 #include "mini/net/ProtocolConnectionAdapter.h"
 
 #include "mini/net/TcpConnection.h"
+#include "mini/net/transport/TransportEndpoint.h"
 
-#include <cassert>
 #include <utility>
 
 namespace mini::net {
 
-ProtocolConnectionAdapter::ProtocolConnectionAdapter(const TcpConnectionPtr& conn)
-    : conn_(conn),
-      name_(conn->name()) {
+ProtocolConnectionAdapter::ProtocolConnectionAdapter(std::shared_ptr<transport::ITransportChannel> channel,
+                                                   std::shared_ptr<transport::ITransportSession> session)
+    : channel_(std::move(channel)),
+      session_(std::move(session)),
+      name_(std::string{}) {
+    if (auto locked = channel_.lock()) {
+        name_ = locked->name();
+    }
 }
 
 void ProtocolConnectionAdapter::send(std::string_view data) {
-    if (auto c = conn_.lock()) {
+    if (auto c = channel_.lock()) {
         c->send(data);
     }
 }
 
 void ProtocolConnectionAdapter::shutdown() {
-    if (auto c = conn_.lock()) {
+    if (auto c = channel_.lock()) {
         c->shutdown();
     }
 }
 
 void ProtocolConnectionAdapter::forceClose() {
-    if (auto c = conn_.lock()) {
+    if (auto c = channel_.lock()) {
         c->forceClose();
     }
 }
 
 bool ProtocolConnectionAdapter::connected() const noexcept {
-    if (auto c = conn_.lock()) {
+    if (auto c = channel_.lock()) {
         return c->connected();
     }
     return false;
 }
 
 EventLoop* ProtocolConnectionAdapter::getLoop() const noexcept {
-    if (auto c = conn_.lock()) {
+    if (auto c = channel_.lock()) {
         return c->getLoop();
     }
     return nullptr;
@@ -48,15 +53,67 @@ std::string_view ProtocolConnectionAdapter::name() const noexcept {
     return name_;
 }
 
+transport::TransportSessionId
+ProtocolConnectionAdapter::sessionId() const noexcept {
+    if (auto session = session_.lock()) {
+        return session->sessionId();
+    }
+    return transport::kInvalidTransportSessionId;
+}
+
+void ProtocolConnectionAdapter::setSessionId(
+    transport::TransportSessionId id) {
+    if (auto session = session_.lock()) {
+        session->setSessionId(id);
+    }
+}
+
+transport::TransportKind
+ProtocolConnectionAdapter::transportKind() const noexcept {
+    if (auto session = session_.lock()) {
+        return session->transportKind();
+    }
+    return transport::TransportKind::kUnknown;
+}
+
 void ProtocolConnectionAdapter::setProtocolContext(std::any ctx) {
     protocolContext_ = std::move(ctx);
+    if (auto session = session_.lock()) {
+        session->setTransportContext(protocolContext_);
+    }
 }
 
 const std::any& ProtocolConnectionAdapter::getProtocolContext() const noexcept {
+    if (auto session = session_.lock()) {
+        return session->getTransportContext();
+    }
     return protocolContext_;
 }
 
 std::any& ProtocolConnectionAdapter::getProtocolContext() noexcept {
+    if (auto session = session_.lock()) {
+        return session->getTransportContext();
+    }
+    return protocolContext_;
+}
+
+void ProtocolConnectionAdapter::setTransportContext(std::any ctx) {
+    if (auto session = session_.lock()) {
+        session->setTransportContext(std::move(ctx));
+    }
+}
+
+const std::any& ProtocolConnectionAdapter::getTransportContext() const noexcept {
+    if (auto session = session_.lock()) {
+        return session->getTransportContext();
+    }
+    return protocolContext_;
+}
+
+std::any& ProtocolConnectionAdapter::getTransportContext() noexcept {
+    if (auto session = session_.lock()) {
+        return session->getTransportContext();
+    }
     return protocolContext_;
 }
 
@@ -66,7 +123,8 @@ std::any& ProtocolConnectionAdapter::getProtocolContext() noexcept {
 
 std::shared_ptr<ProtocolConnectionAdapter>
 ProtocolConnectionAdapter::createAndBind(const TcpConnectionPtr& conn) {
-    auto adapter = std::make_shared<ProtocolConnectionAdapter>(conn);
+    auto endpoint = transport::TransportEndpoint::create(conn);
+    auto adapter = std::make_shared<ProtocolConnectionAdapter>(endpoint, endpoint);
     conn->setContext(adapter);
     return adapter;
 }

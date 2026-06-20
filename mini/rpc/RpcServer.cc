@@ -50,6 +50,10 @@ void RpcServer::registerCoroMethod(std::string method, RpcCoroHandler handler) {
     coroMethods_.emplace(std::move(method), std::move(handler));
 }
 
+void RpcServer::setTransportSessionHook(TransportSessionHook hook) {
+    transportSessionHook_ = std::move(hook);
+}
+
 void RpcServer::start() {
     server_.start();
 }
@@ -58,6 +62,10 @@ void RpcServer::onConnection(const mini::net::TcpConnectionPtr& conn) {
     if (conn->connected()) {
         auto adapterPtr = mini::net::ProtocolConnectionAdapter::createAndBind(conn);
         auto channel = RpcChannel(conn->getLoop());
+
+        if (transportSessionHook_) {
+            transportSessionHook_(conn, adapterPtr, true);
+        }
 
         // Capture methods_ by reference — RpcServer outlives connections.
         channel.setRequestCallback(
@@ -88,6 +96,12 @@ void RpcServer::onConnection(const mini::net::TcpConnectionPtr& conn) {
         // Connection closing: fail all pending calls.
         auto* adapter = mini::net::ProtocolConnectionAdapter::getFrom(conn);
         if (adapter) {
+            if (transportSessionHook_) {
+                transportSessionHook_(conn, std::weak_ptr<mini::net::ProtocolConnectionAdapter>(
+                                          mini::net::ProtocolConnectionAdapter::sharedFrom(conn)),
+                                   false);
+            }
+
             auto* channel = std::any_cast<RpcChannel>(&adapter->getProtocolContext());
             if (channel) {
                 channel->failAllPending("connection closed");

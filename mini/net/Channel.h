@@ -53,6 +53,8 @@ public:
     static constexpr uint32_t kNoneEvent = 0;
     static constexpr uint32_t kReadEvent = EPOLLIN | EPOLLPRI;
     static constexpr uint32_t kWriteEvent = EPOLLOUT;
+    static constexpr uint32_t kErrorEvent = EPOLLERR;
+    static constexpr uint32_t kCloseEvent = EPOLLHUP | EPOLLRDHUP;
 
 private:
     void update();

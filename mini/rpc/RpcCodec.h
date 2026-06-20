@@ -1,9 +1,11 @@
 #pragma once
 
 // RpcCodec 是无状态的 RPC 帧编解码工具。
-// 协议帧格式：[totalLen(4B) | requestId(8B) | msgType(1B) | methodLen(2B) | method | payload]
-// totalLen 是从 requestId 开始到帧结束的字节数（不包括 totalLen 自身的 4 字节）。
+// 帧被 PacketFramer 再封装为统一协议（magic + len + msgId + flags + seq + payload）：
+// payload 内部保持 RPC 原始体格式：[requestId(8B) | msgType(1B) | methodLen(2B) | method | payload]。
 // 无线程亲和性，纯工具函数。
+
+#include "mini/net/framing/PacketFramer.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -37,11 +39,13 @@ enum class RpcDecodeResult {
 namespace codec {
 
 /// Header sizes.
-static constexpr std::size_t kHeaderLen = 4;       // totalLen field size
+static constexpr std::size_t kHeaderLen = mini::net::framing::kFrameHeaderSize; // PacketFramer header size
 static constexpr std::size_t kMinBodyLen = 8 + 1 + 2;  // requestId + msgType + methodLen
 
-/// Maximum frame body size (not including the 4-byte length header).
-static constexpr std::size_t kMaxFrameBodySize = 65536;
+static constexpr std::uint32_t kRpcMsgId = 0x52504302;  // 'RPC\\x02'
+
+/// Maximum frame body size (not including the PacketFramer header).
+static constexpr std::size_t kMaxFrameBodySize = mini::net::framing::kDefaultMaxPayloadSize;
 
 /// Encode a request frame.
 /// @return The complete encoded frame bytes
@@ -65,6 +69,10 @@ std::string encodeError(std::uint64_t requestId,
 /// @return Decode result
 RpcDecodeResult decode(const char* data, std::size_t len,
                        RpcMessage& msg, std::size_t& consumed);
+
+/// Decode a fully buffered PacketFramer payload into an RPC message.
+/// Caller should provide payload exactly as frame.payload (without packet header).
+RpcDecodeResult decodePayload(std::string_view payload, RpcMessage& msg);
 
 }  // namespace codec
 }  // namespace mini::rpc

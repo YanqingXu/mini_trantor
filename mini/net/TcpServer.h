@@ -10,6 +10,9 @@
 #include "mini/base/noncopyable.h"
 #include "mini/net/Acceptor.h"
 #include "mini/net/Callbacks.h"
+#include "mini/net/buffer/PayloadPool.h"
+#include "mini/net/broadcast/BroadcastRouter.h"
+#include "mini/net/broadcast/BroadcastDispatcher.h"
 #include "mini/net/EventLoopThreadPool.h"
 #include "mini/net/TcpServerOptions.h"
 #include "mini/net/TimerId.h"
@@ -19,6 +22,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace mini::net {
 
@@ -42,9 +46,14 @@ public:
     void enableSsl(std::shared_ptr<TlsContext> tlsContext);
     void setConnectionCallback(ConnectionCallback cb);
     void setMessageCallback(MessageCallback cb);
+    void setLogicMessageCallback(LogicMessageCallback cb);
     void setHighWaterMarkCallback(HighWaterMarkCallback cb, std::size_t highWaterMark);
     void setWriteCompleteCallback(WriteCompleteCallback cb);
     std::size_t connectionCount() const;
+    void broadcastTo(const std::vector<std::string>& sessionIds, const std::string& data);
+    void broadcast(const std::string& data);
+    void broadcastToInLoop(std::vector<std::string> sessionIds, buffer::PayloadPtr payload);
+    void broadcastInLoop(buffer::PayloadPtr payload);
 
     // ── Metrics hooks (v5-delta) ──
 
@@ -81,6 +90,7 @@ private:
     std::shared_ptr<EventLoopThreadPool> threadPool_;
     ConnectionCallback connectionCallback_;
     MessageCallback messageCallback_;
+    LogicMessageCallback logicMessageCallback_;
     HighWaterMarkCallback highWaterMarkCallback_;
     WriteCompleteCallback writeCompleteCallback_;
     ThreadInitCallback threadInitCallback_;
@@ -99,6 +109,9 @@ private:
     std::size_t backpressureLowWaterMark_;
     Duration idleTimeout_;
     std::unordered_map<std::string, TcpConnectionPtr> connections_;
+    std::shared_ptr<broadcast::BroadcastRouter> broadcastRouter_;
+    std::shared_ptr<broadcast::BroadcastDispatcher> broadcastDispatcher_;
+    std::shared_ptr<buffer::PayloadPool> payloadPool_;
     std::shared_ptr<void> lifetimeToken_;
     std::shared_ptr<TlsContext> tlsContext_;
     TimerId drainTimerId_;

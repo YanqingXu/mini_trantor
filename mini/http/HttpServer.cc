@@ -30,10 +30,21 @@ void HttpServer::stop() {
     server_.stop();
 }
 
+void HttpServer::setTransportSessionHook(TransportSessionHook hook) {
+    transportSessionHook_ = std::move(hook);
+}
+
 void HttpServer::onConnection(const mini::net::TcpConnectionPtr& conn) {
     if (conn->connected()) {
         auto adapter = mini::net::ProtocolConnectionAdapter::createAndBind(conn);
+        if (transportSessionHook_) {
+            transportSessionHook_(conn, adapter, true);
+        }
         adapter->setProtocolContext(HttpContext());
+    } else if (transportSessionHook_) {
+        transportSessionHook_(conn,
+                             mini::net::ProtocolConnectionAdapter::sharedFrom(conn),
+                             false);
     }
 }
 

@@ -14,17 +14,22 @@
 #include "mini/net/ProtocolConnection.h"
 #include "mini/net/TcpServer.h"
 
+#include <memory>
 #include <functional>
 #include <string>
 
 namespace mini::net {
 class EventLoop;
 class InetAddress;
+class ProtocolConnectionAdapter;
 }  // namespace mini::net
 
 namespace mini::http {
 
 using HttpCallback = std::function<void(const HttpRequest&, HttpResponse*)>;
+using TransportSessionHook = std::function<void(const mini::net::TcpConnectionPtr&,
+                                               std::weak_ptr<mini::net::ProtocolConnectionAdapter>,
+                                               bool)>;
 
 class HttpServer {
 public:
@@ -35,6 +40,7 @@ public:
 
     void setHttpCallback(HttpCallback cb) { httpCallback_ = std::move(cb); }
     void setThreadNum(int numThreads) { server_.setThreadNum(numThreads); }
+    void setTransportSessionHook(TransportSessionHook hook);
 
     void start();
     void stop();
@@ -46,6 +52,7 @@ private:
 
     mini::net::TcpServer server_;
     HttpCallback httpCallback_;
+    TransportSessionHook transportSessionHook_;
 };
 
 }  // namespace mini::http

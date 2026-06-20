@@ -2,11 +2,13 @@
 
 #include "mini/base/Logger.h"
 #include "mini/net/EventLoop.h"
+#include "mini/net/Buffer.h"
 #include "mini/net/SocketsOps.h"
 #include "mini/net/TcpConnection.h"
 #include "mini/net/TlsContext.h"
 
 #include <cstdint>
+#include <string_view>
 #include <stdexcept>
 #include <utility>
 
@@ -73,6 +75,9 @@ TcpServer::TcpServer(EventLoop* loop, const InetAddress& listenAddr, std::string
       name_(std::move(name)),
       acceptor_(std::make_unique<Acceptor>(loop, listenAddr, options.reusePort)),
       threadPool_(std::make_shared<EventLoopThreadPool>(loop, name_)),
+      broadcastRouter_(std::make_shared<broadcast::BroadcastRouter>(loop)),
+      broadcastDispatcher_(std::make_shared<broadcast::BroadcastDispatcher>(loop)),
+      payloadPool_(std::make_shared<buffer::PayloadPool>(loop)),
       started_(false),
       stopped_(false),
       draining_(false),
@@ -100,6 +105,9 @@ TcpServer::~TcpServer() {
     acceptor_->setNewConnectionCallback({});
 
     for (auto& [name, connection] : connections_) {
+        if (broadcastRouter_) {
+            broadcastRouter_->deregisterConnection(connection);
+        }
         auto conn = connection;
         conn->getLoop()->runInLoop([conn] {
             conn->setCloseCallback({});
@@ -145,6 +153,10 @@ void TcpServer::setMessageCallback(MessageCallback cb) {
     messageCallback_ = std::move(cb);
 }
 
+void TcpServer::setLogicMessageCallback(LogicMessageCallback cb) {
+    logicMessageCallback_ = std::move(cb);
+}
+
 void TcpServer::setHighWaterMarkCallback(HighWaterMarkCallback cb, std::size_t highWaterMark) {
     highWaterMarkCallback_ = std::move(cb);
     highWaterMark_ = highWaterMark;
@@ -157,6 +169,68 @@ void TcpServer::setWriteCompleteCallback(WriteCompleteCallback cb) {
 std::size_t TcpServer::connectionCount() const {
     loop_->assertInLoopThread();
     return connections_.size();
+}
+
+void TcpServer::broadcastTo(const std::vector<std::string>& sessionIds, const std::string& data) {
+    if (!broadcastRouter_) {
+        return;
+    }
+    if (!broadcastDispatcher_) {
+        return;
+    }
+    if (!payloadPool_) {
+        return;
+    }
+
+    if (!loop_->isInLoopThread()) {
+        auto payload = payloadPool_->acquire(data);
+        loop_->queueInLoop([this, sessionIds, payload = std::move(payload)]() mutable {
+            broadcastToInLoop(sessionIds, std::move(payload));
+        });
+        return;
+    }
+
+    auto payload = payloadPool_->acquire(data);
+    broadcastToInLoop(sessionIds, std::move(payload));
+}
+
+void TcpServer::broadcast(const std::string& data) {
+    if (!broadcastRouter_) {
+        return;
+    }
+    if (!broadcastDispatcher_) {
+        return;
+    }
+    if (!payloadPool_) {
+        return;
+    }
+    if (!loop_->isInLoopThread()) {
+        auto payload = payloadPool_->acquire(data);
+        loop_->queueInLoop([this, payload = std::move(payload)]() mutable { broadcastInLoop(std::move(payload)); });
+        return;
+    }
+
+    auto payload = payloadPool_->acquire(data);
+    broadcastInLoop(std::move(payload));
+}
+
+void TcpServer::broadcastToInLoop(std::vector<std::string> sessionIds, buffer::PayloadPtr payload) {
+    if (!broadcastRouter_ || !broadcastDispatcher_ || !payload) {
+        return;
+    }
+    if (sessionIds.empty()) {
+        return;
+    }
+    auto batches = broadcastRouter_->route(sessionIds);
+    broadcastDispatcher_->dispatch(std::move(batches), std::move(payload));
+}
+
+void TcpServer::broadcastInLoop(buffer::PayloadPtr payload) {
+    if (!broadcastRouter_ || !broadcastDispatcher_ || !payload) {
+        return;
+    }
+    auto batches = broadcastRouter_->routeAll();
+    broadcastDispatcher_->dispatch(std::move(batches), std::move(payload));
 }
 
 // ── Metrics hooks ──
@@ -258,6 +332,9 @@ void TcpServer::forceCloseAllConnections() {
     auto conns = connections_;
     connections_.clear();
     for (auto& [name, connection] : conns) {
+        if (broadcastRouter_) {
+            broadcastRouter_->deregisterConnection(connection);
+        }
         connection->setCloseCallback({});
         EventLoop* connLoop = connection->getLoop();
         if (connLoop == loop_) {
@@ -288,6 +365,9 @@ void TcpServer::newConnection(int sockfd, const InetAddress& peerAddr) {
     const InetAddress localAddr(sockets::getLocalAddr(sockfd));
     auto connection = std::make_shared<TcpConnection>(ioLoop, connName, sockfd, localAddr, peerAddr);
     connections_[connName] = connection;
+    if (broadcastRouter_) {
+        broadcastRouter_->registerConnection(connection);
+    }
 
     std::shared_ptr<IdleTimeoutState> idleState;
     if (idleTimeout_ > Duration::zero()) {
@@ -319,9 +399,12 @@ void TcpServer::newConnection(int sockfd, const InetAddress& peerAddr) {
             cb(conn);
         }
     });
-    connection->setMessageCallback([cb = messageCallback_, idleState](const TcpConnectionPtr& conn, Buffer* buffer) {
+    connection->setMessageCallback([cb = messageCallback_, logicCb = logicMessageCallback_, idleState](const TcpConnectionPtr& conn, Buffer* buffer) {
         if (idleState != nullptr) {
             refreshIdleTimer(idleState);
+        }
+        if (logicCb) {
+            logicCb(conn, std::string_view(buffer->peek(), buffer->readableBytes()));
         }
         if (cb) {
             cb(conn, buffer);
@@ -396,6 +479,9 @@ void TcpServer::removeConnection(const TcpConnectionPtr& connection) {
 void TcpServer::removeConnectionInLoop(const TcpConnectionPtr& connection) {
     loop_->assertInLoopThread();
     connections_.erase(connection->name());
+    if (broadcastRouter_) {
+        broadcastRouter_->deregisterConnection(connection);
+    }
     EventLoop* ioLoop = connection->getLoop();
     ioLoop->queueInLoop([connection] { connection->connectDestroyed(); });
 

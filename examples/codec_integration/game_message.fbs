@@ -1,0 +1,23 @@
+// Copyright 2026
+namespace game.protocol;
+
+attribute "id";
+
+enum MessageType : uint16 {
+  kRequest = 1,
+  kResponse = 2
+}
+
+table GameMessage {
+  version: uint;
+  player_id: ulong;
+  action: string;
+  x: float;
+  y: float;
+  z: float;
+  hp: int;
+}
+
+root_type GameMessage;
+file_identifier "GM01";
+file_extension "gm";

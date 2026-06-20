@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package game.protocol;
+
+// rpc payload schema for protobuf transport payload
+message GameMessage {
+  uint32 version = 1;
+  uint64 player_id = 2;
+  string action = 3;
+  float x = 4;
+  float y = 5;
+  float z = 6;
+  int32 hp = 7;
+}

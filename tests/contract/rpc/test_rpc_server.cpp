@@ -6,6 +6,7 @@
 #include "mini/coroutine/Task.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/InetAddress.h"
+#include "mini/net/framing/PacketFramer.h"
 
 #include <arpa/inet.h>
 #include <cassert>
@@ -23,6 +24,7 @@ namespace {
 
 using namespace std::chrono_literals;
 using namespace mini::rpc;
+using namespace mini::net::framing;
 
 uint16_t allocateTestPort() {
     const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
@@ -86,24 +88,25 @@ std::string readExactly(int fd, std::size_t expected, int timeoutSec = 3) {
 
 // Read one full RPC frame from fd
 std::string readOneFrame(int fd) {
-    // First read 4-byte header
-    char hdr[4];
-    std::size_t hdrRead = 0;
-    while (hdrRead < 4) {
-        ssize_t n = ::read(fd, hdr + hdrRead, 4 - hdrRead);
+    std::size_t headerRead = 0;
+    std::string header;
+    header.resize(kFrameHeaderSize);
+    while (headerRead < kFrameHeaderSize) {
+        ssize_t n = ::read(fd, header.data() + headerRead,
+                           static_cast<int>(kFrameHeaderSize - headerRead));
         assert(n > 0);
-        hdrRead += static_cast<std::size_t>(n);
+        headerRead += static_cast<std::size_t>(n);
     }
 
-    auto* b = reinterpret_cast<const uint8_t*>(hdr);
-    uint32_t bodyLen = (static_cast<uint32_t>(b[0]) << 24) |
-                       (static_cast<uint32_t>(b[1]) << 16) |
-                       (static_cast<uint32_t>(b[2]) << 8) |
-                       static_cast<uint32_t>(b[3]);
+    auto* b = reinterpret_cast<const std::uint8_t*>(header.data());
+    const std::uint32_t payloadLen = (static_cast<uint32_t>(b[2]) << 24) |
+                                     (static_cast<uint32_t>(b[3]) << 16) |
+                                     (static_cast<uint32_t>(b[4]) << 8) |
+                                     static_cast<uint32_t>(b[5]);
 
-    std::string frame(hdr, 4);
-    std::string body = readExactly(fd, bodyLen);
-    assert(body.size() == bodyLen);
+    std::string frame = std::move(header);
+    std::string body = readExactly(fd, payloadLen);
+    assert(body.size() == payloadLen);
     frame.append(body);
     return frame;
 }

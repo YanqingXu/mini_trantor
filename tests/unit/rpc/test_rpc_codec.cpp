@@ -2,6 +2,7 @@
 // Pure utility tests — no EventLoop or networking needed.
 
 #include "mini/rpc/RpcCodec.h"
+#include "mini/net/framing/PacketFramer.h"
 
 #include <cassert>
 #include <cstdio>
@@ -10,8 +11,32 @@
 
 using namespace mini::rpc;
 using namespace mini::rpc::codec;
+using namespace mini::net::framing;
 
 int main() {
+    const auto writeUint16 = [](std::string& dst, std::uint16_t value) {
+        dst.push_back(static_cast<char>((value >> 8) & 0xFF));
+        dst.push_back(static_cast<char>(value & 0xFF));
+    };
+
+    const auto writeUint32 = [](std::string& dst, std::uint32_t value) {
+        dst.push_back(static_cast<char>((value >> 24) & 0xFF));
+        dst.push_back(static_cast<char>((value >> 16) & 0xFF));
+        dst.push_back(static_cast<char>((value >> 8) & 0xFF));
+        dst.push_back(static_cast<char>(value & 0xFF));
+    };
+
+    const auto makeEmptyBodyHeader = [&](std::uint32_t payloadLen,
+                                        std::uint32_t msgId = 0x52504302) {
+        std::string frame;
+        writeUint16(frame, kDefaultPacketMagic);
+        writeUint32(frame, payloadLen);
+        writeUint32(frame, msgId);
+        writeUint16(frame, kPacketFlagNone);
+        writeUint32(frame, 0);
+        return frame;
+    };
+
     // 1. Encode and decode a request frame
     {
         std::string frame = encodeRequest(42, "Echo.Say", "hello");
@@ -118,8 +143,8 @@ int main() {
     // 8. Invalid message type
     {
         std::string frame = encodeRequest(1, "X", "data");
-        // msgType is at offset 4 + 8 = 12
-        frame[12] = static_cast<char>(0xFF);
+        // msgType is at offset packetHeader(16) + 8 = 24
+        frame[24] = static_cast<char>(0xFF);
         RpcMessage msg;
         std::size_t consumed = 0;
         auto result = decode(frame.data(), frame.size(), msg, consumed);
@@ -129,16 +154,9 @@ int main() {
 
     // 9. Frame body too large (exceeds max)
     {
-        // Manually craft a frame with bodyLen > kMaxFrameBodySize
-        std::string frame;
-        // Write a bodyLen of kMaxFrameBodySize + 1
-        std::uint32_t bigLen = static_cast<std::uint32_t>(kMaxFrameBodySize + 1);
-        frame.push_back(static_cast<char>((bigLen >> 24) & 0xFF));
-        frame.push_back(static_cast<char>((bigLen >> 16) & 0xFF));
-        frame.push_back(static_cast<char>((bigLen >> 8) & 0xFF));
-        frame.push_back(static_cast<char>(bigLen & 0xFF));
-        // Rest doesn't matter — should fail on size check
-        frame.resize(frame.size() + bigLen, '\0');
+        // Manually craft a packet header with payloadLen > kMaxFrameBodySize.
+        std::string frame = makeEmptyBodyHeader(static_cast<std::uint32_t>(kMaxFrameBodySize + 1));
+        frame.resize(frame.size() + 8, '\0');
 
         RpcMessage msg;
         std::size_t consumed = 0;
@@ -149,14 +167,8 @@ int main() {
 
     // 10. Body too short (less than minimum body length)
     {
-        std::string frame;
-        // bodyLen = 5 (less than kMinBodyLen = 11)
-        std::uint32_t tinyLen = 5;
-        frame.push_back(static_cast<char>((tinyLen >> 24) & 0xFF));
-        frame.push_back(static_cast<char>((tinyLen >> 16) & 0xFF));
-        frame.push_back(static_cast<char>((tinyLen >> 8) & 0xFF));
-        frame.push_back(static_cast<char>(tinyLen & 0xFF));
-        frame.resize(frame.size() + tinyLen, '\0');
+        std::string frame = makeEmptyBodyHeader(5);
+        frame.resize(frame.size() + 5, '\0');
 
         RpcMessage msg;
         std::size_t consumed = 0;
@@ -168,10 +180,10 @@ int main() {
     // 11. methodLen exceeds remaining body
     {
         std::string frame = encodeRequest(1, "X", "");
-        // methodLen is at offset 4 + 9 = 13 (2 bytes, big-endian)
+        // methodLen is at offset packetHeader(16) + 9 = 25 (2 bytes, big-endian)
         // Set it to a huge value
-        frame[13] = static_cast<char>(0xFF);
-        frame[14] = static_cast<char>(0xFF);
+        frame[25] = static_cast<char>(0xFF);
+        frame[26] = static_cast<char>(0xFF);
         RpcMessage msg;
         std::size_t consumed = 0;
         auto result = decode(frame.data(), frame.size(), msg, consumed);

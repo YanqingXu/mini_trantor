@@ -31,7 +31,8 @@
 
 #include <any>
 #include <memory>
-#include <string_view>
+
+#include "mini/net/transport/ITransport.h"
 
 namespace mini::net {
 
@@ -40,28 +41,16 @@ class EventLoop;
 // ---------------------------------------------------------------------------
 // IProtocolConnection
 // ---------------------------------------------------------------------------
+// 迁移策略：
+// - transport-facing 原语统一到 transport::ITransport*；
+// - ProtocolConnection 侧继续保留 protocol context API，供 HTTP/WebSocket/RPC 语义存储。
 
-class IProtocolConnection {
+class IProtocolConnection : public mini::net::transport::ITransportChannel,
+                           public mini::net::transport::ITransportSession {
 public:
     virtual ~IProtocolConnection() = default;
-
-    // 发送字节序列（非阻塞，通过 TcpConnection 的发送缓冲区）
-    virtual void send(std::string_view data) = 0;
-
-    // 请求半关闭：发送完缓冲区剩余数据后关闭写端
-    virtual void shutdown() = 0;
-
-    // 立即强制关闭连接
-    virtual void forceClose() = 0;
-
-    // 连接是否仍处于可发送状态
-    virtual bool connected() const noexcept = 0;
-
-    // Owner loop（用于线程亲和断言）
-    virtual EventLoop* getLoop() const noexcept = 0;
-
-    // 连接名称（用于日志）
-    virtual std::string_view name() const noexcept = 0;
+    // 兼容保留：上层协议栈仍可使用 protocol context 语义
+    // （实际会映射到底层 transport context，实现位于 ProtocolConnectionAdapter）。
 
     // Per-connection 协议状态槽（与 TcpConnection::setContext 独立的第二个槽）
     // 协议适配器用此槽存储 HttpContext / WebSocket ConnectionContext / etc.

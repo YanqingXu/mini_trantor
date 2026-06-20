@@ -8,6 +8,7 @@
 #include "mini/net/EventLoop.h"
 #include "mini/net/InetAddress.h"
 #include "mini/net/TcpConnection.h"
+#include "mini/net/framing/PacketFramer.h"
 
 #include <arpa/inet.h>
 #include <cassert>
@@ -24,6 +25,7 @@ namespace {
 
 using namespace std::chrono_literals;
 using namespace mini::rpc;
+using namespace mini::net::framing;
 
 uint16_t allocateTestPort() {
     const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
@@ -61,23 +63,27 @@ void sendAll(int fd, const std::string& data) {
 }
 
 std::string readOneFrame(int fd) {
-    char hdr[4];
-    std::size_t hdrRead = 0;
-    while (hdrRead < 4) {
-        ssize_t n = ::read(fd, hdr + hdrRead, 4 - hdrRead);
+    std::string header;
+    header.resize(kFrameHeaderSize);
+    std::size_t headerRead = 0;
+    while (headerRead < kFrameHeaderSize) {
+        ssize_t n = ::read(fd, header.data() + headerRead,
+                           static_cast<int>(kFrameHeaderSize - headerRead));
         assert(n > 0);
-        hdrRead += static_cast<std::size_t>(n);
+        headerRead += static_cast<std::size_t>(n);
     }
-    auto* b = reinterpret_cast<const uint8_t*>(hdr);
-    uint32_t bodyLen = (static_cast<uint32_t>(b[0]) << 24) |
-                       (static_cast<uint32_t>(b[1]) << 16) |
-                       (static_cast<uint32_t>(b[2]) << 8) |
-                       static_cast<uint32_t>(b[3]);
-    std::string frame(hdr, 4);
-    std::string body(bodyLen, '\0');
+
+    auto* b = reinterpret_cast<const std::uint8_t*>(header.data());
+    const std::uint32_t payloadLen = (static_cast<uint32_t>(b[2]) << 24) |
+                                     (static_cast<uint32_t>(b[3]) << 16) |
+                                     (static_cast<uint32_t>(b[4]) << 8) |
+                                     static_cast<uint32_t>(b[5]);
+
+    std::string frame = std::move(header);
+    std::string body(payloadLen, '\0');
     std::size_t bodyRead = 0;
-    while (bodyRead < bodyLen) {
-        ssize_t n = ::read(fd, body.data() + bodyRead, bodyLen - bodyRead);
+    while (bodyRead < payloadLen) {
+        ssize_t n = ::read(fd, body.data() + bodyRead, payloadLen - bodyRead);
         assert(n > 0);
         bodyRead += static_cast<std::size_t>(n);
     }

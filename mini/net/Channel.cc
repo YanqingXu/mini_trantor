@@ -138,17 +138,17 @@ void Channel::update() {
 void Channel::handleEventWithGuard(mini::base::Timestamp receiveTime) {
     eventHandling_ = true;
 
-    if ((revents_ & EPOLLHUP) && !(revents_ & EPOLLIN)) {
+    if ((revents_ & kCloseEvent) && !(revents_ & kReadEvent)) {
         if (closeCallback_) {
             closeCallback_();
         }
     }
-    if (revents_ & EPOLLERR) {
+    if (revents_ & kErrorEvent) {
         if (errorCallback_) {
             errorCallback_();
         }
     }
-    if (revents_ & (EPOLLIN | EPOLLPRI | EPOLLRDHUP)) {
+    if (revents_ & kReadEvent) {
         if (readCallback_) {
             readCallback_(receiveTime);
         }

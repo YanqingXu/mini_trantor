@@ -20,6 +20,7 @@ function(add_mini_test layer module source)
 endfunction()
 
 add_mini_test(unit buffer ${CMAKE_CURRENT_SOURCE_DIR}/unit/buffer/test_buffer.cpp)
+add_mini_test(unit buffer ${CMAKE_CURRENT_SOURCE_DIR}/unit/buffer/test_payload_pool.cpp)
 add_mini_test(unit channel ${CMAKE_CURRENT_SOURCE_DIR}/unit/channel/test_channel.cpp)
 add_mini_test(unit coroutine ${CMAKE_CURRENT_SOURCE_DIR}/unit/coroutine/test_task.cpp)
 add_mini_test(unit timer_queue ${CMAKE_CURRENT_SOURCE_DIR}/unit/timer_queue/test_timer_id.cpp)
@@ -33,8 +34,14 @@ add_mini_test(unit net ${CMAKE_CURRENT_SOURCE_DIR}/unit/net/test_connection_awai
 add_mini_test(unit net ${CMAKE_CURRENT_SOURCE_DIR}/unit/net/test_connection_backpressure_controller.cpp)
 add_mini_test(unit net ${CMAKE_CURRENT_SOURCE_DIR}/unit/net/test_connection_transport.cpp)
 add_mini_test(unit net ${CMAKE_CURRENT_SOURCE_DIR}/unit/net/test_protocol_connection_adapter.cpp)
+add_mini_test(unit transport ${CMAKE_CURRENT_SOURCE_DIR}/unit/transport/test_transport_abstraction.cpp)
+add_mini_test(unit game ${CMAKE_CURRENT_SOURCE_DIR}/unit/game/test_player_session_fsm.cpp)
+add_mini_test(unit logic ${CMAKE_CURRENT_SOURCE_DIR}/unit/logic/test_game_command_queue.cpp)
+add_mini_test(unit kcp ${CMAKE_CURRENT_SOURCE_DIR}/unit/kcp/test_kcp_codec.cpp)
+add_mini_test(unit framing ${CMAKE_CURRENT_SOURCE_DIR}/unit/framing/test_framer.cpp)
 add_mini_test(unit acceptor ${CMAKE_CURRENT_SOURCE_DIR}/unit/acceptor/test_acceptor_stop.cpp)
 add_mini_test(unit event_loop_thread_pool ${CMAKE_CURRENT_SOURCE_DIR}/unit/event_loop_thread_pool/test_thread_pool_stop.cpp)
+add_mini_test(unit broadcast ${CMAKE_CURRENT_SOURCE_DIR}/unit/broadcast/test_dispatcher_batch.cpp)
 
 add_mini_test(contract acceptor ${CMAKE_CURRENT_SOURCE_DIR}/contract/acceptor/test_acceptor.cpp)
 add_mini_test(contract connector ${CMAKE_CURRENT_SOURCE_DIR}/contract/connector/test_connector.cpp)
@@ -50,6 +57,10 @@ add_mini_test(contract poller ${CMAKE_CURRENT_SOURCE_DIR}/contract/poller/test_p
 add_mini_test(contract timer_queue ${CMAKE_CURRENT_SOURCE_DIR}/contract/timer_queue/test_timer_queue.cpp)
 add_mini_test(contract tcp_server ${CMAKE_CURRENT_SOURCE_DIR}/contract/tcp_server/test_tcp_server.cpp)
 add_mini_test(contract tcp_server ${CMAKE_CURRENT_SOURCE_DIR}/contract/tcp_server/test_shutdown_ordering.cpp)
+add_mini_test(contract net ${CMAKE_CURRENT_SOURCE_DIR}/contract/net/test_tcp_server_broadcast_router_contract.cpp)
+add_mini_test(contract net ${CMAKE_CURRENT_SOURCE_DIR}/contract/net/test_broadcast_batch_contract.cpp)
+add_mini_test(contract broadcast ${CMAKE_CURRENT_SOURCE_DIR}/contract/broadcast/test_payload_sharing_contract.cpp)
+add_mini_test(contract framing ${CMAKE_CURRENT_SOURCE_DIR}/contract/framing/test_framer_contract.cpp)
 add_mini_test(contract tcp_connection ${CMAKE_CURRENT_SOURCE_DIR}/contract/tcp_connection/test_tcp_connection.cpp)
 add_mini_test(
     contract
@@ -69,6 +80,26 @@ add_mini_test(
     integration
     tcp_server
     ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_server/test_tcp_server_threaded.cpp
+)
+add_mini_test(
+    integration
+    tcp_server
+    ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_server/test_tcp_server_broadcast_threaded.cpp
+)
+add_mini_test(
+    integration
+    tcp_server
+    ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_server/test_tcp_server_broadcast_batch.cpp
+)
+add_mini_test(
+    integration
+    tcp_server
+    ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_server/test_tcp_server_broadcast_ordered_stress.cpp
+)
+add_mini_test(
+    integration
+    tcp_server
+    ${CMAKE_CURRENT_SOURCE_DIR}/integration/tcp_server/test_tcp_server_broadcast_stress_reconnect.cpp
 )
 add_mini_test(
     integration
@@ -123,6 +154,7 @@ add_mini_test(
 
 # --- TLS tests ---
 add_mini_test(unit tls ${CMAKE_CURRENT_SOURCE_DIR}/unit/tls/test_tls_context.cpp)
+add_mini_test(unit udp ${CMAKE_CURRENT_SOURCE_DIR}/unit/udp/test_udp_socket.cpp)
 add_mini_test(contract tls ${CMAKE_CURRENT_SOURCE_DIR}/contract/tls/test_tls_handshake.cpp)
 add_mini_test(integration tls ${CMAKE_CURRENT_SOURCE_DIR}/integration/tls/test_tls_echo.cpp)
 
@@ -148,11 +180,26 @@ add_mini_test(unit ws ${CMAKE_CURRENT_SOURCE_DIR}/unit/ws/test_ws_handshake.cpp)
 add_mini_test(contract ws ${CMAKE_CURRENT_SOURCE_DIR}/contract/ws/test_ws_server.cpp)
 add_mini_test(integration ws ${CMAKE_CURRENT_SOURCE_DIR}/integration/ws/test_ws_server.cpp)
 
+add_mini_test(contract udp ${CMAKE_CURRENT_SOURCE_DIR}/contract/udp/test_udp_server_contract.cpp)
+add_mini_test(contract game ${CMAKE_CURRENT_SOURCE_DIR}/contract/game/test_session_manager_contract.cpp)
+add_mini_test(contract logic ${CMAKE_CURRENT_SOURCE_DIR}/contract/logic/test_logic_loop_timing_contract.cpp)
+add_mini_test(integration udp ${CMAKE_CURRENT_SOURCE_DIR}/integration/udp/test_udp_loopback.cpp)
+add_mini_test(integration udp ${CMAKE_CURRENT_SOURCE_DIR}/integration/udp/test_udp_sendto_stop_lifecycle.cpp)
+add_mini_test(integration kcp ${CMAKE_CURRENT_SOURCE_DIR}/integration/kcp/test_kcp_reliable_flow.cpp)
+
 # --- RPC tests ---
 add_mini_test(unit rpc ${CMAKE_CURRENT_SOURCE_DIR}/unit/rpc/test_rpc_codec.cpp)
+add_mini_test(unit codec ${CMAKE_CURRENT_SOURCE_DIR}/unit/codec/test_protobuf_adapter.cpp)
+add_mini_test(unit codec ${CMAKE_CURRENT_SOURCE_DIR}/unit/codec/test_flatbuffers_adapter.cpp)
 add_mini_test(contract rpc ${CMAKE_CURRENT_SOURCE_DIR}/contract/rpc/test_rpc_server.cpp)
+add_mini_test(contract codec ${CMAKE_CURRENT_SOURCE_DIR}/contract/codec/test_codec_adapter_contract.cpp)
 add_mini_test(contract rpc ${CMAKE_CURRENT_SOURCE_DIR}/contract/rpc/test_rpc_client_pool.cpp)
 add_mini_test(integration rpc ${CMAKE_CURRENT_SOURCE_DIR}/integration/rpc/test_rpc.cpp)
+add_mini_test(integration codec ${CMAKE_CURRENT_SOURCE_DIR}/integration/codec/test_game_message_roundtrip.cpp)
+add_mini_test(integration transport ${CMAKE_CURRENT_SOURCE_DIR}/integration/transport/test_framing_halfpack.cpp)
+add_mini_test(integration game ${CMAKE_CURRENT_SOURCE_DIR}/integration/game/test_connect_auth_replay.cpp)
+add_mini_test(integration game ${CMAKE_CURRENT_SOURCE_DIR}/integration/game/test_reconnect_flow.cpp)
+add_mini_test(integration logic ${CMAKE_CURRENT_SOURCE_DIR}/integration/logic/test_network_to_logic_roundtrip.cpp)
 
 # --- IPv6 dual-stack tests (v5-gamma) ---
 add_mini_test(unit net ${CMAKE_CURRENT_SOURCE_DIR}/unit/net/test_inet_address_ipv6.cpp)

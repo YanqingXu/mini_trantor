@@ -27,14 +27,30 @@ add_library(mini_trantor
     mini/net/Connector.cc
     mini/net/EventLoopThread.cc
     mini/net/EventLoopThreadPool.cc
+    mini/net/broadcast/BroadcastRouter.cc
+    mini/net/broadcast/BroadcastDispatcher.cc
     mini/net/TcpConnection.cc
     mini/net/detail/ConnectionCallbackDispatcher.cc
     mini/net/detail/ConnectionAwaiterRegistry.cc
     mini/net/detail/ConnectionBackpressureController.cc
     mini/net/detail/ConnectionTransport.cc
+    mini/net/buffer/Payload.cc
+    mini/net/buffer/PayloadPool.cc
     mini/net/TcpClient.cc
     mini/net/TcpServer.cc
     mini/net/TlsContext.cc
+    mini/net/udp/UdpSocket.cc
+    mini/net/udp/UdpServer.cc
+    mini/net/framing/PacketFramer.cc
+    mini/codec/ProtobufAdapter.cc
+    mini/codec/FlatBuffersAdapter.cc
+    mini/net/kcp/KcpCodec.cc
+    mini/net/kcp/KcpTransport.cc
+    mini/net/kcp/KcpSession.cc
+    mini/game/PlayerSession.cc
+    mini/game/SessionManager.cc
+    mini/game/logic/GameCommandQueue.cc
+    mini/game/logic/LogicLoop.cc
     mini/net/DnsResolver.cc
     mini/net/SignalWatcher.cc
     mini/net/ProtocolConnectionAdapter.cc

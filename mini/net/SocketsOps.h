@@ -12,6 +12,7 @@ namespace mini::net::sockets {
 /// Create a non-blocking, close-on-exec TCP socket for the given address family.
 /// @param family  AF_INET or AF_INET6
 int createNonblockingOrDie(sa_family_t family);
+int createNonblockingDatagramOrDie(sa_family_t family);
 
 void bindOrDie(int sockfd, const sockaddr_storage& addr);
 void listenOrDie(int sockfd);

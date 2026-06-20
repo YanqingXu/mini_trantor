@@ -5,6 +5,7 @@
 // 只在连接的 owner loop 线程上访问。
 
 #include "mini/rpc/RpcCodec.h"
+#include "mini/codec/CodecAdapter.h"
 #include "mini/net/Callbacks.h"
 #include "mini/net/TimerId.h"
 
@@ -12,6 +13,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <unordered_map>
 
 namespace mini::net {
@@ -57,6 +59,26 @@ public:
                      std::string_view payload,
                      RpcResponseCallback cb,
                      int timeoutMs = 0);
+
+    /// Send an RPC request with a typed payload serializer.
+    /// If encoding fails, callback is invoked immediately with error reason.
+    template <typename MessageT>
+    void sendRequest(const mini::net::TcpConnectionPtr& conn,
+                     std::string_view method,
+                     const MessageT& message,
+                     const mini::codec::TypedCodecAdapter<MessageT>& codec,
+                     RpcResponseCallback cb,
+                     int timeoutMs = 0) {
+        std::string payload;
+        std::string error;
+        if (!codec.encodeMessage(message, &payload, &error)) {
+            if (cb) {
+                cb(error, "");
+            }
+            return;
+        }
+        sendRequest(conn, method, payload, std::move(cb), timeoutMs);
+    }
 
     /// Set the handler for incoming requests (server side).
     void setRequestCallback(RpcRequestCallback cb) { requestCallback_ = std::move(cb); }
