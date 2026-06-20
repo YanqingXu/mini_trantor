@@ -81,7 +81,7 @@ int main() {
                     loop,
                     expectedSleepValue(loop, 7, 20ms),
                     200ms));
-                loop->quit();
+                loop->queueInLoop([loop] { loop->quit(); });
             }(loop, &result).detach();
         });
 
@@ -110,8 +110,7 @@ int main() {
                     expectedSleepValue(loop, 99, 300ms),
                     30ms));
                 resumedOnLoop->set_value(loop->isInLoopThread());
-                co_await mini::coroutine::asyncSleep(loop, 50ms);
-                loop->quit();
+                loop->queueInLoop([loop] { loop->quit(); });
             }(loop, &result, &resumedOnLoop).detach();
         });
 
@@ -144,7 +143,7 @@ int main() {
                     loop,
                     std::move(*operation),
                     500ms));
-                loop->quit();
+                loop->queueInLoop([loop] { loop->quit(); });
             }(loop, operation, &result).detach();
         });
 
@@ -217,8 +216,7 @@ int main() {
                     loop,
                     expectedSleepVoid(loop, 200ms),
                     20ms));
-                co_await mini::coroutine::asyncSleep(loop, 50ms);
-                loop->quit();
+                loop->queueInLoop([loop] { loop->quit(); });
             }(loop, &result).detach();
         });
 

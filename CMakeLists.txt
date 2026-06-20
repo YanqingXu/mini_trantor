@@ -8,6 +8,20 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(CTest)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(Sanitizers)
+
+option(MINI_ENABLE_ASAN_UBSAN "Enable AddressSanitizer and UndefinedBehaviorSanitizer for Debug guarded builds" OFF)
+option(MINI_ENABLE_TSAN "Enable ThreadSanitizer for Debug guarded builds" OFF)
+option(MINI_ENABLE_FUZZ "Build libFuzzer protocol parser targets" OFF)
+
+if(MINI_ENABLE_TSAN AND MINI_ENABLE_FUZZ)
+    message(FATAL_ERROR "MINI_ENABLE_TSAN cannot be combined with MINI_ENABLE_FUZZ.")
+endif()
+
+if(MINI_ENABLE_FUZZ AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "MINI_ENABLE_FUZZ requires Clang/clang++ for libFuzzer support.")
+endif()
 
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
@@ -82,6 +96,7 @@ target_include_directories(
 )
 target_compile_features(mini_trantor PUBLIC cxx_std_23)
 target_link_libraries(mini_trantor PUBLIC Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+enable_sanitizers(mini_trantor)
 
 add_executable(echo_server examples/echo_server/main.cpp)
 target_link_libraries(echo_server PRIVATE mini_trantor)
@@ -91,6 +106,10 @@ target_link_libraries(coroutine_echo_server PRIVATE mini_trantor)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
+endif()
+
+if(MINI_ENABLE_FUZZ)
+    add_subdirectory(tests/fuzz)
 endif()
 
 install(

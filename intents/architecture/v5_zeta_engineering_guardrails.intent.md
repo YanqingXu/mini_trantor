@@ -21,9 +21,11 @@
   - 触发条件：push（所有分支）+ pull_request（master）
   - 工作：
     - cmake configure
-    - cmake build（Debug + Release）
-    - cmake build 时启用 ASan + UBSan（Debug 模式）
-    - ctest（unit + contract + integration 三层）
+    - cmake build（Debug + Release + Clang Debug）
+    - cmake build 时通过 `MINI_ENABLE_ASAN_UBSAN=ON` 启用 ASan + UBSan（Debug 模式）
+    - 通过 `MINI_ENABLE_TSAN=ON` 单独运行 TSan 线程风险集合
+    - ctest（unit + contract + integration + 风险标签）
+    - fuzz target 构建与 smoke run
     - cmake install + find_package 消费验证
     - 示例程序编译验证
   - 平台：ubuntu-latest（GitHub Actions 默认）
@@ -33,17 +35,22 @@
   - AddressSanitizer（ASan）：捕获内存访问越界、use-after-free、double-free
   - UndefinedBehaviorSanitizer（UBSan）：捕获整数溢出、空指针、对齐错误
   - 仅 Debug 模式启用，Release 模式关闭（零运行时开销）
+  - ThreadSanitizer（TSan）：独立 Debug job，捕获跨线程调度与共享状态 data race
   - 生命周期敏感模块优先：TcpConnection、EventLoop、Coroutine awaiter
 
 - Fuzz targets:
   - `tests/fuzz/` 目录结构
   - `tests/fuzz/http/fuzz_http_context.cpp` — HTTP 请求解析器 fuzz
   - `tests/fuzz/ws/fuzz_ws_codec.cpp` — WebSocket 帧编解码 fuzz
+  - `tests/fuzz/rpc/fuzz_rpc_codec.cpp` — RPC 帧编解码 fuzz
+  - `tests/fuzz/framing/fuzz_packet_framer.cpp` — PacketFramer 粘包/半包 fuzz
   - fuzzer 入口：LLVM `LLVMFuzzerTestOneInput` 接口
-  - 注：fuzz 是 optional target，不在 CI 的默认 build 中；仅通过 `-DENABLE_FUZZ=ON` 启用
+  - 注：fuzz 是 optional target，仅通过 `-DMINI_ENABLE_FUZZ=ON` 启用；CI 只做 smoke run
 
 - Benchmarks:
-  - 当前阶段不新增 benchmark 目标
+  - 当前已有 `tests/integration/benchmark/test_fps_like_broadcast_latency.cpp`
+  - 作为轻量 benchmark 标签进入 CTest，可通过 `ctest -L benchmark` 运行
+  - 后续再扩展为趋势化性能报告
 
 - Install verification:
   - 在 CI 中验证 `cmake --install` + `find_package` 消费
@@ -63,10 +70,13 @@
 ## 4. Required Checks
 
 - [x] build 能从 clean checkout 成功
-- [x] unit/contract/integration 测试全部通过（基线 68/68）
+- [x] unit/contract 测试在 ASan/UBSan Debug 配置下通过（基线 75/75）
 - [x] install + find_package 路径可消费
 - [x] 生命周期敏感模块有 sanitizer 覆盖
 - [x] CI 配置在 GitHub Actions 上可运行
+- [x] TSan 有独立入口覆盖线程/协程风险标签
+- [x] Fuzz target 可通过 Clang + libFuzzer 构建并 smoke run
+- [x] benchmark 可通过 CTest 风险标签单独运行
 
 ---
 
@@ -74,17 +84,36 @@
 
 - workflows added:
   - `.github/workflows/ci.yml`
-- commands run:
+- canonical commands:
   ```bash
-  cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+  cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DMINI_ENABLE_ASAN_UBSAN=ON
   cmake --build build -j$(nproc)
-  ctest --test-dir build --output-on-failure
+  ctest --test-dir build --output-on-failure -L "unit|contract"
   cmake --install build --prefix ./build/_install
+
+  CC=clang CXX=clang++ cmake -S . -B build-tsan \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DMINI_ENABLE_TSAN=ON
+  cmake --build build-tsan -j$(nproc)
+  ctest --test-dir build-tsan --output-on-failure -L "threading|coro"
+
+  CC=clang CXX=clang++ cmake -S . -B build-fuzz \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DBUILD_TESTING=OFF \
+    -DMINI_ENABLE_FUZZ=ON
+  cmake --build build-fuzz -j$(nproc)
+  ./build-fuzz/tests/fuzz/fuzz_http_context -runs=1000
   ```
+- local validation notes:
+  - ASan/UBSan Debug: `ctest -L "unit|contract"` passed 75/75 on GCC 13.3.
+  - `MINI_ENABLE_FUZZ=ON` correctly rejects GCC with a clear Clang/libFuzzer requirement.
+  - Local GCC TSan build succeeds, but this host's TSan runtime exits with
+    `ThreadSanitizer: unexpected memory mapping`; CI uses Clang TSan instead.
 - remaining blind spots:
   - macOS / Windows 平台兼容性
-  - Valgrind / ThreadSanitizer 覆盖（暂不纳入，留给后续阶段）
-  - Fuzz 需手动或通过 oss-fuzz 集成（本阶段仅提供入口）
+  - Valgrind 覆盖
+  - Fuzz 仍是入口 + smoke，尚未接入长期 corpus / oss-fuzz
+  - benchmark 尚未形成趋势化性能报告
 
 ---
 
@@ -93,10 +122,12 @@
 - 新的护栏能捕获什么类别的回归？
   * ASan → use-after-free / heap-buffer-overflow / double-free
   * UBSan → signed-integer-overflow / misaligned-pointer / null-pointer
+  * TSan → data race / 跨线程共享状态误用
+  * Fuzz → 协议解析器畸形输入崩溃 / 越界 / UB
   * CI → build break / test regression / install break
 - 新的护栏是否足够轻量以持续运行？
   * ASan + UBSan 在 Debug 模式下约 2x-3x 性能损耗，对 CI 测试可接受
-  * CI 单次运行预计 < 5 分钟
+  * TSan 与 fuzz smoke 独立 job 运行，避免阻塞 Release 主路径
 - 哪些高风险模块仍未覆盖？
-  * Coroutine promise / awaiter 生命周期（已覆盖 TcpConnection、SleepAwaitable 等）
-  * 多线程竞态条件（ThreadSanitizer 留给 v6 阶段）
+  * 长时间 soak 下的 coroutine promise / awaiter 生命周期
+  * HTTP / WebSocket / RPC / PacketFramer fuzz 仍缺长期 corpus

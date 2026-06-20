@@ -21,6 +21,7 @@ public:
     ~EventLoopThread();
 
     EventLoop* startLoop();
+    void stop();
 
 private:
     void threadFunc();

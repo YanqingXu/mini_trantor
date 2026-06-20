@@ -2,6 +2,7 @@
 #include "mini/net/EventLoopThread.h"
 
 #include <cassert>
+#include <atomic>
 #include <chrono>
 #include <future>
 #include <memory>
@@ -57,6 +58,38 @@ int main() {
         const auto destroyStatus = destroyedFuture.wait_for(1s);
         assert(destroyStatus == std::future_status::ready);
         destroyer.join();
+    }
+
+    {
+        mini::net::EventLoopThread loopThread;
+        mini::net::EventLoop* loop = loopThread.startLoop();
+
+        std::promise<void> taskStarted;
+        auto taskStartedFuture = taskStarted.get_future();
+        std::atomic<int> taskFinished{0};
+
+        loop->queueInLoop([&] {
+            taskStarted.set_value();
+            std::this_thread::sleep_for(30ms);
+            ++taskFinished;
+        });
+
+        assert(taskStartedFuture.wait_for(1s) == std::future_status::ready);
+        loopThread.stop();
+        assert(taskFinished.load() == 1);
+
+        mini::net::EventLoop* restartedLoop = loopThread.startLoop();
+        assert(restartedLoop != nullptr);
+
+        std::promise<void> restartedTask;
+        auto restartedTaskFuture = restartedTask.get_future();
+        restartedLoop->queueInLoop([&] {
+            assert(restartedLoop->isInLoopThread());
+            restartedTask.set_value();
+        });
+
+        assert(restartedTaskFuture.wait_for(1s) == std::future_status::ready);
+        loopThread.stop();
     }
 
     return 0;

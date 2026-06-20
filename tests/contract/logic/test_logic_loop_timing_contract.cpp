@@ -49,6 +49,9 @@ void testLifecycleStartAndStopAreSafe() {
 
     logicLoop.stop();
     logicLoop.stop(); // idempotent no-op
+
+    logicLoop.start();
+    logicLoop.stop();
 }
 
 void testTickBacklogAndLagContract() {

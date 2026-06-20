@@ -5,3 +5,8 @@ build_*/
 .vscode/
 log
 build-asan/
+build-guardrails-asan/
+build-guardrails-tsan-gcc/
+build-guardrails-fuzz-gcc-check/
+build-guardrails-install/
+build-guardrails-benchmark/

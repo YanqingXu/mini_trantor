@@ -58,9 +58,11 @@ template <typename T>
 Task<mini::net::Expected<T>> prepareTimedOperation(
     Task<mini::net::Expected<T>> operation,
     CancellationToken inheritedToken) {
+    auto wrapperToken = co_await CurrentCancellationTokenAwaitable{};
     LinkedCancellation linkedCancellation;
     linkedCancellation.link(operation.cancellationToken());
     linkedCancellation.link(inheritedToken);
+    linkedCancellation.link(wrapperToken);
     if (linkedCancellation.linked()) {
         operation.setCancellationToken(linkedCancellation.token());
     }

@@ -89,10 +89,11 @@ Task<void> whenAnyReadTimeoutAndQuit(
         readLengthOrCancelled(connection, loserCancelled),
         sleepAndReturn(loop, 7, 50ms));
     winner->set_value(result);
-    co_await mini::coroutine::asyncSleep(loop, 50ms);
-    connection->forceClose();
-    connection->connectDestroyed();
-    loop->quit();
+    loop->queueInLoop([loop, connection] {
+        connection->forceClose();
+        connection->connectDestroyed();
+        loop->quit();
+    });
 }
 
 }  // namespace
@@ -140,10 +141,7 @@ int main() {
                     sleepAndReturn(loop, 999, 500ms),  // slow — should lose
                     sleepAndReturn(loop, 42, 50ms));   // fast — should win
                 result->set_value(r);
-                // Wait for the losing sub-task's timer to fire before quitting,
-                // so its wrapper coroutine completes cleanly.
-                co_await mini::coroutine::asyncSleep(loop, 600ms);
-                loop->quit();
+                loop->queueInLoop([loop] { loop->quit(); });
             }(loop, &result).detach();
         });
 
@@ -191,9 +189,7 @@ int main() {
                     sleepVoid(loop, 500ms),  // slow
                     sleepVoid(loop, 50ms));  // fast
                 winnerIndex->set_value(r.index);
-                // Wait for the loser to complete before quitting.
-                co_await mini::coroutine::asyncSleep(loop, 600ms);
-                loop->quit();
+                loop->queueInLoop([loop] { loop->quit(); });
             }(loop, &winnerIndex).detach();
         });
 
@@ -222,11 +218,9 @@ int main() {
                         sleepAndReturn(loop, i + 100, 30ms));
                     assert(r.index == 1);
                     assert(r.value == i + 100);
-                    // Wait for the loser's timer to fire.
-                    co_await mini::coroutine::asyncSleep(loop, 250ms);
                 }
                 done->set_value(true);
-                loop->quit();
+                loop->queueInLoop([loop] { loop->quit(); });
             }(loop, &done).detach();
         });
 

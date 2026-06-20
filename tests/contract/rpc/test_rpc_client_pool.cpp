@@ -292,6 +292,7 @@ void testStopFailAllPending() {
     });
 
     assert(doneFuture.wait_for(4s) == std::future_status::ready);
+    std::this_thread::sleep_for(300ms);
 
     std::promise<void> cleanupDone;
     auto cleanupFuture = cleanupDone.get_future();

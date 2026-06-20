@@ -19,6 +19,7 @@
 #include <cassert>
 #include <chrono>
 #include <future>
+#include <memory>
 #include <thread>
 
 using namespace std::chrono_literals;
@@ -35,16 +36,17 @@ int main() {
         std::promise<bool> result;
         auto resultFuture = result.get_future();
 
-        auto task = [](mini::net::EventLoop* loop,
-                       std::promise<std::thread::id>* resumedOn,
-                       std::promise<bool>* result) -> mini::coroutine::Task<void> {
+        auto task = std::make_shared<mini::coroutine::Task<void>>(
+            [](mini::net::EventLoop* loop,
+               std::promise<std::thread::id>* resumedOn,
+               std::promise<bool>* result) -> mini::coroutine::Task<void> {
             auto completed = co_await mini::coroutine::asyncSleep(loop, 50ms);
             resumedOn->set_value(std::this_thread::get_id());
-            result->set_value(completed.has_value());
             loop->quit();
-        }(loop, &resumedOn, &result);
+            result->set_value(completed.has_value());
+        }(loop, &resumedOn, &result));
 
-        loop->runInLoop([&task] { task.start(); });
+        loop->runInLoop([task] { task->detach(); });
 
         assert(resumedOnFuture.wait_for(2s) == std::future_status::ready);
         assert(resumedOnFuture.get() != callerThread);  // resumed on loop thread
@@ -60,17 +62,18 @@ int main() {
         auto resultFuture = result.get_future();
         std::shared_ptr<mini::coroutine::SleepState> sleepState;
 
-        auto task = [](mini::net::EventLoop* loop,
-                       std::promise<bool>* result,
-                       std::shared_ptr<mini::coroutine::SleepState>* outState) -> mini::coroutine::Task<void> {
+        auto task = std::make_shared<mini::coroutine::Task<void>>(
+            [](mini::net::EventLoop* loop,
+               std::promise<bool>* result,
+               std::shared_ptr<mini::coroutine::SleepState>* outState) -> mini::coroutine::Task<void> {
             auto awaitable = mini::coroutine::asyncSleep(loop, 10s);  // very long sleep
             *outState = awaitable.state();
             auto completed = co_await awaitable;
-            result->set_value(!completed && completed.error() == mini::net::NetError::Cancelled);
             loop->quit();
-        }(loop, &result, &sleepState);
+            result->set_value(!completed && completed.error() == mini::net::NetError::Cancelled);
+        }(loop, &result, &sleepState));
 
-        loop->runInLoop([&task] { task.start(); });
+        loop->runInLoop([task] { task->detach(); });
 
         // Wait for the coroutine to suspend on the sleep
         std::this_thread::sleep_for(100ms);
@@ -101,8 +104,9 @@ int main() {
         std::promise<int> result;
         auto resultFuture = result.get_future();
 
-        auto task = [](mini::net::EventLoop* loop,
-                       std::promise<int>* result) -> mini::coroutine::Task<void> {
+        auto task = std::make_shared<mini::coroutine::Task<void>>(
+            [](mini::net::EventLoop* loop,
+               std::promise<int>* result) -> mini::coroutine::Task<void> {
             int count = 0;
             co_await mini::coroutine::asyncSleep(loop, 20ms);
             ++count;
@@ -110,11 +114,11 @@ int main() {
             ++count;
             co_await mini::coroutine::asyncSleep(loop, 20ms);
             ++count;
-            result->set_value(count);
             loop->quit();
-        }(loop, &result);
+            result->set_value(count);
+        }(loop, &result));
 
-        loop->runInLoop([&task] { task.start(); });
+        loop->runInLoop([task] { task->detach(); });
 
         assert(resultFuture.wait_for(2s) == std::future_status::ready);
         assert(resultFuture.get() == 3);
@@ -128,17 +132,18 @@ int main() {
         std::promise<long long> elapsed;
         auto elapsedFuture = elapsed.get_future();
 
-        auto task = [](mini::net::EventLoop* loop,
-                       std::promise<long long>* elapsed) -> mini::coroutine::Task<void> {
+        auto task = std::make_shared<mini::coroutine::Task<void>>(
+            [](mini::net::EventLoop* loop,
+               std::promise<long long>* elapsed) -> mini::coroutine::Task<void> {
             auto start = std::chrono::steady_clock::now();
             co_await mini::coroutine::asyncSleep(loop, 80ms);
             auto end = std::chrono::steady_clock::now();
             auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-            elapsed->set_value(ms);
             loop->quit();
-        }(loop, &elapsed);
+            elapsed->set_value(ms);
+        }(loop, &elapsed));
 
-        loop->runInLoop([&task] { task.start(); });
+        loop->runInLoop([task] { task->detach(); });
 
         assert(elapsedFuture.wait_for(2s) == std::future_status::ready);
         long long ms = elapsedFuture.get();

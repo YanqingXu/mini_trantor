@@ -233,9 +233,9 @@ void testBackpressurePolicyPausesAndResumesReading() {
                 conn->forceClose();
             }
         });
-    connection->setCloseCallback([loop, connection, &closed](const TcpConnectionPtr&) {
+    connection->setCloseCallback([loop, &closed](const TcpConnectionPtr& conn) {
         closed.set_value();
-        loop->queueInLoop([connection] { connection->connectDestroyed(); });
+        loop->queueInLoop([conn] { conn->connectDestroyed(); });
         loop->quit();
     });
 
@@ -311,9 +311,9 @@ void testHighWaterMarkCallbackRunsOnOwnerLoop() {
         highWater.set_value({std::this_thread::get_id(), bytes});
         conn->forceClose();
     }, 1024);
-    connection->setCloseCallback([loop, connection, &closed](const TcpConnectionPtr&) {
+    connection->setCloseCallback([loop, &closed](const TcpConnectionPtr& conn) {
         closed.set_value();
-        loop->queueInLoop([connection] { connection->connectDestroyed(); });
+        loop->queueInLoop([conn] { conn->connectDestroyed(); });
         loop->quit();
     });
 

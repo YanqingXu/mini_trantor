@@ -9,7 +9,7 @@ run, and stop exactly one EventLoop.
 ## 2. Responsibilities
 - create one EventLoop inside the worker thread
 - publish the created loop pointer once ready
-- stop the loop and join the thread during teardown
+- stop the loop and join the thread during explicit stop() or teardown
 
 ---
 
@@ -23,19 +23,22 @@ run, and stop exactly one EventLoop.
 ## 4. Core Invariants
 - one EventLoopThread produces at most one live EventLoop at a time
 - returned EventLoop pointer is owned by the worker thread stack lifetime
-- teardown waits for the worker thread to exit before destruction completes
+- stop() and teardown wait for the worker thread to exit before returning
 
 ---
 
 ## 5. Threading Rules
 - startLoop() is the publication point from creator thread to worker thread
 - loop quit/join coordination must remain explicit
+- stop() is the synchronization point after which the previously returned
+  EventLoop pointer must be treated as expired
 
 ---
 
 ## 6. Failure Semantics
 - thread startup must not expose a null loop after successful wait
 - destruction should tolerate already-stopped loop/thread states
+- explicit stop should tolerate already-stopped loop/thread states
 
 ---
 
@@ -43,6 +46,7 @@ run, and stop exactly one EventLoop.
 - startLoop returns a usable EventLoop pointer
 - queued work executes on the worker loop thread
 - destruction joins the thread cleanly after quit
+- explicit stop drains accepted work, quits the loop, and joins the thread
 
 ---
 

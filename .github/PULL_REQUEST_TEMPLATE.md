@@ -1,7 +1,13 @@
 ## Intent Reference
 - intents/...:
 - rules/...:
-- stage: `v1-alpha` / `v1-beta` / `v1-coro-preview`
+- stage: `v1-alpha` / `v1-beta` / `v1-coro-preview` / `v5-zeta` / `v6-alpha`
+
+## Module State Impact
+- [ ] Stable module touched
+- [ ] Beta module touched
+- [ ] Experimental module touched
+- Notes:
 
 ## Core Module Change Gate
 1. 这个模块归属哪个 loop / thread？
@@ -14,6 +20,17 @@
 - [ ] `unit`
 - [ ] `contract`
 - [ ] `integration`
+- [ ] `lifecycle`
+- [ ] `threading`
+- [ ] `protocol`
+- Evidence:
+
+## Engineering Guardrails
+- [ ] ASan / UBSan considered or run
+- [ ] TSan considered or run for cross-thread behavior
+- [ ] Fuzz considered or run for protocol/parser changes
+- [ ] Benchmark considered or run for performance-sensitive changes
+- [ ] install + find_package path unaffected
 - Evidence:
 
 ## Docs / Diagram

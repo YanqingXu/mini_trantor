@@ -127,7 +127,10 @@ void LogicLoop::stop() {
         }
     });
     loop->quit();
+    logicThread_.stop();
     logicLoop_.store(nullptr, std::memory_order_release);
+    tickTimerId_ = {};
+    lastTickAt_ = {};
     queue_->clear();
 }
 
@@ -163,6 +166,10 @@ LogicLoopMetricCallback LogicLoop::resolveMetricCallback() const {
 }
 
 void LogicLoop::onLogicTick() {
+    if (!running_.load(std::memory_order_acquire)) {
+        return;
+    }
+
     const auto tickStartedAt = mini::base::now();
     auto tickJitter = TickDuration::zero();
     if (lastTickAt_ != mini::base::Timestamp{}) {

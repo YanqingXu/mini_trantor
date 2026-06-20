@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <arpa/inet.h>
 #include <atomic>
-#include <cassert>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -15,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <netinet/in.h>
+#include <stdexcept>
 #include <string>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -28,19 +28,27 @@ constexpr auto kRouteLatencyThreshold = std::chrono::milliseconds(500);
 constexpr auto kQueueLatencyThreshold = std::chrono::milliseconds(500);
 constexpr auto kFanoutLatencyThreshold = std::chrono::seconds(1);
 
+void require(bool condition, const char* message) {
+    if (!condition) {
+        throw std::runtime_error(message);
+    }
+}
+
 uint16_t allocateTestPort() {
     const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
-    assert(fd >= 0);
+    require(fd >= 0, "failed to create test socket");
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port = htons(0);
 
-    assert(::bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) == 0);
+    require(::bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) == 0,
+            "failed to bind test socket");
 
     socklen_t len = static_cast<socklen_t>(sizeof(addr));
-    assert(::getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len) == 0);
+    require(::getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len) == 0,
+            "failed to read test socket port");
 
     const uint16_t port = ntohs(addr.sin_port);
     ::close(fd);
@@ -49,29 +57,32 @@ uint16_t allocateTestPort() {
 
 void clientWorker(uint16_t port, std::size_t expectBytes, std::promise<void> done) {
     const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
-    assert(fd >= 0);
+    require(fd >= 0, "client socket failed");
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-    assert(::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr) == 1);
-    assert(::connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) == 0);
+    require(::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr) == 1,
+            "client address conversion failed");
+    require(::connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) == 0,
+            "client connect failed");
 
     timeval timeout{};
     timeout.tv_sec = 2;
     timeout.tv_usec = 0;
-    assert(::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0);
+    require(::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0,
+            "client receive timeout setup failed");
 
     std::string received;
     received.reserve(expectBytes);
     while (received.size() < expectBytes) {
         char buffer[128];
         const ssize_t n = ::recv(fd, buffer, sizeof(buffer), 0);
-        assert(n > 0);
+        require(n > 0, "client receive failed before expected bytes arrived");
         received.append(buffer, static_cast<std::size_t>(n));
     }
 
-    assert(received.size() == expectBytes);
+    require(received.size() == expectBytes, "client received unexpected byte count");
     ::close(fd);
     done.set_value();
 }
@@ -115,19 +126,23 @@ int main() {
         [&](const mini::net::BroadcastMetricSample& sample) {
             std::lock_guard lock(metricsMutex);
             if (sample.event == mini::net::BroadcastMetricEvent::Routed) {
-                assert(sample.loop == baseLoop);
-                assert(sample.payloadBytes == payload.size());
-                assert(sample.fanoutConnections == static_cast<std::size_t>(kClientCount));
-                assert(sample.routeLatency >= mini::net::BroadcastMetricSample::Duration::zero());
+                require(sample.loop == baseLoop, "routed metric loop mismatch");
+                require(sample.payloadBytes == payload.size(), "routed metric payload size mismatch");
+                require(sample.fanoutConnections == static_cast<std::size_t>(kClientCount),
+                        "routed metric fanout mismatch");
+                require(sample.routeLatency >= mini::net::BroadcastMetricSample::Duration::zero(),
+                        "routed metric latency is negative");
                 maxRouteLatency = std::max(maxRouteLatency, sample.routeLatency);
                 ++routedSamples;
                 payloadSizeObserved = true;
                 fanoutObserved = true;
             } else if (sample.event == mini::net::BroadcastMetricEvent::LoopFlushed) {
-                assert(sample.payloadBytes == payload.size());
-                assert(sample.fanoutConnections > 0);
-                assert(sample.queueLatency >= mini::net::BroadcastMetricSample::Duration::zero());
-                assert(sample.fanoutLatency >= mini::net::BroadcastMetricSample::Duration::zero());
+                require(sample.payloadBytes == payload.size(), "flushed metric payload size mismatch");
+                require(sample.fanoutConnections > 0, "flushed metric fanout is empty");
+                require(sample.queueLatency >= mini::net::BroadcastMetricSample::Duration::zero(),
+                        "flushed metric queue latency is negative");
+                require(sample.fanoutLatency >= mini::net::BroadcastMetricSample::Duration::zero(),
+                        "flushed metric fanout latency is negative");
                 maxQueueLatency = std::max(maxQueueLatency, sample.queueLatency);
                 maxFanoutLatency = std::max(maxFanoutLatency, sample.fanoutLatency);
                 ++flushedSamples;
@@ -154,7 +169,8 @@ int main() {
         serverRaw->start();
         started->set_value();
     });
-    assert(startedFuture.wait_for(2s) == std::future_status::ready);
+    require(startedFuture.wait_for(2s) == std::future_status::ready,
+            "server did not start before timeout");
 
     std::vector<std::promise<void>> clientPromises;
     std::vector<std::future<void>> clientFutures;
@@ -169,7 +185,8 @@ int main() {
         clients.emplace_back(clientWorker, port, expectedBytes, std::move(clientPromises.back()));
     }
 
-    assert(allConnectedFuture.wait_for(3s) == std::future_status::ready);
+    require(allConnectedFuture.wait_for(3s) == std::future_status::ready,
+            "clients did not connect before timeout");
 
     baseLoop->queueInLoop([serverRaw, payload] {
         for (int i = 0; i < kBroadcastCount; ++i) {
@@ -178,7 +195,8 @@ int main() {
     });
 
     for (auto& future : clientFutures) {
-        assert(future.wait_for(3s) == std::future_status::ready);
+        require(future.wait_for(3s) == std::future_status::ready,
+                "client did not receive expected broadcast bytes before timeout");
     }
     for (auto& client : clients) {
         client.join();
@@ -186,16 +204,17 @@ int main() {
 
     {
         std::unique_lock lock(metricsMutex);
-        assert(metricsCv.wait_for(lock, 2s, [&] {
-            return routedSamples >= kBroadcastCount &&
-                   flushedSamples >= kBroadcastCount &&
-                   payloadSizeObserved &&
-                   fanoutObserved &&
-                   latencyObserved;
-        }));
-        assert(maxRouteLatency <= kRouteLatencyThreshold);
-        assert(maxQueueLatency <= kQueueLatencyThreshold);
-        assert(maxFanoutLatency <= kFanoutLatencyThreshold);
+        require(metricsCv.wait_for(lock, 2s, [&] {
+                    return routedSamples >= kBroadcastCount &&
+                           flushedSamples >= kBroadcastCount &&
+                           payloadSizeObserved &&
+                           fanoutObserved &&
+                           latencyObserved;
+                }),
+                "broadcast metrics did not arrive before timeout");
+        require(maxRouteLatency <= kRouteLatencyThreshold, "route latency exceeded threshold");
+        require(maxQueueLatency <= kQueueLatencyThreshold, "queue latency exceeded threshold");
+        require(maxFanoutLatency <= kFanoutLatencyThreshold, "fanout latency exceeded threshold");
     }
 
     auto stopped = std::make_shared<std::promise<void>>();
@@ -204,7 +223,8 @@ int main() {
         serverRaw->stop();
         stopped->set_value();
     });
-    assert(stoppedFuture.wait_for(2s) == std::future_status::ready);
+    require(stoppedFuture.wait_for(2s) == std::future_status::ready,
+            "server did not stop before timeout");
 
     auto serverOwner = std::make_shared<std::unique_ptr<mini::net::TcpServer>>(std::move(server));
     auto destroyed = std::make_shared<std::promise<void>>();
@@ -214,7 +234,8 @@ int main() {
         baseLoop->quit();
         destroyed->set_value();
     });
-    assert(destroyedFuture.wait_for(2s) == std::future_status::ready);
+    require(destroyedFuture.wait_for(2s) == std::future_status::ready,
+            "server did not destroy before timeout");
 
     return 0;
 }

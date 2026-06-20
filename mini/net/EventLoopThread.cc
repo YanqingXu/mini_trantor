@@ -9,12 +9,21 @@ EventLoopThread::EventLoopThread(ThreadInitCallback callback, std::string name)
 }
 
 EventLoopThread::~EventLoopThread() {
-    if (loop_ != nullptr) {
-        loop_->quit();
-    }
+    stop();
 }
 
 EventLoop* EventLoopThread::startLoop() {
+    {
+        std::lock_guard lock(mutex_);
+        if (loop_ != nullptr) {
+            return loop_;
+        }
+    }
+
+    if (thread_.joinable()) {
+        thread_.join();
+    }
+
     thread_ = std::jthread([this] { threadFunc(); });
 
     EventLoop* loop = nullptr;
@@ -24,6 +33,19 @@ EventLoop* EventLoopThread::startLoop() {
         loop = loop_;
     }
     return loop;
+}
+
+void EventLoopThread::stop() {
+    {
+        std::lock_guard lock(mutex_);
+        if (loop_ != nullptr) {
+            loop_->quit();
+        }
+    }
+
+    if (thread_.joinable() && thread_.get_id() != std::this_thread::get_id()) {
+        thread_.join();
+    }
 }
 
 void EventLoopThread::threadFunc() {

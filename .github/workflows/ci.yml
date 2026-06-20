@@ -2,23 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: ["**"]
   pull_request:
     branches: [master]
 
 jobs:
-  build-and-test:
+  gcc-debug-asan-ubsan:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        build_type: [Debug, Release]
-        include:
-          - build_type: Debug
-            sanitizer_flags: "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-            test_label: "unit|contract"
-          - build_type: Release
-            sanitizer_flags: ""
-            test_label: "unit|contract|integration"
 
     steps:
       - uses: actions/checkout@v4
@@ -31,19 +21,122 @@ jobs:
       - name: Configure
         run: |
           cmake -S . -B build \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_BUILD_TYPE=Debug \
             -DBUILD_TESTING=ON \
-            ${{ matrix.sanitizer_flags }}
+            -DMINI_ENABLE_ASAN_UBSAN=ON
 
       - name: Build
         run: cmake --build build -j$(nproc)
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure -L "${{ matrix.test_label }}" --timeout 60
+        run: ctest --test-dir build --output-on-failure -L "unit|contract" --timeout 60
+
+  gcc-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake g++ libssl-dev
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=ON
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -L "unit|contract|integration" --timeout 90
+
+  clang-debug:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake clang libssl-dev
+
+      - name: Configure
+        run: |
+          CC=clang CXX=clang++ cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=ON
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -L "unit|contract" --timeout 60
+
+  tsan-threading-contract:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake clang libssl-dev
+
+      - name: Configure
+        run: |
+          CC=clang CXX=clang++ cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=ON \
+            -DMINI_ENABLE_TSAN=ON
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Test threading and coroutine contracts
+        run: ctest --test-dir build --output-on-failure -L "threading|coro" --timeout 120
+
+  fuzz-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake clang libssl-dev
+
+      - name: Configure
+        run: |
+          CC=clang CXX=clang++ cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=OFF \
+            -DMINI_ENABLE_FUZZ=ON
+
+      - name: Build fuzz targets
+        run: cmake --build build -j$(nproc)
+
+      - name: Fuzz smoke
+        run: |
+          ./build/tests/fuzz/fuzz_http_context -runs=100
+          ./build/tests/fuzz/fuzz_ws_codec -runs=100
+          ./build/tests/fuzz/fuzz_rpc_codec -runs=100
+          ./build/tests/fuzz/fuzz_packet_framer -runs=100
 
   install-verify:
     runs-on: ubuntu-latest
-    needs: build-and-test
+    needs:
+      - gcc-debug-asan-ubsan
+      - gcc-release
+      - clang-debug
+      - tsan-threading-contract
+      - fuzz-build
 
     steps:
       - uses: actions/checkout@v4
@@ -55,15 +148,25 @@ jobs:
 
       - name: Build and install
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
           cmake --build build -j$(nproc)
           cmake --install build --prefix ./_install
 
       - name: Verify find_package consumption
         run: |
           cat > /tmp/consumer.cpp << 'EOF'
+          #include "mini/coroutine/Task.h"
+          #include "mini/coroutine/Timeout.h"
+          #include "mini/game/GameServerPipeline.h"
+          #include "mini/http/HttpClient.h"
+          #include "mini/http/HttpServer.h"
           #include "mini/net/EventLoop.h"
+          #include "mini/net/TcpClient.h"
           #include "mini/net/TcpServer.h"
+          #include "mini/rpc/RpcClient.h"
+          #include "mini/rpc/RpcServer.h"
+          #include "mini/ws/WebSocketServer.h"
+
           int main() {
               mini::net::EventLoop loop;
               mini::net::InetAddress addr(0, true);

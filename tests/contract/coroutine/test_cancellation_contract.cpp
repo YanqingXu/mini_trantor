@@ -89,8 +89,7 @@ int main() {
                     cancellableSleepTask(loop, 1, 500ms, loserCancelled),
                     cancellableSleepTask(loop, 2, 30ms, loserCancelled));
                 winner->set_value(result);
-                co_await mini::coroutine::asyncSleep(loop, 50ms);
-                loop->quit();
+                loop->queueInLoop([loop] { loop->quit(); });
             }(loop, &winner, &loserCancelled).detach();
         });
 

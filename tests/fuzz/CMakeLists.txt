@@ -1,0 +1,11 @@
+function(add_mini_fuzz_target target source)
+    add_executable(${target} ${source})
+    target_link_libraries(${target} PRIVATE mini_trantor)
+    target_compile_options(${target} PRIVATE -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer)
+    target_link_options(${target} PRIVATE -fsanitize=fuzzer,address,undefined)
+endfunction()
+
+add_mini_fuzz_target(fuzz_http_context http/fuzz_http_context.cpp)
+add_mini_fuzz_target(fuzz_ws_codec ws/fuzz_ws_codec.cpp)
+add_mini_fuzz_target(fuzz_rpc_codec rpc/fuzz_rpc_codec.cpp)
+add_mini_fuzz_target(fuzz_packet_framer framing/fuzz_packet_framer.cpp)
