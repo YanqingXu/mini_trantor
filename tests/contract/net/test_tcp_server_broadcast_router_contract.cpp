@@ -1,16 +1,22 @@
 #include "mini/net/EventLoop.h"
+#include "mini/net/EventLoopThread.h"
 #include "mini/net/InetAddress.h"
 #include "mini/net/TcpConnection.h"
 #include "mini/net/broadcast/BroadcastRouter.h"
 
 #include <array>
 #include <cassert>
+#include <future>
+#include <memory>
 #include <string>
 #include <sys/socket.h>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
 namespace {
+
+using namespace std::chrono_literals;
 
 std::pair<int, int> makeSocketPair() {
     std::array<int, 2> sockets{};
@@ -19,40 +25,130 @@ std::pair<int, int> makeSocketPair() {
     return {sockets[0], sockets[1]};
 }
 
-mini::net::TcpConnectionPtr makeConnection(mini::net::EventLoop* loop,
-                                          int fd,
-                                          const std::string& name) {
-    return std::make_shared<mini::net::TcpConnection>(
-        loop, name, fd,
-        mini::net::InetAddress(),
-        mini::net::InetAddress());
-}
-
 void closeSocketPairPeer(std::pair<int, int> sockets) {
     ::close(sockets.second);
 }
 
+std::string makeConnectionName(std::size_t index) {
+    return "session-" + std::to_string(index);
+}
+
+mini::net::TcpConnectionPtr makeConnectionAsync(mini::net::EventLoop* loop,
+                                              int fd,
+                                              const std::string& name) {
+    auto ready = std::make_shared<std::promise<mini::net::TcpConnectionPtr>>();
+    auto readyFuture = ready->get_future();
+    loop->queueInLoop([loop, fd, name, ready] {
+        auto connection = std::make_shared<mini::net::TcpConnection>(
+            loop,
+            name,
+            fd,
+            mini::net::InetAddress(),
+            mini::net::InetAddress());
+        connection->connectEstablished();
+        ready->set_value(connection);
+    });
+    return readyFuture.get();
+}
+
+std::vector<mini::net::broadcast::BroadcastRouter::LoopBatch> routeOnBaseLoop(
+    mini::net::EventLoop* baseLoop,
+    mini::net::broadcast::BroadcastRouter& router,
+    std::vector<std::string> sessionIds) {
+    auto ready = std::make_shared<std::promise<std::vector<mini::net::broadcast::BroadcastRouter::LoopBatch>>>();
+    auto readyFuture = ready->get_future();
+    baseLoop->queueInLoop([&router, sessionIds = std::move(sessionIds), ready] {
+        ready->set_value(router.route(sessionIds));
+    });
+    return readyFuture.get();
+}
+
+std::vector<mini::net::broadcast::BroadcastRouter::LoopBatch> routeAllOnBaseLoop(
+    mini::net::EventLoop* baseLoop,
+    mini::net::broadcast::BroadcastRouter& router) {
+    auto ready = std::make_shared<std::promise<std::vector<mini::net::broadcast::BroadcastRouter::LoopBatch>>>();
+    auto readyFuture = ready->get_future();
+    baseLoop->queueInLoop([&router, ready] {
+        ready->set_value(router.routeAll());
+    });
+    return readyFuture.get();
+}
+
+std::size_t sessionCountOnBaseLoop(mini::net::EventLoop* baseLoop,
+                                  mini::net::broadcast::BroadcastRouter& router) {
+    auto ready = std::make_shared<std::promise<std::size_t>>();
+    auto readyFuture = ready->get_future();
+    baseLoop->queueInLoop([&router, ready] {
+        ready->set_value(router.sessionCount());
+    });
+    return readyFuture.get();
+}
+
+bool hasSessionOnBaseLoop(mini::net::EventLoop* baseLoop,
+                         mini::net::broadcast::BroadcastRouter& router,
+                         std::string_view sessionId) {
+    auto ready = std::make_shared<std::promise<bool>>();
+    auto readyFuture = ready->get_future();
+    const auto target = std::string(sessionId);
+    baseLoop->queueInLoop([&router, target = std::move(target), ready] {
+        ready->set_value(router.hasSession(target));
+    });
+    return readyFuture.get();
+}
+
+std::size_t loopBucketCountOnBaseLoop(mini::net::EventLoop* baseLoop,
+                                     mini::net::broadcast::BroadcastRouter& router) {
+    auto ready = std::make_shared<std::promise<std::size_t>>();
+    auto readyFuture = ready->get_future();
+    baseLoop->queueInLoop([&router, ready] {
+        ready->set_value(router.loopBucketCount());
+    });
+    return readyFuture.get();
+}
+
+void recycleConnection(mini::net::EventLoop* loop, mini::net::TcpConnectionPtr connection) {
+    auto ready = std::make_shared<std::promise<void>>();
+    auto readyFuture = ready->get_future();
+    if (!connection) {
+        ready->set_value();
+        readyFuture.get();
+        return;
+    }
+    loop->queueInLoop([connection = std::move(connection), ready] mutable {
+        connection->connectDestroyed();
+        connection.reset();
+        ready->set_value();
+    });
+    readyFuture.get();
+}
+
 void testRouteBySessionIds() {
-    mini::net::EventLoop baseLoop;
-    mini::net::EventLoop loopA;
-    mini::net::EventLoop loopB;
+    mini::net::EventLoopThread baseLoopThread;
+    auto* baseLoop = baseLoopThread.startLoop();
+    mini::net::EventLoopThread loopAThread;
+    auto* loopA = loopAThread.startLoop();
+    mini::net::EventLoopThread loopBThread;
+    auto* loopB = loopBThread.startLoop();
 
     auto ioSocketsA = makeSocketPair();
     auto ioSocketsB = makeSocketPair();
 
-    mini::net::broadcast::BroadcastRouter router(&baseLoop);
-    auto connA = makeConnection(&loopA, ioSocketsA.first, "session-a");
-    auto connB = makeConnection(&loopB, ioSocketsB.first, "session-b");
+    mini::net::broadcast::BroadcastRouter router(baseLoop);
+    auto connA = makeConnectionAsync(loopA, ioSocketsA.first, makeConnectionName(1));
+    auto connB = makeConnectionAsync(loopB, ioSocketsB.first, makeConnectionName(2));
 
     router.registerConnection(connA);
     router.registerConnection(connB);
 
-    const auto batches = router.route({"session-a", "missing", "session-b", "session-a"});
+    const auto batches = routeOnBaseLoop(
+        baseLoop,
+        router,
+        {makeConnectionName(1), "missing", makeConnectionName(2), makeConnectionName(1)});
     assert(!batches.empty());
-    assert(router.sessionCount() == 2);
-    assert(router.loopBucketCount() == 2);
-    assert(router.hasSession("session-a"));
-    assert(!router.hasSession("missing"));
+    assert(sessionCountOnBaseLoop(baseLoop, router) == 2);
+    assert(loopBucketCountOnBaseLoop(baseLoop, router) == 2);
+    assert(hasSessionOnBaseLoop(baseLoop, router, makeConnectionName(1)));
+    assert(!hasSessionOnBaseLoop(baseLoop, router, "missing"));
 
     std::size_t sessionHitCount = 0;
     bool sawMissing = false;
@@ -62,9 +158,7 @@ void testRouteBySessionIds() {
 
         for (const auto& connection : batch.connections) {
             assert(connection != nullptr);
-            if (connection->name() == "session-a") {
-                ++sessionHitCount;
-            } else if (connection->name() == "session-b") {
+            if (connection->name() == makeConnectionName(1) || connection->name() == makeConnectionName(2)) {
                 ++sessionHitCount;
             } else {
                 sawMissing = true;
@@ -77,25 +171,31 @@ void testRouteBySessionIds() {
 
     closeSocketPairPeer(ioSocketsA);
     closeSocketPairPeer(ioSocketsB);
+
+    recycleConnection(loopA, std::move(connA));
+    recycleConnection(loopB, std::move(connB));
 }
 
 void testRouteAllAndDeregister() {
-    mini::net::EventLoop baseLoop;
-    mini::net::EventLoop loopA;
-    mini::net::EventLoop loopB;
+    mini::net::EventLoopThread baseLoopThread;
+    auto* baseLoop = baseLoopThread.startLoop();
+    mini::net::EventLoopThread loopAThread;
+    auto* loopA = loopAThread.startLoop();
+    mini::net::EventLoopThread loopBThread;
+    auto* loopB = loopBThread.startLoop();
 
     auto ioSocketsA = makeSocketPair();
     auto ioSocketsB = makeSocketPair();
-    mini::net::broadcast::BroadcastRouter router(&baseLoop);
+    mini::net::broadcast::BroadcastRouter router(baseLoop);
 
-    auto connA = makeConnection(&loopA, ioSocketsA.first, "session-a");
-    auto connB = makeConnection(&loopB, ioSocketsB.first, "session-b");
+    auto connA = makeConnectionAsync(loopA, ioSocketsA.first, makeConnectionName(1));
+    auto connB = makeConnectionAsync(loopB, ioSocketsB.first, makeConnectionName(2));
 
     router.registerConnection(connA);
     router.registerConnection(connB);
-    assert(router.sessionCount() == 2);
+    assert(sessionCountOnBaseLoop(baseLoop, router) == 2);
 
-    auto allBatches = router.routeAll();
+    const auto allBatches = routeAllOnBaseLoop(baseLoop, router);
     assert(allBatches.size() == 2);
     std::size_t totalBefore = 0;
     for (const auto& batch : allBatches) {
@@ -105,21 +205,24 @@ void testRouteAllAndDeregister() {
     assert(totalBefore == 2);
 
     router.deregisterConnection(connA);
-    assert(!router.hasSession("session-a"));
-    assert(router.sessionCount() == 1);
-    assert(router.loopBucketCount() == 1);
+    assert(!hasSessionOnBaseLoop(baseLoop, router, makeConnectionName(1)));
+    assert(sessionCountOnBaseLoop(baseLoop, router) == 1);
+    assert(loopBucketCountOnBaseLoop(baseLoop, router) == 1);
 
-    auto after = router.routeAll();
+    const auto after = routeAllOnBaseLoop(baseLoop, router);
     assert(after.size() == 1);
     assert(after.front().connections.size() == 1);
-    assert(after.front().connections.front()->name() == "session-b");
+    assert(after.front().connections.front()->name() == makeConnectionName(2));
 
     router.deregisterConnection(connB);
-    assert(router.sessionCount() == 0);
-    assert(router.loopBucketCount() == 0);
+    assert(sessionCountOnBaseLoop(baseLoop, router) == 0);
+    assert(loopBucketCountOnBaseLoop(baseLoop, router) == 0);
 
     closeSocketPairPeer(ioSocketsA);
     closeSocketPairPeer(ioSocketsB);
+
+    recycleConnection(loopA, std::move(connA));
+    recycleConnection(loopB, std::move(connB));
 }
 
 }  // namespace

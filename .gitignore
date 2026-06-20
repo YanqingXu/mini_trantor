@@ -4,3 +4,4 @@ build_*/
 *.swo
 .vscode/
 log
+build-asan/

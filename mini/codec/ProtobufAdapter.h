@@ -58,6 +58,9 @@ public:
             }
             return static_cast<bool>(CodecStatus::kError);
         }
+        if (error) {
+            error->clear();
+        }
         return static_cast<bool>(CodecStatus::kOk);
     }
 
@@ -74,6 +77,9 @@ public:
 
         if (!ok && error) {
             *error = "protobuf decode failed";
+        }
+        if (ok && error) {
+            error->clear();
         }
         return ok ? static_cast<bool>(CodecStatus::kOk)
                   : static_cast<bool>(CodecStatus::kError);

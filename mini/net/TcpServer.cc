@@ -478,12 +478,19 @@ void TcpServer::removeConnection(const TcpConnectionPtr& connection) {
 
 void TcpServer::removeConnectionInLoop(const TcpConnectionPtr& connection) {
     loop_->assertInLoopThread();
-    connections_.erase(connection->name());
+    const auto erased = connections_.erase(connection->name());
     if (broadcastRouter_) {
         broadcastRouter_->deregisterConnection(connection);
     }
-    EventLoop* ioLoop = connection->getLoop();
-    ioLoop->queueInLoop([connection] { connection->connectDestroyed(); });
+
+    if (erased == 0) {
+        return;
+    }
+
+    auto* connectionLoop = connection->getLoop();
+    if (connectionLoop) {
+        connectionLoop->runInLoop([connection] { connection->connectDestroyed(); });
+    }
 
     // In drain mode: if all connections closed, finish shutdown.
     if (draining_ && connections_.empty()) {

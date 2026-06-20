@@ -7,6 +7,7 @@
 #include "mini/net/kcp/KcpSession.h"
 
 #include <algorithm>
+#include <future>
 #include <utility>
 #include <vector>
 
@@ -79,10 +80,24 @@ void KcpTransport::stop() {
         return;
     }
     if (!loop_->isInLoopThread()) {
-        loop_->runInLoop([this] { stop(); });
+        auto done = std::make_shared<std::promise<void>>();
+        auto future = done->get_future();
+        loop_->runInLoop([this, done] {
+            stopInLoop();
+            done->set_value();
+        });
+        future.wait();
         return;
     }
 
+    stopInLoop();
+}
+
+void KcpTransport::stopInLoop() {
+    if (!started_) {
+        return;
+    }
+    loop_->assertInLoopThread();
     stopFlushTimer();
     started_ = false;
     if (socket_) {

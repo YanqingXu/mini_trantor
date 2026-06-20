@@ -113,6 +113,7 @@ private:
     void startFlushTimer();
     void stopFlushTimer();
     void handleFlushTick();
+    void stopInLoop();
 
     EventLoop* loop_;
     std::string name_;

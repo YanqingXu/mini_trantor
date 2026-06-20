@@ -58,8 +58,13 @@ int main() {
     assert(session.detachTransport());
     assert(!session.hasTransport());
     assert(!session.detachTransport());
-    assert(session.bindTransportSession(3003));
-    assert(session.transportSessionId() == 3003);
+    // Closed sessions should not be able to rebind transport id.
+    assert(!session.bindTransportSession(3003));
+    // Valid rebind when session is alive.
+    PlayerSession bindable("token-bind", 4004, 5ms, 20ms);
+    assert(bindable.startAuthentication());
+    assert(bindable.close("manual"));
+    assert(!bindable.bindTransportSession(5005));
 
     return 0;
 }

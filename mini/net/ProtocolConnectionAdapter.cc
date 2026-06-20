@@ -55,64 +55,64 @@ std::string_view ProtocolConnectionAdapter::name() const noexcept {
 
 transport::TransportSessionId
 ProtocolConnectionAdapter::sessionId() const noexcept {
-    if (auto session = session_.lock()) {
-        return session->sessionId();
+    if (session_) {
+        return session_->sessionId();
     }
     return transport::kInvalidTransportSessionId;
 }
 
 void ProtocolConnectionAdapter::setSessionId(
     transport::TransportSessionId id) {
-    if (auto session = session_.lock()) {
-        session->setSessionId(id);
+    if (session_) {
+        session_->setSessionId(id);
     }
 }
 
 transport::TransportKind
 ProtocolConnectionAdapter::transportKind() const noexcept {
-    if (auto session = session_.lock()) {
-        return session->transportKind();
+    if (session_) {
+        return session_->transportKind();
     }
     return transport::TransportKind::kUnknown;
 }
 
 void ProtocolConnectionAdapter::setProtocolContext(std::any ctx) {
     protocolContext_ = std::move(ctx);
-    if (auto session = session_.lock()) {
-        session->setTransportContext(protocolContext_);
+    if (session_) {
+        session_->setTransportContext(protocolContext_);
     }
 }
 
 const std::any& ProtocolConnectionAdapter::getProtocolContext() const noexcept {
-    if (auto session = session_.lock()) {
-        return session->getTransportContext();
+    if (session_) {
+        return session_->getTransportContext();
     }
     return protocolContext_;
 }
 
 std::any& ProtocolConnectionAdapter::getProtocolContext() noexcept {
-    if (auto session = session_.lock()) {
-        return session->getTransportContext();
+    if (session_) {
+        return session_->getTransportContext();
     }
     return protocolContext_;
 }
 
 void ProtocolConnectionAdapter::setTransportContext(std::any ctx) {
-    if (auto session = session_.lock()) {
-        session->setTransportContext(std::move(ctx));
+    if (session_) {
+        session_->setTransportContext(std::move(ctx));
     }
 }
 
 const std::any& ProtocolConnectionAdapter::getTransportContext() const noexcept {
-    if (auto session = session_.lock()) {
-        return session->getTransportContext();
+    if (session_) {
+        return session_->getTransportContext();
     }
     return protocolContext_;
 }
 
 std::any& ProtocolConnectionAdapter::getTransportContext() noexcept {
-    if (auto session = session_.lock()) {
-        return session->getTransportContext();
+    if (session_) {
+        return session_->getTransportContext();
     }
     return protocolContext_;
 }

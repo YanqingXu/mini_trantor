@@ -254,29 +254,39 @@ bool SessionManager::markClosed(std::string_view sessionToken, std::string_view 
 
 bool SessionManager::bindTransport(std::string_view sessionToken,
                                   mini::net::transport::TransportSessionId transportSessionId) {
-    auto session = getSession(sessionToken);
-    if (!session) {
+    PlayerSessionPtr session;
+    mini::net::transport::TransportSessionId oldTransport = mini::net::transport::kInvalidTransportSessionId;
+    State oldState = State::kClosed;
+    bool changed = false;
+
+    {
+        std::scoped_lock lock(mutex_);
+        const auto it = sessions_.find(std::string(sessionToken));
+        if (it == sessions_.end()) {
+            return false;
+        }
+
+        session = it->second;
+        if (!session) {
+            return false;
+        }
+
+        oldTransport = session->transportSessionId();
+        oldState = session->state();
+        changed = setTransportIndexLocked(session->sessionId(), oldTransport, transportSessionId, session);
+    }
+
+    if (!changed || !session) {
         return false;
     }
 
-    const auto oldTransport = session->transportSessionId();
-    const auto oldState = session->state();
-    const bool changed = session->bindTransportSession(transportSessionId);
-    if (changed) {
-        std::unique_lock lock(mutex_);
-        transportIndex_.erase(oldTransport);
-        if (transportSessionId != mini::net::transport::kInvalidTransportSessionId) {
-            transportIndex_[transportSessionId] = session->sessionId();
-        }
-
-        if (oldState == PlayerSession::State::kClosing) {
-            lock.unlock();
-            if (markReconnecting(sessionToken)) {
-                cancelReconnectWindow(std::string(sessionToken));
-            }
+    if (oldState == PlayerSession::State::kClosing) {
+        if (markReconnecting(sessionToken)) {
+            cancelReconnectWindow(std::string(sessionToken));
         }
     }
-    return changed;
+
+    return true;
 }
 
 bool SessionManager::onReconnect(std::string_view sessionToken,

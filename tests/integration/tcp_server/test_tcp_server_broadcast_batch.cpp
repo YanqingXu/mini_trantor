@@ -9,6 +9,7 @@
 #include <cassert>
 #include <chrono>
 #include <future>
+#include <memory>
 #include <netinet/in.h>
 #include <string>
 #include <sys/socket.h>
@@ -83,22 +84,37 @@ int main() {
     mini::net::EventLoopThread loopThread;
     auto* baseLoop = loopThread.startLoop();
 
-    mini::net::TcpServer server(baseLoop, mini::net::InetAddress(port, true), "broadcast-batch-integrated", true);
-    server.setThreadNum(2);
+    auto server = std::make_unique<mini::net::TcpServer>(
+        baseLoop, mini::net::InetAddress(port, true), "broadcast-batch-integrated", true);
+    auto* serverRaw = server.get();
+    serverRaw->setThreadNum(2);
 
-    std::promise<void> connectedAll;
-    auto connectedFuture = connectedAll.get_future();
+    std::promise<void> allConnected;
+    auto allConnectedFuture = allConnected.get_future();
+    std::promise<void> allDisconnected;
+    auto allDisconnectedFuture = allDisconnected.get_future();
     std::atomic<int> connectedCount{0};
-    server.setConnectionCallback([&](const mini::net::TcpConnectionPtr& conn) {
+    std::atomic<int> disconnectedCount{0};
+    serverRaw->setConnectionCallback([&](const mini::net::TcpConnectionPtr& conn) {
         if (!conn->connected()) {
+            if (disconnectedCount.fetch_add(1) == clientCount - 1) {
+                allDisconnected.set_value();
+            }
             return;
         }
+
         if (++connectedCount == clientCount) {
-            connectedAll.set_value();
+            allConnected.set_value();
         }
     });
 
-    baseLoop->queueInLoop([&server] { server.start(); });
+    auto started = std::make_shared<std::promise<void>>();
+    auto startedFuture = started->get_future();
+    baseLoop->queueInLoop([serverRaw, started] {
+        serverRaw->start();
+        started->set_value();
+    });
+    assert(startedFuture.wait_for(2s) == std::future_status::ready);
 
     std::vector<std::thread> clients;
     std::vector<std::promise<void>> receiveSignals;
@@ -116,11 +132,11 @@ int main() {
             std::move(receiveSignals.back()));
     }
 
-    assert(connectedFuture.wait_for(2s) == std::future_status::ready);
+    assert(allConnectedFuture.wait_for(3s) == std::future_status::ready);
 
-    baseLoop->queueInLoop([&server, payload, broadcastCount] {
+    baseLoop->queueInLoop([serverRaw, payload, broadcastCount] {
         for (int i = 0; i < broadcastCount; ++i) {
-            server.broadcast(payload);
+            serverRaw->broadcast(payload);
         }
     });
 
@@ -132,14 +148,26 @@ int main() {
         client.join();
     }
 
+    assert(allDisconnectedFuture.wait_for(3s) == std::future_status::ready);
+
     auto stopped = std::make_shared<std::promise<void>>();
     auto stoppedFuture = stopped->get_future();
-    baseLoop->queueInLoop([&server, stopped]() {
-        server.stop();
+    baseLoop->queueInLoop([serverRaw, stopped]() {
+        serverRaw->stop();
         stopped->set_value();
     });
     assert(stoppedFuture.wait_for(2s) == std::future_status::ready);
 
-    baseLoop->queueInLoop([baseLoop] { baseLoop->quit(); });
+    auto serverOwner = std::make_shared<std::unique_ptr<mini::net::TcpServer>>(std::move(server));
+    auto destroyDone = std::make_shared<std::promise<void>>();
+    auto destroyDoneFuture = destroyDone->get_future();
+    baseLoop->queueInLoop([serverOwner, baseLoop, destroyDone]() {
+        if (serverOwner && *serverOwner) {
+            serverOwner->reset();
+        }
+        baseLoop->quit();
+        destroyDone->set_value();
+    });
+    assert(destroyDoneFuture.wait_for(2s) == std::future_status::ready);
     return 0;
 }

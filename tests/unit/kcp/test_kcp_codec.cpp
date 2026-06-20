@@ -88,7 +88,12 @@ void testTransportEndpointSessionContext() {
     mini::net::transport::TransportManager manager(loop);
     const auto id = manager.registerEndpoint(session);
     assert(id == sessionId);
-    assert(manager.hasEndpoint(id));
+    auto registerDone = std::make_shared<std::promise<bool>>();
+    auto registerDoneFuture = registerDone->get_future();
+    loop->queueInLoop([&manager, id, registerDone]() {
+        registerDone->set_value(manager.hasEndpoint(id));
+    });
+    assert(registerDoneFuture.get());
 
     std::thread crossThreadSend([&] {
         manager.send(id, "kcp-cross-thread-payload");
@@ -107,7 +112,12 @@ void testTransportEndpointSessionContext() {
     });
     assert(closeObservedFuture.get());
     assert(manager.deregisterEndpoint(id));
-    assert(!manager.hasEndpoint(id));
+    auto deregisterDone = std::make_shared<std::promise<bool>>();
+    auto deregisterDoneFuture = deregisterDone->get_future();
+    loop->queueInLoop([&manager, id, deregisterDone]() {
+        deregisterDone->set_value(!manager.hasEndpoint(id));
+    });
+    assert(deregisterDoneFuture.get());
 
     transport.stop();
 }

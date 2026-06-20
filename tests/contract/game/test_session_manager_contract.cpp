@@ -222,13 +222,33 @@ void testOnReconnectFailureForMissingSession() {
 
 }  // namespace
 
-int main() {
-    testStateCallbackMarshalsToLogicLoop();
-    testTransportRebindAndRemoval();
-    testTransportRebindEvictsPreviousOwner();
-    testRemoveFailurePaths();
-    testReconnectWindowKeepsSessionWithinTimeout();
-    testReconnectWindowExpiresAndRecreatesSession();
-    testOnReconnectFailureForMissingSession();
+int main(int argc, char** argv) {
+    const auto selected = argc > 1 ? std::string_view(argv[1]) : std::string_view{};
+
+    auto shouldRun = [selected](std::string_view name) {
+        return selected.empty() || selected == name;
+    };
+
+    if (shouldRun("state-callback")) {
+        testStateCallbackMarshalsToLogicLoop();
+    }
+    if (shouldRun("rebind-removal")) {
+        testTransportRebindAndRemoval();
+    }
+    if (shouldRun("rebind-evict")) {
+        testTransportRebindEvictsPreviousOwner();
+    }
+    if (shouldRun("remove-failure")) {
+        testRemoveFailurePaths();
+    }
+    if (shouldRun("reconnect-keep")) {
+        testReconnectWindowKeepsSessionWithinTimeout();
+    }
+    if (shouldRun("reconnect-expire")) {
+        testReconnectWindowExpiresAndRecreatesSession();
+    }
+    if (shouldRun("reconnect-missing")) {
+        testOnReconnectFailureForMissingSession();
+    }
     return 0;
 }

@@ -53,6 +53,9 @@ public:
             return static_cast<bool>(CodecStatus::kError);
         }
 
+        if (error) {
+            error->clear();
+        }
         return static_cast<bool>(CodecStatus::kOk);
     }
 
@@ -73,6 +76,9 @@ public:
             return static_cast<bool>(CodecStatus::kError);
         }
 
+        if (error) {
+            error->clear();
+        }
         return static_cast<bool>(CodecStatus::kOk);
     }
 

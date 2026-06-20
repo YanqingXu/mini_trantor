@@ -1,6 +1,7 @@
 #include "mini/net/broadcast/BroadcastDispatcher.h"
 #include "mini/net/Callbacks.h"
 #include "mini/net/EventLoop.h"
+#include "mini/net/EventLoopThread.h"
 #include "mini/net/InetAddress.h"
 #include "mini/net/buffer/Payload.h"
 #include "mini/net/TcpConnection.h"
@@ -46,51 +47,60 @@ std::string readExactly(int fd, std::size_t expectedLen) {
 }  // namespace
 
 int main() {
-    mini::net::EventLoop baseLoop;
-    mini::net::EventLoop ioLoop;
-
-    std::thread ioLoopThread([&ioLoop] { ioLoop.loop(); });
-
-    const auto sockets = makeSocketPair();
+    mini::net::EventLoopThread baseLoopThread;
+    auto* baseLoop = baseLoopThread.startLoop();
+    mini::net::EventLoopThread ioLoopThread;
+    auto* ioLoop = ioLoopThread.startLoop();
 
     std::promise<mini::net::TcpConnectionPtr> connReady;
-    mini::net::TcpConnectionPtr conn;
-    ioLoop.queueInLoop([&conn, fd = sockets.first, &connReady, &ioLoop] {
-        conn = std::make_shared<mini::net::TcpConnection>(
-            &ioLoop, "dispatch-session", fd,
-            mini::net::InetAddress(), mini::net::InetAddress());
-        conn->connectEstablished();
-        connReady.set_value(conn);
+    auto connReadyFuture = connReady.get_future();
+    auto closed = std::make_shared<std::promise<void>>();
+    auto closedFuture = closed->get_future();
+
+    const auto sockets = makeSocketPair();
+    ioLoop->queueInLoop([fd = sockets.first, ioLoop, &connReady, closed] {
+        auto connection = std::make_shared<mini::net::TcpConnection>(
+            ioLoop,
+            "dispatch-session",
+            fd,
+            mini::net::InetAddress(),
+            mini::net::InetAddress());
+        connection->setCloseCallback([closed](const mini::net::TcpConnectionPtr&) {
+            closed->set_value();
+        });
+        connection->connectEstablished();
+        connReady.set_value(connection);
     });
 
-    auto connection = connReady.get_future().get();
-    auto dispatcher = std::make_shared<mini::net::broadcast::BroadcastDispatcher>(&baseLoop);
+    auto connection = connReadyFuture.get();
+    auto dispatcher = std::make_shared<mini::net::broadcast::BroadcastDispatcher>(baseLoop);
 
-    using mini::net::broadcast::BroadcastRouter;
-    std::vector<BroadcastRouter::LoopBatch> batches;
-    batches.push_back({&ioLoop, {connection}});
+    std::vector<mini::net::broadcast::BroadcastRouter::LoopBatch> batches;
+    batches.push_back({ioLoop, {connection}});
 
     dispatcher->dispatch(std::move(batches),
                         std::make_shared<mini::net::buffer::Payload>("alpha-"));
     dispatcher->dispatch(
-        {BroadcastRouter::LoopBatch{&ioLoop, {connection}}},
+        {mini::net::broadcast::BroadcastRouter::LoopBatch{ioLoop, {connection}}},
         std::make_shared<mini::net::buffer::Payload>("beta"));
 
     const std::string expect = "alpha-beta";
     const auto received = readExactly(sockets.second, expect.size());
     assert(received == expect);
 
-    std::promise<void> closed;
-    auto closedFuture = closed.get_future();
-    connection->setCloseCallback([&closed](const mini::net::TcpConnectionPtr&) {
-        closed.set_value();
+    ioLoop->queueInLoop([connection] { connection->forceClose(); });
+    assert(closedFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+
+    auto recycle = std::make_shared<std::promise<void>>();
+    auto recycleFuture = recycle->get_future();
+    ioLoop->queueInLoop([connection = std::move(connection), recycle] mutable {
+        connection->connectDestroyed();
+        connection.reset();
+        recycle->set_value();
     });
-    ioLoop.queueInLoop([connection] { connection->forceClose(); });
+    assert(recycleFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
 
-    assert(closedFuture.wait_for(std::chrono::seconds{2}) == std::future_status::ready);
-
-    ioLoop.quit();
-    ioLoopThread.join();
-    ::close(sockets.second);
+    baseLoop->quit();
+    ioLoop->quit();
     return 0;
 }

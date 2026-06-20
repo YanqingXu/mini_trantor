@@ -65,7 +65,6 @@ EventLoop::~EventLoop() {
 void EventLoop::loop() {
     assertInLoopThread();
     looping_ = true;
-    quit_ = false;
 
     while (!quit_) {
         activeChannels_.clear();

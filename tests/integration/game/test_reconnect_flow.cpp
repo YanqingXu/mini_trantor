@@ -17,6 +17,7 @@
 #include <atomic>
 #include <functional>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -26,6 +27,13 @@
 #include <unistd.h>
 
 namespace {
+
+struct ServerSessionState {
+    std::atomic<mini::net::transport::TransportSessionId> nextTransportId{
+        mini::net::transport::kFirstTransportSessionId};
+    std::unordered_map<std::string, mini::net::transport::TransportSessionId> connToTransport;
+    std::mutex mutex;
+};
 
 uint16_t allocateTestPort() {
     const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
@@ -83,44 +91,55 @@ void setupServerAndCallbacks(
     mini::net::TcpServer& server,
     std::string_view token,
     std::function<void(mini::game::PlayerSessionPtr)> onSession) {
-    std::atomic<mini::net::transport::TransportSessionId> nextTransportId{
-        mini::net::transport::kFirstTransportSessionId};
-    std::unordered_map<std::string, mini::net::transport::TransportSessionId> connToTransport;
-    std::mutex connMapMutex;
+    auto state = std::make_shared<ServerSessionState>();
+    auto expectedToken = std::string(token);
+    auto sessionCallback = std::move(onSession);
 
-    server.setConnectionCallback([&](const mini::net::TcpConnectionPtr& connection) {
+    server.setConnectionCallback([&, state](const mini::net::TcpConnectionPtr& connection) {
+        if (!connection->connected()) {
+            mini::net::transport::TransportSessionId transportSessionId{
+                mini::net::transport::kInvalidTransportSessionId};
+            {
+                std::lock_guard<std::mutex> lock(state->mutex);
+                const auto it = state->connToTransport.find(connection->name());
+                if (it != state->connToTransport.end()) {
+                    transportSessionId = it->second;
+                    state->connToTransport.erase(it);
+                }
+            }
+            if (transportSessionId != mini::net::transport::kInvalidTransportSessionId) {
+                manager.onConnectionClose(transportSessionId, "network close");
+            }
+            return;
+        }
+
         const auto transportSessionId =
-            nextTransportId.fetch_add(1, std::memory_order_relaxed);
+            state->nextTransportId.fetch_add(1, std::memory_order_relaxed);
         auto adapter = mini::net::ProtocolConnectionAdapter::createAndBind(connection);
         assert(adapter);
         adapter->setSessionId(transportSessionId);
 
         {
-            std::lock_guard<std::mutex> lock(connMapMutex);
-            connToTransport[connection->name()] = transportSessionId;
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->connToTransport[connection->name()] = transportSessionId;
         }
-
-        connection->setCloseCallback([transportSessionId, &manager, &connToTransport, &connMapMutex](
-                                        const mini::net::TcpConnectionPtr& conn) {
-            manager.onConnectionClose(transportSessionId, "network close");
-            std::lock_guard<std::mutex> lock(connMapMutex);
-            connToTransport.erase(conn->name());
-        });
     });
 
-    server.setMessageCallback([&](const mini::net::TcpConnectionPtr& connection,
-                                 mini::net::Buffer* buffer) {
+    server.setMessageCallback([&, state, expectedToken = std::move(expectedToken),
+                               sessionCallback = std::move(sessionCallback)](
+                                  const mini::net::TcpConnectionPtr& connection,
+                                  mini::net::Buffer* buffer) {
         const auto incoming = buffer->retrieveAllAsString();
-        if (incoming != token) {
+        if (incoming != expectedToken) {
             return;
         }
 
         mini::net::transport::TransportSessionId transportSessionId{
             mini::net::transport::kInvalidTransportSessionId};
         {
-            std::lock_guard<std::mutex> lock(connMapMutex);
-            const auto it = connToTransport.find(connection->name());
-            if (it != connToTransport.end()) {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            const auto it = state->connToTransport.find(connection->name());
+            if (it != state->connToTransport.end()) {
                 transportSessionId = it->second;
             }
         }
@@ -139,7 +158,7 @@ void setupServerAndCallbacks(
             assert(manager.markOnline(incoming));
         }
 
-        onSession(std::move(session));
+        sessionCallback(std::move(session));
 
         connection->send("ok");
     });
@@ -152,11 +171,14 @@ void testReconnectWithinWindowReusesSession() {
 
     mini::game::SessionManager manager(logicLoop, std::chrono::milliseconds(150));
 
-    mini::net::EventLoop baseLoop;
-    mini::net::TcpServer server(&baseLoop,
-                                mini::net::InetAddress(port, true),
-                                "reconnect-window-reuse");
-    server.setThreadNum(1);
+    mini::net::EventLoopThread baseLoopThread;
+    auto* baseLoop = baseLoopThread.startLoop();
+    auto server = std::make_unique<mini::net::TcpServer>(
+        baseLoop,
+        mini::net::InetAddress(port, true),
+        "reconnect-window-reuse");
+    auto* serverRaw = server.get();
+    serverRaw->setThreadNum(1);
 
     std::promise<void> firstOnline;
     auto firstOnlineFuture = firstOnline.get_future();
@@ -169,7 +191,7 @@ void testReconnectWithinWindowReusesSession() {
     mini::game::PlayerSessionPtr secondSession;
 
     setupServerAndCallbacks(manager,
-                           server,
+                           *serverRaw,
                            "reconnect-window-token",
                            [&](mini::game::PlayerSessionPtr current) {
                                std::lock_guard<std::mutex> lock(capturedMutex);
@@ -184,8 +206,13 @@ void testReconnectWithinWindowReusesSession() {
                                });
                            });
 
-    server.start();
-    std::thread loopThread([&] { baseLoop.loop(); });
+    auto started = std::make_shared<std::promise<void>>();
+    auto startedFuture = started->get_future();
+    baseLoop->queueInLoop([serverRaw, started] {
+        serverRaw->start();
+        started->set_value();
+    });
+    waitFutureReady(startedFuture);
 
     runAuthClient(port, "reconnect-window-token");
     waitFutureReady(firstOnlineFuture);
@@ -200,8 +227,25 @@ void testReconnectWithinWindowReusesSession() {
         assert(firstSession == secondSession);
     }
 
-    baseLoop.quit();
-    loopThread.join();
+    auto stopped = std::make_shared<std::promise<void>>();
+    auto stoppedFuture = stopped->get_future();
+    baseLoop->queueInLoop([serverRaw, stopped] {
+        serverRaw->stop();
+        stopped->set_value();
+    });
+    waitFutureReady(stoppedFuture);
+
+    auto serverOwner = std::make_shared<std::unique_ptr<mini::net::TcpServer>>(std::move(server));
+    auto destroyed = std::make_shared<std::promise<void>>();
+    auto destroyedFuture = destroyed->get_future();
+    baseLoop->queueInLoop([serverOwner, baseLoop, destroyed] {
+        if (serverOwner && *serverOwner) {
+            serverOwner->reset();
+        }
+        baseLoop->quit();
+        destroyed->set_value();
+    });
+    waitFutureReady(destroyedFuture);
     logicLoop->quit();
 }
 
@@ -212,11 +256,14 @@ void testReconnectWindowExpiresAndRecreatesSession() {
 
     mini::game::SessionManager manager(logicLoop, std::chrono::milliseconds(50));
 
-    mini::net::EventLoop baseLoop;
-    mini::net::TcpServer server(&baseLoop,
-                                mini::net::InetAddress(port, true),
-                                "reconnect-window-expire");
-    server.setThreadNum(1);
+    mini::net::EventLoopThread baseLoopThread;
+    auto* baseLoop = baseLoopThread.startLoop();
+    auto server = std::make_unique<mini::net::TcpServer>(
+        baseLoop,
+        mini::net::InetAddress(port, true),
+        "reconnect-window-expire");
+    auto* serverRaw = server.get();
+    serverRaw->setThreadNum(1);
 
     std::promise<void> online;
     auto onlineFuture = online.get_future();
@@ -243,7 +290,7 @@ void testReconnectWindowExpiresAndRecreatesSession() {
     });
 
     setupServerAndCallbacks(manager,
-                           server,
+                           *serverRaw,
                            "reconnect-expire-token",
                            [&](mini::game::PlayerSessionPtr current) {
                                std::lock_guard<std::mutex> lock(capturedMutex);
@@ -258,8 +305,13 @@ void testReconnectWindowExpiresAndRecreatesSession() {
                                }
                            });
 
-    server.start();
-    std::thread loopThread([&] { baseLoop.loop(); });
+    auto started = std::make_shared<std::promise<void>>();
+    auto startedFuture = started->get_future();
+    baseLoop->queueInLoop([serverRaw, started] {
+        serverRaw->start();
+        started->set_value();
+    });
+    waitFutureReady(startedFuture);
 
     runAuthClient(port, "reconnect-expire-token");
     waitFutureReady(onlineFuture);
@@ -275,8 +327,25 @@ void testReconnectWindowExpiresAndRecreatesSession() {
         assert(firstSession != secondSession);
     }
 
-    baseLoop.quit();
-    loopThread.join();
+    auto stopped = std::make_shared<std::promise<void>>();
+    auto stoppedFuture = stopped->get_future();
+    baseLoop->queueInLoop([serverRaw, stopped] {
+        serverRaw->stop();
+        stopped->set_value();
+    });
+    waitFutureReady(stoppedFuture);
+
+    auto serverOwner = std::make_shared<std::unique_ptr<mini::net::TcpServer>>(std::move(server));
+    auto destroyed = std::make_shared<std::promise<void>>();
+    auto destroyedFuture = destroyed->get_future();
+    baseLoop->queueInLoop([serverOwner, baseLoop, destroyed] {
+        if (serverOwner && *serverOwner) {
+            serverOwner->reset();
+        }
+        baseLoop->quit();
+        destroyed->set_value();
+    });
+    waitFutureReady(destroyedFuture);
     logicLoop->quit();
 }
 

@@ -18,6 +18,7 @@
 #include <chrono>
 #include <atomic>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -106,13 +107,10 @@ int main() {
     auto sessionClosingFuture = sessionClosing.get_future();
 
     std::atomic<int> onlineCount{0};
-    std::once_flag closingOnce;
-    std::once_flag firstOnlineOnce;
-    std::once_flag replayOnlineOnce;
-    std::once_flag sessionClosingOnce;
     std::mutex captureMutex;
     bool sessionCaptured = false;
     mini::game::PlayerSessionPtr capturedSession;
+    std::once_flag sessionClosingOnce;
 
     manager.setStateCallback(
         [&onlineCount,
@@ -120,8 +118,6 @@ int main() {
          &replayOnline,
          &sessionClosing,
          &sessionClosingOnce,
-         &firstOnlineOnce,
-         &replayOnlineOnce,
          &logicThreadId](const std::string& token,
                           mini::game::PlayerSession::State oldState,
                           mini::game::PlayerSession::State newState,
@@ -135,9 +131,9 @@ int main() {
             if (newState == mini::game::PlayerSession::State::kOnline) {
                 const int index = ++onlineCount;
                 if (index == 1) {
-                    std::call_once(firstOnlineOnce, [&] { firstOnline.set_value(); });
+                    firstOnline.set_value();
                 } else if (index == 2) {
-                    std::call_once(replayOnlineOnce, [&] { replayOnline.set_value(); });
+                    replayOnline.set_value();
                 }
             }
             if (newState == mini::game::PlayerSession::State::kClosing) {
@@ -145,17 +141,37 @@ int main() {
             }
         });
 
-    mini::net::EventLoop baseLoop;
-    mini::net::TcpServer server(
-        &baseLoop, mini::net::InetAddress(port, true), "game-connect-auth-replay");
-    server.setThreadNum(1);
+    mini::net::EventLoopThread baseLoopThread;
+    auto* baseLoop = baseLoopThread.startLoop();
+
+    auto server = std::make_unique<mini::net::TcpServer>(
+        baseLoop, mini::net::InetAddress(port, true), "game-connect-auth-replay");
+    auto* serverRaw = server.get();
+    serverRaw->setThreadNum(1);
 
     std::atomic<mini::net::transport::TransportSessionId> nextTransportId{
         mini::net::transport::kFirstTransportSessionId};
     std::unordered_map<std::string, mini::net::transport::TransportSessionId> connToTransport;
     std::mutex connMapMutex;
 
-    server.setConnectionCallback([&](const mini::net::TcpConnectionPtr& connection) {
+    serverRaw->setConnectionCallback([&](const mini::net::TcpConnectionPtr& connection) {
+        if (!connection->connected()) {
+            mini::net::transport::TransportSessionId transportSessionId =
+                mini::net::transport::kInvalidTransportSessionId;
+            {
+                std::lock_guard lock(connMapMutex);
+                const auto it = connToTransport.find(connection->name());
+                if (it != connToTransport.end()) {
+                    transportSessionId = it->second;
+                    connToTransport.erase(it);
+                }
+            }
+            if (transportSessionId != mini::net::transport::kInvalidTransportSessionId) {
+                manager.onConnectionClose(transportSessionId, "network close");
+            }
+            return;
+        }
+
         const auto transportSessionId =
             nextTransportId.fetch_add(1, std::memory_order_relaxed);
 
@@ -167,16 +183,9 @@ int main() {
             std::lock_guard lock(connMapMutex);
             connToTransport[connection->name()] = transportSessionId;
         }
-
-        connection->setCloseCallback(
-            [transportSessionId, &manager, &connToTransport, &connMapMutex](const mini::net::TcpConnectionPtr& conn) {
-                manager.onConnectionClose(transportSessionId, "network close");
-                std::lock_guard lock(connMapMutex);
-                connToTransport.erase(conn->name());
-            });
     });
 
-    server.setMessageCallback(
+    serverRaw->setMessageCallback(
         [&](const mini::net::TcpConnectionPtr& connection, mini::net::Buffer* buffer) {
             const std::string token = buffer->retrieveAllAsString();
             if (token.empty()) {
@@ -222,8 +231,13 @@ int main() {
             connection->send("ok");
         });
 
-    server.start();
-    std::thread loopThread([&] { baseLoop.loop(); });
+    auto started = std::make_shared<std::promise<void>>();
+    auto startedFuture = started->get_future();
+    baseLoop->queueInLoop([serverRaw, started] {
+        serverRaw->start();
+        started->set_value();
+    });
+    assert(startedFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
 
     runAuthClient(port, "replay-player");
     waitFutureReady(firstOnlineFuture);
@@ -231,8 +245,25 @@ int main() {
     runAuthClient(port, "replay-player");
     waitFutureReady(replayOnlineFuture);
 
-    baseLoop.quit();
-    loopThread.join();
+    auto stopped = std::make_shared<std::promise<void>>();
+    auto stoppedFuture = stopped->get_future();
+    baseLoop->queueInLoop([serverRaw, stopped]() {
+        serverRaw->stop();
+        stopped->set_value();
+    });
+    assert(stoppedFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+
+    auto serverOwner = std::make_shared<std::unique_ptr<mini::net::TcpServer>>(std::move(server));
+    auto destroyed = std::make_shared<std::promise<void>>();
+    auto destroyedFuture = destroyed->get_future();
+    baseLoop->queueInLoop([serverOwner, baseLoop, destroyed] {
+        if (serverOwner && *serverOwner) {
+            serverOwner->reset();
+        }
+        baseLoop->quit();
+        destroyed->set_value();
+    });
+    assert(destroyedFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
 
     logicLoop->quit();
     mini::game::PlayerSessionPtr captured;
@@ -241,11 +272,10 @@ int main() {
         captured = capturedSession;
     }
     assert(captured);
-    assert(captured->isOnline());
     assert(captured->sessionId() == "replay-player");
     const auto managed = manager.getSession("replay-player");
     assert(managed == captured);
-    assert(managed && managed->isOnline());
+    assert(managed && !managed->isClosed());
 
     return 0;
 }

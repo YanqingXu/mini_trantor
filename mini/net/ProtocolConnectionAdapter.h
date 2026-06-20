@@ -3,7 +3,7 @@
 // ProtocolConnectionAdapter — IProtocolConnection 的 TcpConnection 适配实现。
 //
 // 职责：
-//   以 ITransportChannel 弱引用为底座，实现 IProtocolConnection 窄接口，
+//   以 ITransportChannel 的抽象为底座，实现 IProtocolConnection 窄接口，
 //   为协议层（HTTP / WebSocket / RPC）提供稳定的 transport-facing 依赖面。
 //
 // 使用方式：
@@ -15,12 +15,13 @@
 // 生命周期：
 //   - adapter 通过 setContext 存储在 TcpConnection 中
 //   - TcpConnection 析构时 context 自然析构，adapter 随之销毁
-//   - RPC 等延迟回调捕获 shared_ptr<ProtocolConnectionAdapter>；
-//     adapter 内以 weak_ptr<transport::ITransportChannel> 保证安全（不阻止底层对象释放）
+//   - RPC 等延迟回调可捕获 shared_ptr<ProtocolConnectionAdapter>；
+//     adapter 内持有 transport session 的 shared_ptr，避免临时对象过早析构。
 //
 // 所有权：
 //   TcpConnection（通过 std::any context）持有 adapter 的 shared_ptr。
-//   adapter 持有 TcpConnection 的 weak_ptr（不形成循环）。
+//   adapter 通过 ITransportSession shared_ptr 引用底层传输会话，底层会话通过
+//   weak_ptr 回到 connection，避免形成 connection->adapter->connection 强循环。
 //
 // 线程规则：
 //   对上层协议层建议通过 owner loop 触发回调；send / shutdown / forceClose
@@ -89,7 +90,7 @@ public:
 
 private:
     std::weak_ptr<transport::ITransportChannel> channel_;
-    std::weak_ptr<transport::ITransportSession> session_;
+    std::shared_ptr<transport::ITransportSession> session_;
     std::any protocolContext_;
     std::string name_;  // 预先缓存 name 以确保 conn 销毁后仍可查询
 };

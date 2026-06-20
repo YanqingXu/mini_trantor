@@ -1,6 +1,7 @@
 #include "mini/net/EventLoop.h"
 #include "mini/net/EventLoopThread.h"
 #include "mini/net/InetAddress.h"
+#include "mini/net/TcpConnection.h"
 #include "mini/net/TcpServer.h"
 
 #include <arpa/inet.h>
@@ -125,14 +126,29 @@ int main() {
     mini::net::EventLoopThread loopThread;
     auto* baseLoop = loopThread.startLoop();
 
-    mini::net::TcpServer server(
+    auto server = std::make_unique<mini::net::TcpServer>(
         baseLoop, mini::net::InetAddress(port, true), "broadcast-stress-reconnect", true);
-    server.setThreadNum(3);
+    auto* serverRaw = server.get();
+    server->setThreadNum(3);
+
+    std::mutex serverMu;
+    std::condition_variable serverCv;
+    int serverConnectedCount = 0;
+    serverRaw->setConnectionCallback([&](const mini::net::TcpConnectionPtr& conn) {
+        if (!conn->connected()) {
+            return;
+        }
+        {
+            std::lock_guard lock(serverMu);
+            ++serverConnectedCount;
+        }
+        serverCv.notify_all();
+    });
 
     auto started = std::make_shared<std::promise<void>>();
     auto startedFuture = started->get_future();
-    baseLoop->queueInLoop([&server, started]() {
-        server.start();
+    baseLoop->queueInLoop([serverRaw, started] {
+        serverRaw->start();
         started->set_value();
     });
     assert(startedFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
@@ -168,15 +184,29 @@ int main() {
                 std::move(clientDone.back()));
         }
 
+    {
+        std::unique_lock lock(readyMu);
+        const bool allClientsReady = readyCv.wait_for(
+            lock,
+            std::chrono::seconds(3),
+            [&] { return readyCount == kClientCount; });
+        assert(allClientsReady);
+        windowGo = true;
+        readyCv.notify_all();
+    }
+
         {
-            std::unique_lock lock(readyMu);
-            readyCv.wait(lock, [&] { return readyCount == kClientCount; });
-            windowGo = true;
-            readyCv.notify_all();
+            std::unique_lock lock(serverMu);
+            const int targetConnected = (window + 1) * kClientCount;
+            const bool allRegistered = serverCv.wait_for(
+                lock,
+                std::chrono::seconds(3),
+                [&] { return serverConnectedCount >= targetConnected; });
+            assert(allRegistered);
         }
 
         for (int i = 0; i < kPerWindow; ++i) {
-            server.broadcast(expectedFrames[startSeq + i]);
+            serverRaw->broadcast(expectedFrames[startSeq + i]);
             std::this_thread::sleep_for(std::chrono::microseconds(50));
         }
 
@@ -190,11 +220,23 @@ int main() {
 
     auto stopped = std::make_shared<std::promise<void>>();
     auto stoppedFuture = stopped->get_future();
-    baseLoop->queueInLoop([&server, stopped]() {
-        server.stop();
+    baseLoop->queueInLoop([serverRaw, stopped]() {
+        serverRaw->stop();
         stopped->set_value();
     });
     assert(stoppedFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
-    baseLoop->queueInLoop([baseLoop] { baseLoop->quit(); });
+
+    auto serverOwner = std::make_shared<std::unique_ptr<mini::net::TcpServer>>(std::move(server));
+    auto destroyed = std::make_shared<std::promise<void>>();
+    auto destroyedFuture = destroyed->get_future();
+    baseLoop->queueInLoop([serverOwner, baseLoop, destroyed] {
+        if (serverOwner && *serverOwner) {
+            serverOwner->reset();
+        }
+        baseLoop->quit();
+        destroyed->set_value();
+    });
+    assert(destroyedFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+
     return 0;
 }
