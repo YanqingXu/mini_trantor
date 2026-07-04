@@ -88,6 +88,28 @@ int main() {
     const auto received = readExactly(sockets.second, expect.size());
     assert(received == expect);
 
+    std::promise<void> releaseGatePromise;
+    auto releaseGateFuture = releaseGatePromise.get_future().share();
+    auto gateEntered = std::make_shared<std::promise<void>>();
+    auto gateEnteredFuture = gateEntered->get_future();
+    baseLoop->queueInLoop([gateEntered, releaseGateFuture] {
+        gateEntered->set_value();
+        releaseGateFuture.wait();
+    });
+    assert(gateEnteredFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+
+    auto lateDispatcher = std::make_shared<mini::net::broadcast::BroadcastDispatcher>(baseLoop);
+    lateDispatcher->dispatch(
+        {mini::net::broadcast::BroadcastRouter::LoopBatch{ioLoop, {connection}}},
+        std::make_shared<mini::net::buffer::Payload>("late"));
+    lateDispatcher.reset();
+    releaseGatePromise.set_value();
+
+    auto drained = std::make_shared<std::promise<void>>();
+    auto drainedFuture = drained->get_future();
+    baseLoop->queueInLoop([drained] { drained->set_value(); });
+    assert(drainedFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+
     ioLoop->queueInLoop([connection] { connection->forceClose(); });
     assert(closedFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
 

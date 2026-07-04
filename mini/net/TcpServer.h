@@ -20,6 +20,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -33,6 +35,7 @@ class TlsContext;
 class TcpServer : private mini::base::noncopyable {
 public:
     using Duration = std::chrono::steady_clock::duration;
+    using BroadcastAdmissionCallback = std::function<bool(const BroadcastMetricSample&)>;
 
     TcpServer(EventLoop* loop, const InetAddress& listenAddr, std::string name, bool reusePort = true);
     TcpServer(EventLoop* loop, const InetAddress& listenAddr, std::string name, TcpServerOptions options);
@@ -53,14 +56,17 @@ public:
     std::size_t connectionCount() const;
     void bindBroadcastSession(const TcpConnectionPtr& connection, std::string sessionId);
     void unbindBroadcastSession(std::string sessionId);
+    void unbindBroadcastSession(const TcpConnectionPtr& connection, std::string sessionId);
     void joinBroadcastGroup(std::string sessionId, std::string groupId);
     void leaveBroadcastGroup(std::string sessionId, std::string groupId);
     void joinBroadcastAoi(std::string sessionId, std::string aoiId);
     void leaveBroadcastAoi(std::string sessionId, std::string aoiId);
-    void broadcastTo(const std::vector<std::string>& sessionIds, const std::string& data);
-    void broadcastGroup(std::string groupId, const std::string& data);
-    void broadcastAoi(std::string aoiId, const std::string& data);
-    void broadcast(const std::string& data);
+    void broadcastTo(const std::vector<std::string>& sessionIds,
+                     const std::string& data,
+                     std::uint32_t priority = 1);
+    void broadcastGroup(std::string groupId, const std::string& data, std::uint32_t priority = 1);
+    void broadcastAoi(std::string aoiId, const std::string& data, std::uint32_t priority = 1);
+    void broadcast(const std::string& data, std::uint32_t priority = 1);
     void broadcastToInLoop(std::vector<std::string> sessionIds, buffer::PayloadPtr payload);
     void broadcastInLoop(buffer::PayloadPtr payload);
 
@@ -77,6 +83,9 @@ public:
 
     /// Set broadcast fanout / latency metric hook. Callback fires on base or target ioLoop thread.
     void setBroadcastMetricCallback(BroadcastMetricCallback cb);
+
+    /// Set broadcast admission hook. Callback fires on base loop after routing and before dispatch.
+    void setBroadcastAdmissionCallback(BroadcastAdmissionCallback cb);
 
     /// Set EventLoop queue / wakeup metric hook for base and worker loops.
     void setEventLoopMetricCallback(EventLoopMetricCallback cb);
@@ -99,15 +108,20 @@ private:
     void broadcastToInLoopWithMetrics(
         std::vector<std::string> sessionIds,
         buffer::PayloadPtr payload,
-        mini::base::Timestamp requestedAt);
+        mini::base::Timestamp requestedAt,
+        std::uint32_t priority = 1);
     void broadcastBucketInLoopWithMetrics(
         std::vector<broadcast::BroadcastRouter::LoopBatch> batches,
         buffer::PayloadPtr payload,
         mini::base::Timestamp requestedAt,
         bool targeted,
-        std::size_t requestedSessions);
-    void broadcastInLoopWithMetrics(buffer::PayloadPtr payload, mini::base::Timestamp requestedAt);
+        std::size_t requestedSessions,
+        std::uint32_t priority = 1);
+    void broadcastInLoopWithMetrics(buffer::PayloadPtr payload,
+                                    mini::base::Timestamp requestedAt,
+                                    std::uint32_t priority = 1);
     void configureBroadcastMetrics();
+    bool admitBroadcast(const broadcast::BroadcastDispatcher::DispatchMetricContext& metrics) const;
     void forceCloseAllConnections();
     void onDrainTimeout();
 
@@ -127,6 +141,7 @@ private:
     BackpressureEventCallback backpressureEventCallback_;
     TlsEventCallback tlsEventCallback_;
     BroadcastMetricCallback broadcastMetricCallback_;
+    BroadcastAdmissionCallback broadcastAdmissionCallback_;
     EventLoopMetricCallback eventLoopMetricCallback_;
 
     std::atomic<bool> started_;

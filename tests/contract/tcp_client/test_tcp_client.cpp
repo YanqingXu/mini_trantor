@@ -126,7 +126,7 @@ int main() {
         cleaned.get_future().wait();
     }
 
-    // Contract 3: cross-thread connect marshals to owner loop
+    // Contract 3: cross-thread connect/disconnect marshal to owner loop
     {
         mini::net::EventLoopThread loopThread;
         mini::net::EventLoop* loop = loopThread.startLoop();
@@ -142,20 +142,48 @@ int main() {
         loop->runInLoop([&] { startEchoServer(loop, *server); });
         std::this_thread::sleep_for(50ms);
 
+        std::promise<void> callbackInstalled;
+        auto callbackInstalledFuture = callbackInstalled.get_future();
         std::promise<std::thread::id> connectedOn;
         auto connectedOnFuture = connectedOn.get_future();
+        std::promise<std::thread::id> disconnectedOn;
+        auto disconnectedOnFuture = disconnectedOn.get_future();
+        bool connectedSeen = false;
+        bool disconnectedSeen = false;
 
         loop->runInLoop([&] {
             client->setConnectionCallback([&](const mini::net::TcpConnectionPtr& conn) {
                 if (conn->connected()) {
-                    connectedOn.set_value(std::this_thread::get_id());
+                    if (!connectedSeen) {
+                        connectedSeen = true;
+                        connectedOn.set_value(std::this_thread::get_id());
+                    }
+                    return;
+                }
+                if (!disconnectedSeen) {
+                    disconnectedSeen = true;
+                    disconnectedOn.set_value(std::this_thread::get_id());
                 }
             });
+            callbackInstalled.set_value();
+        });
+        assert(callbackInstalledFuture.wait_for(2s) == std::future_status::ready);
+
+        std::thread crossThreadConnect([&] {
             client->connect();
         });
+        crossThreadConnect.join();
 
         assert(connectedOnFuture.wait_for(2s) == std::future_status::ready);
         assert(connectedOnFuture.get() != mainThread);
+
+        std::thread crossThreadDisconnect([&] {
+            client->disconnect();
+        });
+        crossThreadDisconnect.join();
+
+        assert(disconnectedOnFuture.wait_for(2s) == std::future_status::ready);
+        assert(disconnectedOnFuture.get() != mainThread);
 
         std::promise<void> cleaned;
         loop->runInLoop([&] {

@@ -1,4 +1,9 @@
 docs/
+├── game_server_network_base_scope_boundary.md
+├── game_server_network_base_phase_closure_audit.md
+├── game_server_network_base_lifecycle_hardening.md
+├── roadmap_game_server_network_base_execution_plan.md
+│
 ├── 00_overview/
 │   ├── 00_project_summary.md
 │   ├── 01_architecture_overview.md

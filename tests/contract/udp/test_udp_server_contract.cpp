@@ -34,9 +34,28 @@ uint16_t allocatePort() {
     return port;
 }
 
-}  // namespace
+void sendDatagram(uint16_t serverPort, std::string_view payload) {
+    const int fd = ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_UDP);
+    assert(fd >= 0);
 
-int main() {
+    sockaddr_in serverAddr{};
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(serverPort);
+    assert(::inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr) == 1);
+
+    const ssize_t sent =
+        ::sendto(fd, payload.data(), payload.size(), 0, reinterpret_cast<const sockaddr*>(&serverAddr), sizeof(serverAddr));
+    assert(sent == static_cast<ssize_t>(payload.size()));
+    ::close(fd);
+}
+
+void sendBurst(uint16_t serverPort, int count) {
+    for (int i = 0; i < count; ++i) {
+        sendDatagram(serverPort, "pkt");
+    }
+}
+
+void testUdpServerSessionContract() {
     const uint16_t serverPort = allocatePort();
 
     mini::net::EventLoop loop;
@@ -109,6 +128,64 @@ int main() {
     assert(sessionId >= mini::net::transport::kFirstTransportSessionId);
     assert(server.sessionCount() == 0);
     assert(responseFuture.get() == "world");
+}
+
+void testUdpServerReadBudgetMetricContract() {
+    using namespace std::chrono_literals;
+
+    const uint16_t serverPort = allocatePort();
+
+    mini::net::EventLoop loop;
+    mini::net::udp::UdpServer server(
+        &loop,
+        mini::net::InetAddress(serverPort, true),
+        "contract-udp-budget");
+
+    server.setMaxDatagramsPerRead(2);
+    assert(server.maxDatagramsPerRead() == 2);
+
+    std::size_t messageCount = 0;
+    bool metricObserved = false;
+
+    server.setMessageCallback([&](mini::net::transport::TransportSessionId sessionId,
+                                  std::string_view packet,
+                                  const mini::net::InetAddress&) {
+        assert(sessionId >= mini::net::transport::kFirstTransportSessionId);
+        assert(packet == "pkt");
+        ++messageCount;
+    });
+
+    server.setMetricCallback([&](const mini::net::UdpMetricSample& sample) {
+        assert(sample.event == mini::net::UdpMetricEvent::ReadBatch);
+        assert(sample.loop == &loop);
+        assert(sample.socketName == "contract-udp-budget/socket");
+        assert(sample.maxDatagramsPerRead == 2);
+        assert(sample.readDuration >= mini::net::UdpMetricSample::Duration::zero());
+        if (!sample.budgetExhausted) {
+            return;
+        }
+        assert(sample.datagramsRead == 2);
+        assert(sample.bytesRead == 6);
+        assert(messageCount == 2);
+        metricObserved = true;
+        loop.quit();
+    });
+
+    server.start();
+    sendBurst(serverPort, 12);
+    loop.runAfter(1s, [&loop] { loop.quit(); });
+
+    loop.loop();
+
+    assert(metricObserved);
+    assert(messageCount == 2);
+}
+
+}  // namespace
+
+int main() {
+    testUdpServerSessionContract();
+    testUdpServerReadBudgetMetricContract();
 
     return 0;
 }

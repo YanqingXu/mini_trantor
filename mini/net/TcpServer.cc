@@ -178,7 +178,11 @@ void TcpServer::bindBroadcastSession(const TcpConnectionPtr& connection, std::st
         return;
     }
     if (!loop_->isInLoopThread()) {
-        loop_->queueInLoop([this, connection, sessionId = std::move(sessionId)]() mutable {
+        std::weak_ptr<void> lifetime = lifetimeToken_;
+        loop_->queueInLoop([this, lifetime, connection, sessionId = std::move(sessionId)]() mutable {
+            if (!lifetime.lock()) {
+                return;
+            }
             bindBroadcastSession(connection, std::move(sessionId));
         });
         return;
@@ -191,7 +195,11 @@ void TcpServer::unbindBroadcastSession(std::string sessionId) {
         return;
     }
     if (!loop_->isInLoopThread()) {
-        loop_->queueInLoop([this, sessionId = std::move(sessionId)]() mutable {
+        std::weak_ptr<void> lifetime = lifetimeToken_;
+        loop_->queueInLoop([this, lifetime, sessionId = std::move(sessionId)]() mutable {
+            if (!lifetime.lock()) {
+                return;
+            }
             unbindBroadcastSession(std::move(sessionId));
         });
         return;
@@ -199,12 +207,33 @@ void TcpServer::unbindBroadcastSession(std::string sessionId) {
     broadcastRouter_->deregisterSession(sessionId);
 }
 
+void TcpServer::unbindBroadcastSession(const TcpConnectionPtr& connection, std::string sessionId) {
+    if (!broadcastRouter_ || !connection || sessionId.empty()) {
+        return;
+    }
+    if (!loop_->isInLoopThread()) {
+        std::weak_ptr<void> lifetime = lifetimeToken_;
+        loop_->queueInLoop([this, lifetime, connection, sessionId = std::move(sessionId)]() mutable {
+            if (!lifetime.lock()) {
+                return;
+            }
+            unbindBroadcastSession(connection, std::move(sessionId));
+        });
+        return;
+    }
+    broadcastRouter_->deregisterSession(sessionId, connection);
+}
+
 void TcpServer::joinBroadcastGroup(std::string sessionId, std::string groupId) {
     if (!broadcastRouter_ || sessionId.empty() || groupId.empty()) {
         return;
     }
     if (!loop_->isInLoopThread()) {
-        loop_->queueInLoop([this, sessionId = std::move(sessionId), groupId = std::move(groupId)]() mutable {
+        std::weak_ptr<void> lifetime = lifetimeToken_;
+        loop_->queueInLoop([this, lifetime, sessionId = std::move(sessionId), groupId = std::move(groupId)]() mutable {
+            if (!lifetime.lock()) {
+                return;
+            }
             joinBroadcastGroup(std::move(sessionId), std::move(groupId));
         });
         return;
@@ -217,7 +246,11 @@ void TcpServer::leaveBroadcastGroup(std::string sessionId, std::string groupId) 
         return;
     }
     if (!loop_->isInLoopThread()) {
-        loop_->queueInLoop([this, sessionId = std::move(sessionId), groupId = std::move(groupId)]() mutable {
+        std::weak_ptr<void> lifetime = lifetimeToken_;
+        loop_->queueInLoop([this, lifetime, sessionId = std::move(sessionId), groupId = std::move(groupId)]() mutable {
+            if (!lifetime.lock()) {
+                return;
+            }
             leaveBroadcastGroup(std::move(sessionId), std::move(groupId));
         });
         return;
@@ -230,7 +263,11 @@ void TcpServer::joinBroadcastAoi(std::string sessionId, std::string aoiId) {
         return;
     }
     if (!loop_->isInLoopThread()) {
-        loop_->queueInLoop([this, sessionId = std::move(sessionId), aoiId = std::move(aoiId)]() mutable {
+        std::weak_ptr<void> lifetime = lifetimeToken_;
+        loop_->queueInLoop([this, lifetime, sessionId = std::move(sessionId), aoiId = std::move(aoiId)]() mutable {
+            if (!lifetime.lock()) {
+                return;
+            }
             joinBroadcastAoi(std::move(sessionId), std::move(aoiId));
         });
         return;
@@ -243,7 +280,11 @@ void TcpServer::leaveBroadcastAoi(std::string sessionId, std::string aoiId) {
         return;
     }
     if (!loop_->isInLoopThread()) {
-        loop_->queueInLoop([this, sessionId = std::move(sessionId), aoiId = std::move(aoiId)]() mutable {
+        std::weak_ptr<void> lifetime = lifetimeToken_;
+        loop_->queueInLoop([this, lifetime, sessionId = std::move(sessionId), aoiId = std::move(aoiId)]() mutable {
+            if (!lifetime.lock()) {
+                return;
+            }
             leaveBroadcastAoi(std::move(sessionId), std::move(aoiId));
         });
         return;
@@ -251,7 +292,9 @@ void TcpServer::leaveBroadcastAoi(std::string sessionId, std::string aoiId) {
     broadcastRouter_->leaveAoi(sessionId, aoiId);
 }
 
-void TcpServer::broadcastTo(const std::vector<std::string>& sessionIds, const std::string& data) {
+void TcpServer::broadcastTo(const std::vector<std::string>& sessionIds,
+                            const std::string& data,
+                            std::uint32_t priority) {
     if (!broadcastRouter_) {
         return;
     }
@@ -265,53 +308,92 @@ void TcpServer::broadcastTo(const std::vector<std::string>& sessionIds, const st
     const auto requestedAt = mini::base::now();
     if (!loop_->isInLoopThread()) {
         auto payload = payloadPool_->acquire(data);
-        loop_->queueInLoop([this, sessionIds, payload = std::move(payload), requestedAt]() mutable {
-            broadcastToInLoopWithMetrics(sessionIds, std::move(payload), requestedAt);
+        std::weak_ptr<void> lifetime = lifetimeToken_;
+        loop_->queueInLoop([this,
+                            lifetime,
+                            sessionIds,
+                            payload = std::move(payload),
+                            requestedAt,
+                            priority]() mutable {
+            if (!lifetime.lock()) {
+                return;
+            }
+            broadcastToInLoopWithMetrics(sessionIds, std::move(payload), requestedAt, priority);
         });
         return;
     }
 
     auto payload = payloadPool_->acquire(data);
-    broadcastToInLoopWithMetrics(sessionIds, std::move(payload), requestedAt);
+    broadcastToInLoopWithMetrics(sessionIds, std::move(payload), requestedAt, priority);
 }
 
-void TcpServer::broadcastGroup(std::string groupId, const std::string& data) {
+void TcpServer::broadcastGroup(std::string groupId, const std::string& data, std::uint32_t priority) {
     if (!broadcastRouter_ || !broadcastDispatcher_ || !payloadPool_ || groupId.empty()) {
         return;
     }
     const auto requestedAt = mini::base::now();
     auto payload = payloadPool_->acquire(data);
     if (!loop_->isInLoopThread()) {
-        loop_->queueInLoop([this, groupId = std::move(groupId), payload = std::move(payload), requestedAt]() mutable {
+        std::weak_ptr<void> lifetime = lifetimeToken_;
+        loop_->queueInLoop([this,
+                            lifetime,
+                            groupId = std::move(groupId),
+                            payload = std::move(payload),
+                            requestedAt,
+                            priority]() mutable {
+            if (!lifetime.lock()) {
+                return;
+            }
             auto batches = broadcastRouter_->routeGroup(groupId);
-            broadcastBucketInLoopWithMetrics(std::move(batches), std::move(payload), requestedAt, true, 0);
+            broadcastBucketInLoopWithMetrics(
+                std::move(batches),
+                std::move(payload),
+                requestedAt,
+                true,
+                0,
+                priority);
         });
         return;
     }
 
     auto batches = broadcastRouter_->routeGroup(groupId);
-    broadcastBucketInLoopWithMetrics(std::move(batches), std::move(payload), requestedAt, true, 0);
+    broadcastBucketInLoopWithMetrics(std::move(batches), std::move(payload), requestedAt, true, 0, priority);
 }
 
-void TcpServer::broadcastAoi(std::string aoiId, const std::string& data) {
+void TcpServer::broadcastAoi(std::string aoiId, const std::string& data, std::uint32_t priority) {
     if (!broadcastRouter_ || !broadcastDispatcher_ || !payloadPool_ || aoiId.empty()) {
         return;
     }
     const auto requestedAt = mini::base::now();
     auto payload = payloadPool_->acquire(data);
     if (!loop_->isInLoopThread()) {
-        loop_->queueInLoop([this, aoiId = std::move(aoiId), payload = std::move(payload), requestedAt]() mutable {
+        std::weak_ptr<void> lifetime = lifetimeToken_;
+        loop_->queueInLoop([this,
+                            lifetime,
+                            aoiId = std::move(aoiId),
+                            payload = std::move(payload),
+                            requestedAt,
+                            priority]() mutable {
+            if (!lifetime.lock()) {
+                return;
+            }
             auto batches = broadcastRouter_->routeAoi(aoiId);
-            broadcastBucketInLoopWithMetrics(std::move(batches), std::move(payload), requestedAt, true, 0);
+            broadcastBucketInLoopWithMetrics(
+                std::move(batches),
+                std::move(payload),
+                requestedAt,
+                true,
+                0,
+                priority);
         });
         return;
     }
 
     auto batches = broadcastRouter_->routeAoi(aoiId);
-    broadcastBucketInLoopWithMetrics(std::move(batches), std::move(payload), requestedAt, true, 0);
+    broadcastBucketInLoopWithMetrics(std::move(batches), std::move(payload), requestedAt, true, 0, priority);
 }
 
-void TcpServer::broadcast(const std::string& data) {
+void TcpServer::broadcast(const std::string& data, std::uint32_t priority) {
     if (!broadcastRouter_) {
         return;
     }
@@ -324,14 +406,22 @@ void TcpServer::broadcast(const std::string& data) {
     const auto requestedAt = mini::base::now();
     if (!loop_->isInLoopThread()) {
         auto payload = payloadPool_->acquire(data);
-        loop_->queueInLoop([this, payload = std::move(payload), requestedAt]() mutable {
-            broadcastInLoopWithMetrics(std::move(payload), requestedAt);
+        std::weak_ptr<void> lifetime = lifetimeToken_;
+        loop_->queueInLoop([this,
+                            lifetime,
+                            payload = std::move(payload),
+                            requestedAt,
+                            priority]() mutable {
+            if (!lifetime.lock()) {
+                return;
+            }
+            broadcastInLoopWithMetrics(std::move(payload), requestedAt, priority);
         });
         return;
     }
 
     auto payload = payloadPool_->acquire(data);
-    broadcastInLoopWithMetrics(std::move(payload), requestedAt);
+    broadcastInLoopWithMetrics(std::move(payload), requestedAt, priority);
 }
 
 void TcpServer::broadcastToInLoop(std::vector<std::string> sessionIds, buffer::PayloadPtr payload) {
@@ -345,7 +435,8 @@ void TcpServer::broadcastInLoop(buffer::PayloadPtr payload) {
 void TcpServer::broadcastToInLoopWithMetrics(
     std::vector<std::string> sessionIds,
     buffer::PayloadPtr payload,
-    mini::base::Timestamp requestedAt) {
+    mini::base::Timestamp requestedAt,
+    std::uint32_t priority) {
     if (!broadcastRouter_ || !broadcastDispatcher_ || !payload) {
         return;
     }
@@ -363,11 +454,15 @@ void TcpServer::broadcastToInLoopWithMetrics(
     metrics.requestedSessions = sessionIds.size();
     metrics.loopBatches = batches.size();
     metrics.payloadBytes = payload->size();
+    metrics.priority = priority;
     metrics.routeLatency = routedAt - routeStartedAt;
     for (const auto& batch : batches) {
         metrics.fanoutConnections += batch.connections.size() + batch.endpoints.size();
     }
 
+    if (!admitBroadcast(metrics)) {
+        return;
+    }
     broadcastDispatcher_->dispatch(std::move(batches), std::move(payload), metrics);
 }
 
@@ -376,7 +471,8 @@ void TcpServer::broadcastBucketInLoopWithMetrics(
     buffer::PayloadPtr payload,
     mini::base::Timestamp requestedAt,
     bool targeted,
-    std::size_t requestedSessions) {
+    std::size_t requestedSessions,
+    std::uint32_t priority) {
     if (!broadcastDispatcher_ || !payload || batches.empty()) {
         return;
     }
@@ -387,6 +483,7 @@ void TcpServer::broadcastBucketInLoopWithMetrics(
     metrics.requestedSessions = requestedSessions;
     metrics.loopBatches = batches.size();
     metrics.payloadBytes = payload->size();
+    metrics.priority = priority;
     metrics.routeLatency = metrics.routedAt - requestedAt;
     for (const auto& batch : batches) {
         metrics.fanoutConnections += batch.connections.size() + batch.endpoints.size();
@@ -394,10 +491,15 @@ void TcpServer::broadcastBucketInLoopWithMetrics(
     if (metrics.requestedSessions == 0) {
         metrics.requestedSessions = metrics.fanoutConnections;
     }
+    if (!admitBroadcast(metrics)) {
+        return;
+    }
     broadcastDispatcher_->dispatch(std::move(batches), std::move(payload), metrics);
 }
 
-void TcpServer::broadcastInLoopWithMetrics(buffer::PayloadPtr payload, mini::base::Timestamp requestedAt) {
+void TcpServer::broadcastInLoopWithMetrics(buffer::PayloadPtr payload,
+                                           mini::base::Timestamp requestedAt,
+                                           std::uint32_t priority) {
     if (!broadcastRouter_ || !broadcastDispatcher_ || !payload) {
         return;
     }
@@ -411,12 +513,16 @@ void TcpServer::broadcastInLoopWithMetrics(buffer::PayloadPtr payload, mini::bas
     metrics.targeted = false;
     metrics.loopBatches = batches.size();
     metrics.payloadBytes = payload->size();
+    metrics.priority = priority;
     metrics.routeLatency = routedAt - routeStartedAt;
     for (const auto& batch : batches) {
         metrics.fanoutConnections += batch.connections.size() + batch.endpoints.size();
     }
     metrics.requestedSessions = metrics.fanoutConnections;
 
+    if (!admitBroadcast(metrics)) {
+        return;
+    }
     broadcastDispatcher_->dispatch(std::move(batches), std::move(payload), metrics);
 }
 
@@ -442,6 +548,10 @@ void TcpServer::setBroadcastMetricCallback(BroadcastMetricCallback cb) {
     configureBroadcastMetrics();
 }
 
+void TcpServer::setBroadcastAdmissionCallback(BroadcastAdmissionCallback cb) {
+    broadcastAdmissionCallback_ = std::move(cb);
+}
+
 void TcpServer::setEventLoopMetricCallback(EventLoopMetricCallback cb) {
     eventLoopMetricCallback_ = std::move(cb);
     if (eventLoopMetricCallback_) {
@@ -458,6 +568,26 @@ void TcpServer::configureBroadcastMetrics() {
         return;
     }
     broadcastDispatcher_->setBroadcastMetricCallback({});
+}
+
+bool TcpServer::admitBroadcast(
+    const broadcast::BroadcastDispatcher::DispatchMetricContext& metrics) const {
+    if (!broadcastAdmissionCallback_) {
+        return true;
+    }
+
+    BroadcastMetricSample sample;
+    sample.event = BroadcastMetricEvent::Routed;
+    sample.loop = loop_;
+    sample.targeted = metrics.targeted;
+    sample.requestedSessions = metrics.requestedSessions;
+    sample.loopBatches = metrics.loopBatches;
+    sample.fanoutConnections = metrics.fanoutConnections;
+    sample.payloadBytes = metrics.payloadBytes;
+    sample.priority = metrics.priority;
+    sample.routeLatency = metrics.routeLatency;
+    sample.fanoutLatency = mini::base::now() - metrics.requestedAt;
+    return broadcastAdmissionCallback_(sample);
 }
 
 // ── Lifecycle ──
@@ -482,7 +612,13 @@ void TcpServer::start() {
                 threadInitCallback(loop);
             }
         });
-        loop_->runInLoop([this] { acceptor_->listen(); });
+        std::weak_ptr<void> lifetime = lifetimeToken_;
+        loop_->runInLoop([this, lifetime] {
+            if (!lifetime.lock()) {
+                return;
+            }
+            acceptor_->listen();
+        });
     }
 }
 
@@ -532,7 +668,13 @@ void TcpServer::stop(Duration drainTimeout) {
     }
 
     // 3. Set drain timeout timer.
-    drainTimerId_ = loop_->runAfter(drainTimeout, [this] { onDrainTimeout(); });
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    drainTimerId_ = loop_->runAfter(drainTimeout, [this, lifetime] {
+        if (!lifetime.lock()) {
+            return;
+        }
+        onDrainTimeout();
+    });
 }
 
 void TcpServer::onDrainTimeout() {

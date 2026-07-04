@@ -3,13 +3,13 @@
 // KcpSession — 将 ITransportEndpoint 语义绑定到单个 KCP 会话。
 //
 // 它并不直接持有 UdpSocket，避免与 reactor loop 的强绑定；
-// 仅持有 owner transport 的非拥有指针与对端地址。这样可兼容栈/共享对象创建方式，
-// 又方便统一交给 TransportManager 注册管理。
+// 仅观察 owner transport 与对端地址。owner 停止或移除会话时必须显式失效该观察指针。
 
 #include "mini/net/transport/ITransport.h"
 #include "mini/net/InetAddress.h"
 
 #include <any>
+#include <atomic>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -50,12 +50,12 @@ public:
     bool hasOwner() const noexcept;
 
 private:
-    KcpTransport* owner_;
+    std::atomic<KcpTransport*> owner_;
     mini::net::transport::TransportSessionId sessionId_{mini::net::transport::kInvalidTransportSessionId};
     mini::net::transport::TransportKind transportKind_{mini::net::transport::TransportKind::kKcp};
     mini::net::InetAddress peerAddress_;
     std::string name_;
-    bool connected_{true};
+    std::atomic<bool> connected_{true};
     std::any transportContext_;
 };
 

@@ -8,7 +8,12 @@
 namespace mini::net::broadcast {
 
 BroadcastRouter::BroadcastRouter(EventLoop* baseLoop)
-    : baseLoop_(baseLoop) {
+    : baseLoop_(baseLoop),
+      lifetimeToken_(std::make_shared<int>(0)) {
+}
+
+BroadcastRouter::~BroadcastRouter() {
+    lifetimeToken_.reset();
 }
 
 void BroadcastRouter::registerConnection(const TcpConnectionPtr& connection) {
@@ -30,10 +35,15 @@ void BroadcastRouter::registerSession(std::string sessionId, const TcpConnection
         return;
     }
 
+    std::weak_ptr<void> lifetime = lifetimeToken_;
     baseLoop_->queueInLoop([this,
+                            lifetime,
                             sessionId = std::move(sessionId),
                             weakConnection = std::move(weakConnection),
                             loop] {
+        if (!lifetime.lock()) {
+            return;
+        }
         registerInLoop(std::move(sessionId), std::move(weakConnection), {}, loop);
     });
 }
@@ -52,10 +62,15 @@ void BroadcastRouter::registerEndpoint(
         return;
     }
 
+    std::weak_ptr<void> lifetime = lifetimeToken_;
     baseLoop_->queueInLoop([this,
+                            lifetime,
                             sessionId = std::move(sessionId),
                             weakEndpoint = std::move(weakEndpoint),
                             loop] {
+        if (!lifetime.lock()) {
+            return;
+        }
         registerInLoop(std::move(sessionId), {}, std::move(weakEndpoint), loop);
     });
 }
@@ -84,7 +99,38 @@ void BroadcastRouter::deregisterSession(std::string_view sessionId) {
         return;
     }
 
-    baseLoop_->queueInLoop([this, id = std::move(id)] { deregisterInLoop(id); });
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    baseLoop_->queueInLoop([this, lifetime, id = std::move(id)] {
+        if (!lifetime.lock()) {
+            return;
+        }
+        deregisterInLoop(id);
+    });
+}
+
+void BroadcastRouter::deregisterSession(std::string_view sessionId,
+                                        const TcpConnectionPtr& expectedConnection) {
+    if (!baseLoop_ || sessionId.empty() || !expectedConnection) {
+        return;
+    }
+
+    auto id = std::string(sessionId);
+    auto expected = std::weak_ptr<TcpConnection>(expectedConnection);
+    if (baseLoop_->isInLoopThread()) {
+        deregisterIfConnectionMatchesInLoop(std::move(id), std::move(expected));
+        return;
+    }
+
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    baseLoop_->queueInLoop([this,
+                            lifetime,
+                            id = std::move(id),
+                            expected = std::move(expected)]() mutable {
+        if (!lifetime.lock()) {
+            return;
+        }
+        deregisterIfConnectionMatchesInLoop(std::move(id), std::move(expected));
+    });
 }
 
 void BroadcastRouter::joinGroup(std::string sessionId, std::string groupId) {
@@ -95,7 +141,11 @@ void BroadcastRouter::joinGroup(std::string sessionId, std::string groupId) {
         joinBucketInLoop(std::move(sessionId), std::move(groupId), sessionsByGroup_, groupsBySession_);
         return;
     }
-    baseLoop_->queueInLoop([this, sessionId = std::move(sessionId), groupId = std::move(groupId)] {
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    baseLoop_->queueInLoop([this, lifetime, sessionId = std::move(sessionId), groupId = std::move(groupId)] {
+        if (!lifetime.lock()) {
+            return;
+        }
         joinBucketInLoop(std::move(sessionId), std::move(groupId), sessionsByGroup_, groupsBySession_);
     });
 }
@@ -110,7 +160,11 @@ void BroadcastRouter::leaveGroup(std::string_view sessionId, std::string_view gr
         leaveBucketInLoop(std::move(session), std::move(group), sessionsByGroup_, groupsBySession_);
         return;
     }
-    baseLoop_->queueInLoop([this, session = std::move(session), group = std::move(group)] {
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    baseLoop_->queueInLoop([this, lifetime, session = std::move(session), group = std::move(group)] {
+        if (!lifetime.lock()) {
+            return;
+        }
         leaveBucketInLoop(std::move(session), std::move(group), sessionsByGroup_, groupsBySession_);
     });
 }
@@ -123,7 +177,11 @@ void BroadcastRouter::joinAoi(std::string sessionId, std::string aoiId) {
         joinBucketInLoop(std::move(sessionId), std::move(aoiId), sessionsByAoi_, aoisBySession_);
         return;
     }
-    baseLoop_->queueInLoop([this, sessionId = std::move(sessionId), aoiId = std::move(aoiId)] {
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    baseLoop_->queueInLoop([this, lifetime, sessionId = std::move(sessionId), aoiId = std::move(aoiId)] {
+        if (!lifetime.lock()) {
+            return;
+        }
         joinBucketInLoop(std::move(sessionId), std::move(aoiId), sessionsByAoi_, aoisBySession_);
     });
 }
@@ -138,7 +196,11 @@ void BroadcastRouter::leaveAoi(std::string_view sessionId, std::string_view aoiI
         leaveBucketInLoop(std::move(session), std::move(aoi), sessionsByAoi_, aoisBySession_);
         return;
     }
-    baseLoop_->queueInLoop([this, session = std::move(session), aoi = std::move(aoi)] {
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    baseLoop_->queueInLoop([this, lifetime, session = std::move(session), aoi = std::move(aoi)] {
+        if (!lifetime.lock()) {
+            return;
+        }
         leaveBucketInLoop(std::move(session), std::move(aoi), sessionsByAoi_, aoisBySession_);
     });
 }
@@ -206,6 +268,28 @@ void BroadcastRouter::deregisterInLoop(std::string sessionId) {
     };
     eraseFromBuckets(sessionsByGroup_, groupsBySession_);
     eraseFromBuckets(sessionsByAoi_, aoisBySession_);
+}
+
+void BroadcastRouter::deregisterIfConnectionMatchesInLoop(
+    std::string sessionId,
+    std::weak_ptr<TcpConnection> expectedConnection) {
+    baseLoop_->assertInLoopThread();
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto sessionIt = sessionById_.find(sessionId);
+        if (sessionIt == sessionById_.end()) {
+            return;
+        }
+
+        auto current = sessionIt->second.connection.lock();
+        auto expected = expectedConnection.lock();
+        if (!current || !expected || current != expected) {
+            return;
+        }
+    }
+
+    deregisterInLoop(std::move(sessionId));
 }
 
 void BroadcastRouter::joinBucketInLoop(

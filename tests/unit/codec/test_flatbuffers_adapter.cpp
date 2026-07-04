@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -39,6 +40,14 @@ bool decodeFakeMessage(std::string_view payload, FakeFlatMessage& msg) {
              static_cast<std::uint16_t>(static_cast<unsigned char>(payload[1]));
     msg.payload.assign(payload.data() + 2, payload.size() - 2);
     return true;
+}
+
+bool throwEncodeMessage(const FakeFlatMessage&, std::string*) {
+    throw std::runtime_error("encode boom");
+}
+
+bool throwDecodeMessage(std::string_view, FakeFlatMessage&) {
+    throw std::runtime_error("decode boom");
 }
 
 }  // namespace
@@ -115,12 +124,29 @@ int main() {
         bad.encodeOk = false;
         assert(!codecWithFns.encodeMessage(bad, &payload, &err));
         assert(err == "flatbuffers encode failed");
+        assert(!codecWithFns.encodeMessage(bad, nullptr, &err));
+        assert(err == "flatbuffers encode called with null payload");
 
         FakeFlatMessage badDecode;
         badDecode.decodeOk = false;
         assert(!codecWithFns.decodeMessage("", badDecode, &err));
         assert(err == "flatbuffers decode failed");
         std::printf("  PASS: callback failure path\n");
+    }
+
+    // 6. injected callback exceptions should become explicit errors
+    {
+        FlatBuffersAdapter<FakeFlatMessage> codecWithThrowingFns{
+            throwEncodeMessage,
+            throwDecodeMessage};
+        FakeFlatMessage msg;
+
+        assert(!codecWithThrowingFns.encodeMessage(msg, &payload, &err));
+        assert(err.rfind("flatbuffers encode threw exception", 0) == 0);
+
+        assert(!codecWithThrowingFns.decodeMessage("xx", msg, &err));
+        assert(err.rfind("flatbuffers decode threw exception", 0) == 0);
+        std::printf("  PASS: flatbuffers exception guard\n");
     }
 
     std::printf("All flatbuffers adapter unit tests passed.\n");

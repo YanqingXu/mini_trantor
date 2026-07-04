@@ -72,6 +72,46 @@ int main() {
     logicCallback(logicSample);
     assert(logicObserved);
 
+    bool logicOutputObserved = false;
+    mini::game::logic::LogicLoopMetricCallback logicOutputCallback =
+        [&](const mini::game::logic::LogicLoopMetricSample& sample) {
+            logicOutputObserved = true;
+            assert(sample.event == mini::game::logic::LogicLoopMetricEvent::OutputDispatched);
+            assert(sample.outputBatch == 2);
+            assert(sample.queuedOutputs == 1);
+            assert(sample.droppedOutputs == 1);
+            assert(sample.outputBytes == 32);
+        };
+    mini::game::logic::LogicLoopMetricSample logicOutputSample;
+    logicOutputSample.event = mini::game::logic::LogicLoopMetricEvent::OutputDispatched;
+    logicOutputSample.outputBatch = 2;
+    logicOutputSample.queuedOutputs = 1;
+    logicOutputSample.droppedOutputs = 1;
+    logicOutputSample.outputBytes = 32;
+    logicOutputCallback(logicOutputSample);
+    assert(logicOutputObserved);
+
+    bool pipelineObserved = false;
+    mini::game::GamePipelineMetricCallback pipelineCallback =
+        [&](const mini::game::GamePipelineMetricSample& sample) {
+            pipelineObserved = true;
+            assert(sample.event == mini::game::GamePipelineMetricEvent::InputBatchProcessed);
+            assert(sample.framesDecoded == 3);
+            assert(sample.bytesConsumed == 128);
+            assert(sample.bufferedBytes == 16);
+            assert(sample.continuationScheduled);
+            assert(sample.batchDuration >= mini::game::GamePipelineMetricSample::Duration::zero());
+        };
+    mini::game::GamePipelineMetricSample pipelineSample;
+    pipelineSample.event = mini::game::GamePipelineMetricEvent::InputBatchProcessed;
+    pipelineSample.framesDecoded = 3;
+    pipelineSample.bytesConsumed = 128;
+    pipelineSample.bufferedBytes = 16;
+    pipelineSample.continuationScheduled = true;
+    pipelineSample.batchDuration = 2ms;
+    pipelineCallback(pipelineSample);
+    assert(pipelineObserved);
+
     bool sessionObserved = false;
     mini::game::SessionMetricCallback sessionCallback =
         [&](const mini::game::SessionMetricSample& sample) {
@@ -88,6 +128,90 @@ int main() {
     sessionSample.reconnectDuration = 5ms;
     sessionCallback(sessionSample);
     assert(sessionObserved);
+
+    bool asyncSessionObserved = false;
+    mini::game::SessionMetricCallback asyncSessionCallback =
+        [&](const mini::game::SessionMetricSample& sample) {
+            asyncSessionObserved = true;
+            assert(sample.event == mini::game::SessionMetricEvent::AsyncEventsDrained);
+            assert(sample.pendingEvents == 8);
+            assert(sample.drainedEvents == 8);
+            assert(sample.oldestEventLag >= mini::game::SessionMetricSample::Duration::zero());
+        };
+    mini::game::SessionMetricSample asyncSessionSample;
+    asyncSessionSample.event = mini::game::SessionMetricEvent::AsyncEventsDrained;
+    asyncSessionSample.pendingEvents = 8;
+    asyncSessionSample.drainedEvents = 8;
+    asyncSessionSample.oldestEventLag = 4ms;
+    asyncSessionCallback(asyncSessionSample);
+    assert(asyncSessionObserved);
+
+    bool udpObserved = false;
+    mini::net::UdpMetricCallback udpCallback =
+        [&](const mini::net::UdpMetricSample& sample) {
+            udpObserved = true;
+            assert(sample.event == mini::net::UdpMetricEvent::ReadBatch);
+            assert(sample.socketName == "udp-metrics");
+            assert(sample.datagramsRead == 4);
+            assert(sample.bytesRead == 64);
+            assert(sample.maxDatagramsPerRead == 4);
+            assert(sample.budgetExhausted);
+            assert(sample.readDuration >= mini::net::UdpMetricSample::Duration::zero());
+        };
+    mini::net::UdpMetricSample udpSample;
+    udpSample.event = mini::net::UdpMetricEvent::ReadBatch;
+    udpSample.socketName = "udp-metrics";
+    udpSample.datagramsRead = 4;
+    udpSample.bytesRead = 64;
+    udpSample.maxDatagramsPerRead = 4;
+    udpSample.budgetExhausted = true;
+    udpSample.readDuration = 1ms;
+    udpCallback(udpSample);
+    assert(udpObserved);
+
+    bool gameBackpressureObserved = false;
+    mini::game::GameBackpressureMetricCallback gameBackpressureCallback =
+        [&](const mini::game::GameBackpressureMetricSample& sample) {
+            gameBackpressureObserved = true;
+            assert(sample.event == mini::game::GameBackpressureMetricEvent::LogicRejected);
+            assert(sample.layer == mini::game::GameBackpressureLayer::LogicAdmission);
+            assert(sample.action == mini::game::GameBackpressureAction::Reject);
+            assert(sample.reason == mini::game::GameBackpressureReason::LogicBacklogHardLimit);
+            assert(sample.sessionToken == "s2");
+            assert(sample.backlog == 129);
+            assert(sample.hardLimit == 128);
+        };
+    mini::game::GameBackpressureMetricSample gameBackpressureSample;
+    gameBackpressureSample.event = mini::game::GameBackpressureMetricEvent::LogicRejected;
+    gameBackpressureSample.layer = mini::game::GameBackpressureLayer::LogicAdmission;
+    gameBackpressureSample.action = mini::game::GameBackpressureAction::Reject;
+    gameBackpressureSample.reason = mini::game::GameBackpressureReason::LogicBacklogHardLimit;
+    gameBackpressureSample.sessionToken = "s2";
+    gameBackpressureSample.backlog = 129;
+    gameBackpressureSample.hardLimit = 128;
+    gameBackpressureCallback(gameBackpressureSample);
+    assert(gameBackpressureObserved);
+
+    bool gameSecurityObserved = false;
+    mini::game::GameSecurityMetricCallback gameSecurityCallback =
+        [&](const mini::game::GameSecurityMetricSample& sample) {
+            gameSecurityObserved = true;
+            assert(sample.event == mini::game::GameSecurityMetricEvent::RateLimited);
+            assert(sample.reason == mini::game::GameSecurityReason::SessionRateLimit);
+            assert(sample.sessionToken == "s3");
+            assert(sample.msgId == 2);
+            assert(sample.currentValue == 3);
+            assert(sample.limit == 2);
+        };
+    mini::game::GameSecurityMetricSample gameSecuritySample;
+    gameSecuritySample.event = mini::game::GameSecurityMetricEvent::RateLimited;
+    gameSecuritySample.reason = mini::game::GameSecurityReason::SessionRateLimit;
+    gameSecuritySample.sessionToken = "s3";
+    gameSecuritySample.msgId = 2;
+    gameSecuritySample.currentValue = 3;
+    gameSecuritySample.limit = 2;
+    gameSecurityCallback(gameSecuritySample);
+    assert(gameSecurityObserved);
 
     return 0;
 }

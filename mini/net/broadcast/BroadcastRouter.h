@@ -35,6 +35,7 @@ public:
     using SessionIds = std::vector<std::string>;
 
     explicit BroadcastRouter(EventLoop* baseLoop);
+    ~BroadcastRouter();
 
     void registerConnection(const TcpConnectionPtr& connection);
     void registerSession(std::string sessionId, const TcpConnectionPtr& connection);
@@ -43,6 +44,7 @@ public:
                           std::shared_ptr<transport::ITransportEndpoint> endpoint);
     void deregisterConnection(const TcpConnectionPtr& connection);
     void deregisterSession(std::string_view sessionId);
+    void deregisterSession(std::string_view sessionId, const TcpConnectionPtr& expectedConnection);
 
     void joinGroup(std::string sessionId, std::string groupId);
     void leaveGroup(std::string_view sessionId, std::string_view groupId);
@@ -72,6 +74,8 @@ private:
                         std::weak_ptr<transport::ITransportEndpoint> endpoint,
                         EventLoop* loop);
     void deregisterInLoop(std::string sessionId);
+    void deregisterIfConnectionMatchesInLoop(std::string sessionId,
+                                             std::weak_ptr<TcpConnection> expectedConnection);
     void joinBucketInLoop(std::string sessionId,
                           std::string bucketId,
                           std::unordered_map<std::string, std::unordered_set<std::string>>& sessionsByBucket,
@@ -88,6 +92,7 @@ private:
     static std::string transportSessionKey(transport::TransportSessionId sessionId);
 
     EventLoop* baseLoop_;
+    std::shared_ptr<void> lifetimeToken_;
 
     mutable std::mutex mutex_;
     std::unordered_map<std::string, SessionRecord> sessionById_;

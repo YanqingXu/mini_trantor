@@ -6,6 +6,7 @@
 #include <chrono>
 #include <future>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -153,11 +154,101 @@ void testSessionReconnectMetrics() {
     logicLoop->quit();
 }
 
+void testSessionAsyncEventDrainMetrics() {
+    using namespace std::chrono_literals;
+
+    const auto callerThread = std::this_thread::get_id();
+    mini::net::EventLoopThread logicThread;
+    auto* logicLoop = logicThread.startLoop();
+
+    mini::game::SessionManager manager(logicLoop);
+    constexpr int sessionCount = 8;
+    std::vector<std::string> tokens;
+    tokens.reserve(sessionCount);
+
+    for (int i = 0; i < sessionCount; ++i) {
+        auto token = "async-metric-token-" + std::to_string(i);
+        auto session = manager.ensureSession(token, 8000 + i, false);
+        assert(session != nullptr);
+        assert(manager.markStartAuth(token));
+        assert(manager.authenticate(token, static_cast<std::uint64_t>(8000 + i), token));
+        assert(manager.markOnline(token));
+        tokens.push_back(std::move(token));
+    }
+
+    std::promise<std::thread::id> metricThreadPromise;
+    auto metricThreadFuture = metricThreadPromise.get_future();
+    std::once_flag metricOnce;
+
+    manager.setMetricCallback([&](const mini::game::SessionMetricSample& sample) {
+        if (sample.event != mini::game::SessionMetricEvent::AsyncEventsDrained) {
+            return;
+        }
+        assert(sample.loop == logicLoop);
+        assert(sample.pendingEvents == static_cast<std::size_t>(sessionCount));
+        assert(sample.drainedEvents == static_cast<std::size_t>(sessionCount));
+        assert(sample.oldestEventLag >= mini::game::SessionMetricSample::Duration::zero());
+        std::call_once(metricOnce, [&] {
+            metricThreadPromise.set_value(std::this_thread::get_id());
+        });
+    });
+
+    std::promise<void> blockerStarted;
+    auto blockerStartedFuture = blockerStarted.get_future();
+    std::promise<void> releaseBlockerPromise;
+    auto releaseBlocker = releaseBlockerPromise.get_future().share();
+    logicLoop->queueInLoop([&blockerStarted, releaseBlocker] {
+        blockerStarted.set_value();
+        releaseBlocker.wait();
+    });
+    waitDone(blockerStartedFuture, 1s);
+
+    std::thread worker([&] {
+        for (const auto& token : tokens) {
+            manager.postRefreshHeartbeat(token);
+        }
+    });
+    worker.join();
+
+    releaseBlockerPromise.set_value();
+    const auto metricThread = waitValue(metricThreadFuture, 1s);
+    assert(metricThread != callerThread);
+
+    logicLoop->quit();
+}
+
+void testGamePipelineMetricsSchema() {
+    bool inputObserved = false;
+    mini::game::GamePipelineMetricCallback callback =
+        [&](const mini::game::GamePipelineMetricSample& sample) {
+            inputObserved = true;
+            assert(sample.event == mini::game::GamePipelineMetricEvent::InputBatchProcessed);
+            assert(sample.framesDecoded == 16);
+            assert(sample.bytesConsumed == 1024);
+            assert(sample.bufferedBytes == 128);
+            assert(sample.continuationScheduled);
+            assert(sample.batchDuration >= mini::game::GamePipelineMetricSample::Duration::zero());
+        };
+
+    mini::game::GamePipelineMetricSample sample;
+    sample.event = mini::game::GamePipelineMetricEvent::InputBatchProcessed;
+    sample.framesDecoded = 16;
+    sample.bytesConsumed = 1024;
+    sample.bufferedBytes = 128;
+    sample.continuationScheduled = true;
+    sample.batchDuration = std::chrono::milliseconds(1);
+
+    callback(sample);
+    assert(inputObserved);
+}
+
 }  // namespace
 
 int main() {
     testEventLoopQueueMetricsRunOnOwnerThread();
     testLogicLoopBacklogLagAndJitterMetrics();
     testSessionReconnectMetrics();
+    testSessionAsyncEventDrainMetrics();
+    testGamePipelineMetricsSchema();
     return 0;
 }

@@ -13,7 +13,9 @@
 
 #include "mini/net/transport/TransportTypes.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -25,13 +27,19 @@ namespace codec {
 inline constexpr std::size_t kKcpFrameHeaderSize = 22;
 inline constexpr std::uint16_t kKcpFrameMagic = 0x4b43;  // 'K','C'
 inline constexpr std::uint8_t kKcpFrameVersion = 1;
-inline constexpr std::size_t kKcpMaxPayloadSize = 64 * 1024;
+inline constexpr std::size_t kKcpMaxPayloadSize =
+    static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max());
+inline constexpr std::size_t kKcpDefaultMtuPayloadSize = 1200;
 
 enum KcpFrameFlags : std::uint16_t {
     kKcpFrameFlagNone = 0x0000,
     kKcpFrameFlagData = 0x0001,
     kKcpFrameFlagAck = 0x0002,
     kKcpFrameFlagReset = 0x0004,
+    kKcpFrameFlagFragment = 0x0008,
+    kKcpFrameFlagSelectiveAck = 0x0010,
+    kKcpFrameFlagMtuProbe = 0x0020,
+    kKcpFrameFlagXorParity = 0x0040,
 };
 
 // 已解码的 KCP 帧

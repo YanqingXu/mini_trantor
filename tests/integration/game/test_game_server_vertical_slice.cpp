@@ -14,8 +14,10 @@
 #include <cstdint>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <netinet/in.h>
 #include <string>
+#include <string_view>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -75,6 +77,10 @@ public:
     void sendFrame(std::uint32_t msgId, std::uint32_t seq, std::string_view payload) {
         const auto frame = framer_.encode(msgId, 0, seq, payload);
         assert(::send(fd_, frame.data(), frame.size(), 0) == static_cast<ssize_t>(frame.size()));
+    }
+
+    void sendRaw(std::string_view bytes) {
+        assert(::send(fd_, bytes.data(), bytes.size(), 0) == static_cast<ssize_t>(bytes.size()));
     }
 
     DecodedFrame readFrame() {
@@ -137,6 +143,39 @@ int main() {
     });
 
     mini::game::GameServerPipeline pipeline(*serverRaw, transportManager, sessionManager, logicLoop);
+    std::promise<void> inputMetricPromise;
+    auto inputMetricFuture = inputMetricPromise.get_future();
+    std::promise<void> continuationMetricPromise;
+    auto continuationMetricFuture = continuationMetricPromise.get_future();
+    std::promise<void> logicSubmitMetricPromise;
+    auto logicSubmitMetricFuture = logicSubmitMetricPromise.get_future();
+    std::once_flag inputMetricOnce;
+    std::once_flag continuationMetricOnce;
+    std::once_flag logicSubmitMetricOnce;
+
+    pipeline.setMetricCallback([&](const mini::game::GamePipelineMetricSample& sample) {
+        assert(sample.loop != nullptr);
+        if (sample.event == mini::game::GamePipelineMetricEvent::InputBatchProcessed) {
+            assert(sample.batchDuration >= mini::game::GamePipelineMetricSample::Duration::zero());
+            if (sample.framesDecoded > 0) {
+                assert(sample.bytesConsumed > 0);
+                std::call_once(inputMetricOnce, [&] { inputMetricPromise.set_value(); });
+            }
+            if (sample.continuationScheduled) {
+                assert(sample.framesDecoded == mini::net::framing::kDefaultMaxFramesPerBatch);
+                assert(sample.bufferedBytes > 0);
+                std::call_once(continuationMetricOnce, [&] { continuationMetricPromise.set_value(); });
+            }
+            return;
+        }
+
+        if (sample.event == mini::game::GamePipelineMetricEvent::LogicSubmitResult &&
+            sample.sessionToken == "player-vslice") {
+            assert(sample.msgId == 2);
+            assert(sample.logicSubmitted);
+            std::call_once(logicSubmitMetricOnce, [&] { logicSubmitMetricPromise.set_value(); });
+        }
+    });
     pipeline.install();
 
     auto started = std::make_shared<std::promise<void>>();
@@ -155,6 +194,7 @@ int main() {
     assert(auth.msgId == 4);
     assert(auth.seq == 1);
     assert(auth.payload == "auth-ok");
+    assert(inputMetricFuture.wait_for(2s) == std::future_status::ready);
 
     auto session = sessionManager.getSession("player-vslice");
     assert(session);
@@ -164,12 +204,28 @@ int main() {
     auto response = client.readFrame();
     assert(response.msgId == 4);
     assert(response.payload == "logic:move");
+    assert(logicSubmitMetricFuture.wait_for(2s) == std::future_status::ready);
 
     client.sendFrame(3, 3, "hello");
     auto broadcast = client.readFrame();
     assert(broadcast.msgId == 4);
     assert(broadcast.seq == 3);
     assert(broadcast.payload == "broadcast:hello");
+
+    mini::net::framing::PacketFramer burstFramer;
+    std::string burst;
+    constexpr int burstCount = 20;
+    for (int i = 0; i < burstCount; ++i) {
+        burst += burstFramer.encode(3, 0, static_cast<std::uint32_t>(100 + i), "burst-" + std::to_string(i));
+    }
+    client.sendRaw(burst);
+    for (int i = 0; i < burstCount; ++i) {
+        auto burstReply = client.readFrame();
+        assert(burstReply.msgId == 4);
+        assert(burstReply.seq == static_cast<std::uint32_t>(100 + i));
+        assert(burstReply.payload == "broadcast:burst-" + std::to_string(i));
+    }
+    assert(continuationMetricFuture.wait_for(2s) == std::future_status::ready);
 
     logicLoop.stop();
 

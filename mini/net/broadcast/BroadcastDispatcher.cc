@@ -8,7 +8,12 @@
 namespace mini::net::broadcast {
 
 BroadcastDispatcher::BroadcastDispatcher(EventLoop* baseLoop)
-    : baseLoop_(baseLoop) {
+    : baseLoop_(baseLoop),
+      lifetimeToken_(std::make_shared<int>(0)) {
+}
+
+BroadcastDispatcher::~BroadcastDispatcher() {
+    lifetimeToken_.reset();
 }
 
 void BroadcastDispatcher::setBroadcastMetricCallback(BroadcastMetricCallback cb) {
@@ -32,10 +37,15 @@ void BroadcastDispatcher::dispatch(std::vector<BroadcastRouter::LoopBatch> batch
         return;
     }
     if (!baseLoop_->isInLoopThread()) {
+        std::weak_ptr<void> lifetime = lifetimeToken_;
         baseLoop_->queueInLoop([this,
+                                lifetime,
                                 payload = std::move(payload),
                                 batches = std::move(batches),
                                 metrics]() mutable {
+            if (!lifetime.lock()) {
+                return;
+            }
             dispatch(std::move(batches), payload, metrics);
         });
         return;
@@ -76,6 +86,7 @@ void BroadcastDispatcher::dispatchInLoop(std::vector<BroadcastRouter::LoopBatch>
     routed.loopBatches = metrics.loopBatches;
     routed.fanoutConnections = metrics.fanoutConnections;
     routed.payloadBytes = metrics.payloadBytes;
+    routed.priority = metrics.priority;
     routed.routeLatency = metrics.routeLatency;
     routed.fanoutLatency = mini::base::now() - metrics.requestedAt;
     emitBroadcastMetric(routed);
@@ -170,6 +181,7 @@ void BroadcastDispatcher::enqueueBatch(LoopBatchCommand command) {
                 sample.loopBatches = command.metrics.loopBatches;
                 sample.fanoutConnections = command.connections.size() + command.endpoints.size();
                 sample.payloadBytes = command.metrics.payloadBytes;
+                sample.priority = command.metrics.priority;
                 sample.routeLatency = command.metrics.routeLatency;
                 sample.queueLatency = flushStartedAt - command.queuedAt;
                 sample.fanoutLatency = flushedAt - command.metrics.requestedAt;

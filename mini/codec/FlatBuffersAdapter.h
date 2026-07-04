@@ -39,18 +39,24 @@ public:
     bool encodeMessage(const MessageT& message,
                        std::string* payload,
                        std::string* error) const override {
+        if (payload == nullptr) {
+            return detail::setCodecError(error, "flatbuffers encode called with null payload");
+        }
         if (!encoder_) {
-            if (error) {
-                *error = "FlatBuffersAdapter has no encoder";
-            }
-            return static_cast<bool>(CodecStatus::kError);
+            return detail::setCodecError(error, "FlatBuffersAdapter has no encoder");
         }
 
-        if (!encoder_(message, payload)) {
-            if (error) {
-                *error = "flatbuffers encode failed";
-            }
-            return static_cast<bool>(CodecStatus::kError);
+        bool ok = false;
+        try {
+            ok = encoder_(message, payload);
+        } catch (const std::exception& ex) {
+            return detail::setCodecExceptionError(error, "flatbuffers encode", ex);
+        } catch (...) {
+            return detail::setCodecUnknownExceptionError(error, "flatbuffers encode");
+        }
+
+        if (!ok) {
+            return detail::setCodecError(error, "flatbuffers encode failed");
         }
 
         if (error) {
@@ -63,17 +69,20 @@ public:
                        MessageT& message,
                        std::string* error) const override {
         if (!decoder_) {
-            if (error) {
-                *error = "FlatBuffersAdapter has no decoder";
-            }
-            return static_cast<bool>(CodecStatus::kError);
+            return detail::setCodecError(error, "FlatBuffersAdapter has no decoder");
         }
 
-        if (!decoder_(payload, message)) {
-            if (error) {
-                *error = "flatbuffers decode failed";
-            }
-            return static_cast<bool>(CodecStatus::kError);
+        bool ok = false;
+        try {
+            ok = decoder_(payload, message);
+        } catch (const std::exception& ex) {
+            return detail::setCodecExceptionError(error, "flatbuffers decode", ex);
+        } catch (...) {
+            return detail::setCodecUnknownExceptionError(error, "flatbuffers decode");
+        }
+
+        if (!ok) {
+            return detail::setCodecError(error, "flatbuffers decode failed");
         }
 
         if (error) {

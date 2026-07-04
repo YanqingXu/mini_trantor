@@ -6,6 +6,13 @@
 mini/
 ├── base/           ← 基础工具（Timestamp, noncopyable）
 ├── net/            ← Reactor 核心 + 网络层 + 高级组件
+│   ├── udp/        ← UDP datagram 基线与 PMTU signal preview
+│   ├── kcp/        ← KCP-style reliable UDP preview
+│   ├── broadcast/  ← 游戏广播路由与批量发送
+│   ├── transport/  ← transport 抽象与 PathMtuCache preview
+│   └── framing/    ← 游戏/协议通用 packet framing
+├── game/           ← 游戏网络接入、session、logic handoff
+├── codec/          ← Protobuf/FlatBuffers 等 codec adapter
 ├── coroutine/      ← 协程桥接层
 ├── http/           ← HTTP/1.1 协议层
 ├── ws/             ← WebSocket 协议层
@@ -107,7 +114,45 @@ mini/
 | `RpcServer` | `mini/rpc/RpcServer.h/cc` | TcpServer 协议适配器 + method 分发 | 核心 |
 | `RpcClient` | `mini/rpc/RpcClient.h/cc` | TcpClient 包装 + callback/coroutine 双模式调用 | 核心 |
 
-### 9. Advanced —— 高级组件
+### 9. Game Foundation —— 游戏网络底座接入层
+
+| 类 | 文件 | 职责 | 地位 |
+|----|------|------|------|
+| `PlayerSession` | `mini/game/PlayerSession.h/cc` | 玩家网络 session 状态机 | 游戏网络底座 |
+| `SessionManager` | `mini/game/SessionManager.h/cc` | 认证、在线、断线、重连窗口管理 | 游戏网络底座 |
+| `GameServerPipeline` | `mini/game/GameServerPipeline.h/cc` | 网络输入到 session/logic 的接入管线 | 游戏网络底座 |
+| `GameCommandQueue` | `mini/game/logic/GameCommandQueue.h/cc` | 网络线程到逻辑线程的命令队列 | 游戏网络底座 |
+| `LogicLoop` | `mini/game/logic/LogicLoop.h/cc` | fixed-step 逻辑循环桥接 | 游戏网络底座 |
+| `GameBackpressurePolicy` | `mini/game/GameBackpressurePolicy.h` | 输入、输出、广播的基础背压策略 | 游戏网络底座 |
+| `GameGatewaySecurityPolicy` | `mini/game/GameGatewaySecurityPolicy.h` | 最小网关 admission/security skeleton | 游戏网络底座 |
+
+这一层只负责网络入口、session 生命周期和逻辑 handoff，不拥有账号系统、房间状态、AOI、风控审计或部署拓扑。
+
+### 10. Transport Preview —— KCP/PMTU 预览层
+
+| 类 | 文件 | 职责 | 地位 |
+|----|------|------|------|
+| `UdpSocket` / `UdpServer` | `mini/net/udp/*` | UDP datagram 基线、read budget、PMTU callback 入口 | 传输底座 |
+| `KcpTransport` / `KcpSession` | `mini/net/kcp/*` | KCP-style reliable UDP preview | 预览 |
+| `PathMtuSignalAdapter` | `mini/net/udp/PathMtuSignalAdapter.*` | 平台 PMTU signal adapter preview | 预览 |
+| `IcmpPathMtuListener` | `mini/net/udp/IcmpPathMtuListener.*` | raw ICMP/ICMPv6 PMTU listener preview | 预览 |
+| `PathMtuCache` | `mini/net/transport/PathMtuCache.*` | 进程内共享 PMTU hint cache preview | 预览 |
+
+这一层必须按 `docs/game_server_network_base_scope_boundary.md` 处理：高级 KCP、PMTU、冗余、XOR parity 和 congestion-window 能力是 transport preview，不代表生产级协议栈。
+
+### 11. Codec / Metrics —— 协议桥与轻量观测
+
+| 类 | 文件 | 职责 | 地位 |
+|----|------|------|------|
+| `PacketFramer` | `mini/net/framing/PacketFramer.h/cc` | 通用 length-prefix/game frame 解析 | 传输底座 |
+| `CodecAdapter` | `mini/codec/CodecAdapter.h` | codec 统一错误返回与 encode/decode 接口 | 协议桥 |
+| `ProtobufAdapter` | `mini/codec/ProtobufAdapter.*` | Protobuf 风格适配 | 协议桥 |
+| `FlatBuffersAdapter` | `mini/codec/FlatBuffersAdapter.*` | FlatBuffers 风格适配 | 协议桥 |
+| `MetricsHook` / `MetricsExporter` | `mini/base/*Metrics*` | 轻量 metrics hook、内存聚合和文本 snapshot | 支撑 |
+
+Metrics exporter 只提供无依赖 snapshot 和标签化能力，不负责 scrape server、push gateway、告警或观测平台。
+
+### 12. Advanced —— 高级组件
 
 | 类 | 文件 | 职责 | 地位 |
 |----|------|------|------|

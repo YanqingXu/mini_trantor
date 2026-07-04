@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <cstdio>
+#include <stdexcept>
 #include <string>
 
 using namespace mini::codec;
@@ -25,6 +26,16 @@ struct FakeProtoMessage {
     bool ParseFromString(const std::string& data) {
         payload = data;
         return true;
+    }
+};
+
+struct ThrowingProtoMessage {
+    bool SerializeToString(std::string*) const {
+        throw std::runtime_error("encode failed hard");
+    }
+
+    bool ParseFromString(const std::string&) {
+        throw std::runtime_error("decode failed hard");
     }
 };
 
@@ -79,6 +90,22 @@ int main() {
         assert(!codec.encodeMessage(empty, &payload, &err));
         assert(!err.empty());
         std::printf("  PASS: encode-fail contract\n");
+    }
+
+    // Contract 5: serializer exceptions are converted into explicit errors.
+    {
+        ProtobufAdapter<ThrowingProtoMessage> throwingCodec;
+        CodecAdapter& erased = throwingCodec;
+        ThrowingProtoMessage msg;
+        std::string payload;
+        std::string err;
+
+        assert(!erased.encode(&msg, &payload, &err));
+        assert(err.rfind("protobuf encode threw exception", 0) == 0);
+
+        assert(!erased.decode("payload", &msg, &err));
+        assert(err.rfind("protobuf decode threw exception", 0) == 0);
+        std::printf("  PASS: exception-to-error contract\n");
     }
 
     std::printf("All codec adapter contract tests passed.\n");

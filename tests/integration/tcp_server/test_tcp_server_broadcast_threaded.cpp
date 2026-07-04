@@ -11,6 +11,7 @@
 #include <future>
 #include <mutex>
 #include <netinet/in.h>
+#include <memory>
 #include <string>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -151,16 +152,48 @@ int main() {
     });
     assert(stoppedFuture.wait_for(2s) == std::future_status::ready);
 
+    std::promise<void> releaseGatePromise;
+    auto releaseGateFuture = releaseGatePromise.get_future().share();
+    auto gateEntered = std::make_shared<std::promise<void>>();
+    auto gateEnteredFuture = gateEntered->get_future();
+    baseLoop->queueInLoop([gateEntered, releaseGateFuture] {
+        gateEntered->set_value();
+        releaseGateFuture.wait();
+    });
+    assert(gateEnteredFuture.wait_for(2s) == std::future_status::ready);
+
     auto serverOwner = std::make_shared<std::unique_ptr<mini::net::TcpServer>>(std::move(server));
     auto destroyed = std::make_shared<std::promise<void>>();
     auto destroyedFuture = destroyed->get_future();
-    baseLoop->queueInLoop([serverOwner, baseLoop, destroyed] {
+    baseLoop->queueInLoop([serverOwner, destroyed] {
         if (serverOwner && *serverOwner) {
             serverOwner->reset();
         }
-        baseLoop->quit();
         destroyed->set_value();
     });
+
+    std::thread lateBroadcastCaller([serverRaw] {
+        serverRaw->unbindBroadcastSession("late-session");
+        serverRaw->joinBroadcastGroup("late-session", "late-room");
+        serverRaw->leaveBroadcastGroup("late-session", "late-room");
+        serverRaw->joinBroadcastAoi("late-session", "late-aoi");
+        serverRaw->leaveBroadcastAoi("late-session", "late-aoi");
+        serverRaw->broadcastTo({"late-session"}, "late-payload");
+        serverRaw->broadcastGroup("late-room", "late-payload");
+        serverRaw->broadcastAoi("late-aoi", "late-payload");
+        serverRaw->broadcast("late-payload");
+    });
+    lateBroadcastCaller.join();
+
+    releaseGatePromise.set_value();
     assert(destroyedFuture.wait_for(2s) == std::future_status::ready);
+
+    auto drained = std::make_shared<std::promise<void>>();
+    auto drainedFuture = drained->get_future();
+    baseLoop->queueInLoop([baseLoop, drained] {
+        drained->set_value();
+        baseLoop->quit();
+    });
+    assert(drainedFuture.wait_for(2s) == std::future_status::ready);
     return 0;
 }

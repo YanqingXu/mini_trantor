@@ -4,14 +4,18 @@
 // - 在单一 EventLoop 上接收 UDP datagram
 // - 以远端地址维护 sessionId（与 TransportSessionId 兼容）
 // - 提供 session 粒度和地址粒度发送接口
+// - 将 UdpSocket 的 read budget 暴露为服务端级配置，避免突发包独占 loop
 
+#include "mini/base/MetricsHook.h"
 #include "mini/base/noncopyable.h"
 #include "mini/net/transport/TransportTypes.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -40,6 +44,9 @@ public:
 
     void setMessageCallback(MessageCallback cb);
     void setErrorCallback(ErrorCallback cb);
+    void setMetricCallback(UdpMetricCallback cb);
+    void setMaxDatagramsPerRead(std::size_t maxDatagrams) noexcept;
+    std::size_t maxDatagramsPerRead() const noexcept;
 
     void start();
     void stop();
@@ -58,6 +65,7 @@ public:
 private:
     void onPacket(std::string_view packet, const InetAddress& peerAddr);
     void removeSession(transport::TransportSessionId sessionId);
+    void stopInLoop();
 
     template <typename Fn>
     void post(Fn&& fn);
@@ -73,8 +81,9 @@ private:
     std::shared_ptr<void> lifetimeToken_;
     MessageCallback messageCallback_;
     ErrorCallback errorCallback_;
-    bool started_{false};
+    std::atomic<bool> started_{false};
     std::uint64_t nextSessionId_{transport::kFirstTransportSessionId};
+    mutable std::mutex mutex_;
     SessionAddressMap sessionByAddr_;
     SessionPeerMap peerBySession_;
 };

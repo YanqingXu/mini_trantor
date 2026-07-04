@@ -6,10 +6,13 @@
 
 #include <arpa/inet.h>
 #include <cassert>
+#include <cerrno>
 #include <future>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <thread>
 #include <unistd.h>
 
@@ -126,6 +129,7 @@ int main() {
 
     const auto response = responseFuture.get();
     assert(response == "cross-thread-ack");
+    client.join();
 
     std::thread lateSendThread([&server, sessionId]() {
         server.sendTo(sessionId, "late-send-after-stop");
@@ -139,7 +143,56 @@ int main() {
     });
     assert(finalCountFuture.get() == 0);
 
-    client.join();
+    const int lateClientFd = ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_UDP);
+    assert(lateClientFd >= 0);
+
+    sockaddr_in lateClientAddr{};
+    lateClientAddr.sin_family = AF_INET;
+    lateClientAddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    lateClientAddr.sin_port = 0;
+    assert(::bind(lateClientFd,
+                  reinterpret_cast<const sockaddr*>(&lateClientAddr),
+                  sizeof(lateClientAddr)) == 0);
+
+    socklen_t lateClientLen = static_cast<socklen_t>(sizeof(lateClientAddr));
+    assert(::getsockname(lateClientFd,
+                         reinterpret_cast<sockaddr*>(&lateClientAddr),
+                         &lateClientLen) == 0);
+
+    timeval lateTimeout{};
+    lateTimeout.tv_sec = 0;
+    lateTimeout.tv_usec = 100000;
+    assert(::setsockopt(lateClientFd,
+                        SOL_SOCKET,
+                        SO_RCVTIMEO,
+                        &lateTimeout,
+                        sizeof(lateTimeout)) == 0);
+
+    const auto latePeer = mini::net::InetAddress("127.0.0.1", ntohs(lateClientAddr.sin_port));
+    std::thread lateAddressSendThread([&server, latePeer]() {
+        server.sendTo(latePeer, "late-address-send-after-stop");
+    });
+    lateAddressSendThread.join();
+
+    auto lateSendDrained = std::make_shared<std::promise<void>>();
+    auto lateSendDrainedFuture = lateSendDrained->get_future();
+    loop->queueInLoop([lateSendDrained] {
+        lateSendDrained->set_value();
+    });
+    lateSendDrainedFuture.get();
+
+    char lateBuffer[64]{};
+    sockaddr_storage lateFrom{};
+    socklen_t lateFromLen = static_cast<socklen_t>(sizeof(lateFrom));
+    const ssize_t lateRecv = ::recvfrom(lateClientFd,
+                                       lateBuffer,
+                                       sizeof(lateBuffer),
+                                       0,
+                                       reinterpret_cast<sockaddr*>(&lateFrom),
+                                       &lateFromLen);
+    assert(lateRecv < 0);
+    assert(errno == EAGAIN || errno == EWOULDBLOCK);
+    ::close(lateClientFd);
 
     auto quitPromise = std::make_shared<std::promise<void>>();
     auto quitFuture = quitPromise->get_future();
@@ -148,6 +201,33 @@ int main() {
         quitPromise->set_value();
     });
     quitFuture.get();
+
+    const uint16_t destructorPort = allocatePort();
+    mini::net::EventLoopThread destructorLoopThread;
+    auto* destructorLoop = destructorLoopThread.startLoop();
+    auto destructorServer = std::make_unique<mini::net::udp::UdpServer>(
+        destructorLoop,
+        mini::net::InetAddress(destructorPort, true),
+        "integration-udp-off-loop-destructor");
+
+    auto destructorStartPromise = std::make_shared<std::promise<void>>();
+    auto destructorStartFuture = destructorStartPromise->get_future();
+    destructorLoop->queueInLoop([server = destructorServer.get(), destructorStartPromise] {
+        server->start();
+        destructorStartPromise->set_value();
+    });
+    destructorStartFuture.get();
+    assert(destructorServer->started());
+
+    destructorServer.reset();
+
+    auto destructorQuitPromise = std::make_shared<std::promise<void>>();
+    auto destructorQuitFuture = destructorQuitPromise->get_future();
+    destructorLoop->runInLoop([destructorLoop, destructorQuitPromise]() {
+        destructorLoop->quit();
+        destructorQuitPromise->set_value();
+    });
+    destructorQuitFuture.get();
 
     return 0;
 }

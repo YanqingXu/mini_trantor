@@ -78,6 +78,45 @@ void testClearQueue() {
     assert(queue.drain(3).empty());
 }
 
+void testTryEnqueueAdmissionLimits() {
+    using namespace std::chrono_literals;
+
+    mini::game::logic::GameCommandQueue queue;
+    auto first = std::make_shared<mini::game::logic::GameCommand>(
+        "s1", std::weak_ptr<mini::net::TcpConnection>{}, "first");
+    auto accepted = queue.tryEnqueue(first, 1, 0ms);
+    assert(accepted.accepted());
+    assert(accepted.backlog == 1);
+
+    auto second = std::make_shared<mini::game::logic::GameCommand>(
+        "s2", std::weak_ptr<mini::net::TcpConnection>{}, "second");
+    auto rejectedBacklog = queue.tryEnqueue(second, 1, 0ms);
+    assert(!rejectedBacklog.accepted());
+    assert(rejectedBacklog.status ==
+           mini::game::logic::GameCommandQueue::AdmissionResult::Status::RejectedHardBacklog);
+    assert(rejectedBacklog.backlog == 1);
+    assert(queue.size() == 1);
+
+    const auto drained = queue.drain(1);
+    assert(drained.size() == 1);
+
+    auto lagged = std::make_shared<mini::game::logic::GameCommand>(
+        "s3", std::weak_ptr<mini::net::TcpConnection>{}, "lagged");
+    auto acceptedLagged = queue.tryEnqueue(lagged, 8, 50ms);
+    assert(acceptedLagged.accepted());
+    std::this_thread::sleep_for(20ms);
+
+    auto rejectedLag = queue.tryEnqueue(
+        std::make_shared<mini::game::logic::GameCommand>(
+            "s4", std::weak_ptr<mini::net::TcpConnection>{}, "too-late"),
+        8,
+        10ms);
+    assert(!rejectedLag.accepted());
+    assert(rejectedLag.status ==
+           mini::game::logic::GameCommandQueue::AdmissionResult::Status::RejectedHardOldestLag);
+    assert(rejectedLag.oldestLag >= 10ms);
+}
+
 }  // namespace
 
 int main() {
@@ -85,6 +124,6 @@ int main() {
     testDrainCapacityAndEmptyBehavior();
     testOldestLagForQueuedCommand();
     testClearQueue();
+    testTryEnqueueAdmissionLimits();
     return 0;
 }
-

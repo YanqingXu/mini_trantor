@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <memory>
 #include <mutex>
 #include <string_view>
 #include <unordered_map>
@@ -27,7 +28,12 @@ class TransportManager {
 public:
     explicit TransportManager(mini::net::EventLoop* ownerLoop)
         : ownerLoop_(ownerLoop),
+          lifetimeToken_(std::make_shared<int>(0)),
           nextSessionId_(kFirstTransportSessionId) {
+    }
+
+    ~TransportManager() {
+        lifetimeToken_.reset();
     }
 
     TransportSessionId registerEndpoint(const std::shared_ptr<ITransportEndpoint>& endpoint) {
@@ -121,7 +127,13 @@ private:
             fn();
             return;
         }
-        ownerLoop_->queueInLoop(std::forward<Fn>(fn));
+        std::weak_ptr<void> lifetime = lifetimeToken_;
+        ownerLoop_->queueInLoop([lifetime, fn = std::forward<Fn>(fn)]() mutable {
+            if (!lifetime.lock()) {
+                return;
+            }
+            fn();
+        });
     }
 
     std::shared_ptr<ITransportEndpoint> getEndpointLocked(TransportSessionId id) const {
@@ -134,6 +146,7 @@ private:
     }
 
     mini::net::EventLoop* ownerLoop_{nullptr};
+    std::shared_ptr<void> lifetimeToken_;
     mutable std::mutex mutex_;
     EndpointMap endpoints_;
     std::atomic<TransportSessionId> nextSessionId_;

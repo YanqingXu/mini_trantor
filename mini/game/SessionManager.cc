@@ -4,9 +4,43 @@
 
 namespace mini::game {
 
+template <typename Fn>
+decltype(auto) SessionManager::callOnLogicLoopSync(Fn&& fn) const {
+    if (!logicLoop_ || logicLoop_->isInLoopThread()) {
+        return std::forward<Fn>(fn)();
+    }
+
+    using Result = std::invoke_result_t<Fn&>;
+    auto task = std::make_shared<std::packaged_task<Result()>>(std::forward<Fn>(fn));
+    auto future = task->get_future();
+
+    logicLoop_->queueInLoop([task] {
+        (*task)();
+    });
+
+    if constexpr (std::is_void_v<Result>) {
+        future.get();
+    } else {
+        return future.get();
+    }
+}
+
+SessionManager::~SessionManager() {
+    lifetimeToken_.reset();
+}
+
 PlayerSessionPtr SessionManager::ensureSession(SessionToken sessionToken,
                                              mini::net::transport::TransportSessionId transportSessionId,
                                              bool autoStartAuth) {
+    if (logicLoop_ && !logicLoop_->isInLoopThread()) {
+        return callOnLogicLoopSync([this,
+                                    sessionToken = std::move(sessionToken),
+                                    transportSessionId,
+                                    autoStartAuth]() mutable {
+            return ensureSession(std::move(sessionToken), transportSessionId, autoStartAuth);
+        });
+    }
+
     if (sessionToken.empty()) {
         return nullptr;
     }
@@ -110,6 +144,12 @@ std::size_t SessionManager::sessionCount() const {
 }
 
 bool SessionManager::markStartAuth(std::string_view sessionToken) {
+    if (logicLoop_ && !logicLoop_->isInLoopThread()) {
+        return callOnLogicLoopSync([this, token = std::string(sessionToken)] {
+            return markStartAuth(token);
+        });
+    }
+
     auto session = getSession(sessionToken);
     if (!session) {
         return false;
@@ -126,6 +166,16 @@ bool SessionManager::authenticate(std::string_view sessionToken,
                                  std::uint64_t playerId,
                                  std::string_view playerName,
                                  std::string_view role) {
+    if (logicLoop_ && !logicLoop_->isInLoopThread()) {
+        return callOnLogicLoopSync([this,
+                                    token = std::string(sessionToken),
+                                    playerId,
+                                    playerName = std::string(playerName),
+                                    role = std::string(role)] {
+            return authenticate(token, playerId, playerName, role);
+        });
+    }
+
     auto session = getSession(sessionToken);
     if (!session) {
         return false;
@@ -139,6 +189,12 @@ bool SessionManager::authenticate(std::string_view sessionToken,
 }
 
 bool SessionManager::markOnline(std::string_view sessionToken) {
+    if (logicLoop_ && !logicLoop_->isInLoopThread()) {
+        return callOnLogicLoopSync([this, token = std::string(sessionToken)] {
+            return markOnline(token);
+        });
+    }
+
     auto session = getSession(sessionToken);
     if (!session) {
         return false;
@@ -152,6 +208,12 @@ bool SessionManager::markOnline(std::string_view sessionToken) {
 }
 
 bool SessionManager::refreshHeartbeat(std::string_view sessionToken) {
+    if (logicLoop_ && !logicLoop_->isInLoopThread()) {
+        return callOnLogicLoopSync([this, token = std::string(sessionToken)] {
+            return refreshHeartbeat(token);
+        });
+    }
+
     auto session = getSession(sessionToken);
     if (!session) {
         return false;
@@ -166,6 +228,12 @@ bool SessionManager::refreshHeartbeat(std::string_view sessionToken) {
 }
 
 bool SessionManager::onAuthTimeout(std::string_view sessionToken) {
+    if (logicLoop_ && !logicLoop_->isInLoopThread()) {
+        return callOnLogicLoopSync([this, token = std::string(sessionToken)] {
+            return onAuthTimeout(token);
+        });
+    }
+
     auto session = getSession(sessionToken);
     if (!session) {
         return false;
@@ -180,6 +248,12 @@ bool SessionManager::onAuthTimeout(std::string_view sessionToken) {
 }
 
 bool SessionManager::onHeartbeatTimeout(std::string_view sessionToken) {
+    if (logicLoop_ && !logicLoop_->isInLoopThread()) {
+        return callOnLogicLoopSync([this, token = std::string(sessionToken)] {
+            return onHeartbeatTimeout(token);
+        });
+    }
+
     auto session = getSession(sessionToken);
     if (!session) {
         return false;
@@ -195,6 +269,12 @@ bool SessionManager::onHeartbeatTimeout(std::string_view sessionToken) {
 
 bool SessionManager::onConnectionClose(mini::net::transport::TransportSessionId transportSessionId,
                                       std::string_view reason) {
+    if (logicLoop_ && !logicLoop_->isInLoopThread()) {
+        return callOnLogicLoopSync([this, transportSessionId, reason = std::string(reason)] {
+            return onConnectionClose(transportSessionId, reason);
+        });
+    }
+
     auto session = getSession(transportSessionId);
     if (!session) {
         return false;
@@ -224,7 +304,28 @@ bool SessionManager::onConnectionClose(mini::net::transport::TransportSessionId 
     return changed;
 }
 
+void SessionManager::postConnectionClose(
+    mini::net::transport::TransportSessionId transportSessionId,
+    std::string reason) {
+    if (transportSessionId == mini::net::transport::kInvalidTransportSessionId) {
+        return;
+    }
+
+    AsyncSessionEvent event;
+    event.type = AsyncSessionEventType::kConnectionClose;
+    event.transportSessionId = transportSessionId;
+    event.reason = std::move(reason);
+    event.enqueuedAt = mini::base::now();
+    postSessionEvent(std::move(event));
+}
+
 bool SessionManager::markReconnecting(std::string_view sessionToken) {
+    if (logicLoop_ && !logicLoop_->isInLoopThread()) {
+        return callOnLogicLoopSync([this, token = std::string(sessionToken)] {
+            return markReconnecting(token);
+        });
+    }
+
     auto session = getSession(sessionToken);
     if (!session) {
         return false;
@@ -253,6 +354,14 @@ bool SessionManager::markReconnecting(std::string_view sessionToken) {
 }
 
 bool SessionManager::markClosed(std::string_view sessionToken, std::string_view reason) {
+    if (logicLoop_ && !logicLoop_->isInLoopThread()) {
+        return callOnLogicLoopSync([this,
+                                    token = std::string(sessionToken),
+                                    reason = std::string(reason)] {
+            return markClosed(token, reason);
+        });
+    }
+
     auto session = getSession(sessionToken);
     if (!session) {
         return false;
@@ -266,8 +375,26 @@ bool SessionManager::markClosed(std::string_view sessionToken, std::string_view 
     return changed;
 }
 
+void SessionManager::postRefreshHeartbeat(SessionToken sessionToken) {
+    if (sessionToken.empty()) {
+        return;
+    }
+
+    AsyncSessionEvent event;
+    event.type = AsyncSessionEventType::kHeartbeat;
+    event.sessionToken = std::move(sessionToken);
+    event.enqueuedAt = mini::base::now();
+    postSessionEvent(std::move(event));
+}
+
 bool SessionManager::bindTransport(std::string_view sessionToken,
                                   mini::net::transport::TransportSessionId transportSessionId) {
+    if (logicLoop_ && !logicLoop_->isInLoopThread()) {
+        return callOnLogicLoopSync([this, token = std::string(sessionToken), transportSessionId] {
+            return bindTransport(token, transportSessionId);
+        });
+    }
+
     PlayerSessionPtr session;
     mini::net::transport::TransportSessionId oldTransport = mini::net::transport::kInvalidTransportSessionId;
     State oldState = State::kClosed;
@@ -306,6 +433,12 @@ bool SessionManager::bindTransport(std::string_view sessionToken,
 bool SessionManager::bindTransportEndpoint(
     std::string_view sessionToken,
     const std::shared_ptr<mini::net::transport::ITransportEndpoint>& endpoint) {
+    if (logicLoop_ && !logicLoop_->isInLoopThread()) {
+        return callOnLogicLoopSync([this, token = std::string(sessionToken), endpoint] {
+            return bindTransportEndpoint(token, endpoint);
+        });
+    }
+
     if (!endpoint) {
         return false;
     }
@@ -331,14 +464,27 @@ bool SessionManager::bindTransportEndpoint(
 }
 
 bool SessionManager::onReconnect(std::string_view sessionToken,
-                                mini::net::transport::TransportSessionId transportSessionId) {
+                                 mini::net::transport::TransportSessionId transportSessionId) {
+    if (logicLoop_ && !logicLoop_->isInLoopThread()) {
+        return callOnLogicLoopSync([this, token = std::string(sessionToken), transportSessionId] {
+            return onReconnect(token, transportSessionId);
+        });
+    }
+
     if (!bindTransport(sessionToken, transportSessionId)) {
         return false;
     }
-    return markReconnecting(sessionToken);
+    const auto session = getSession(sessionToken);
+    return session != nullptr && session->isReconnecting();
 }
 
 bool SessionManager::removeSession(std::string_view sessionToken) {
+    if (logicLoop_ && !logicLoop_->isInLoopThread()) {
+        return callOnLogicLoopSync([this, token = std::string(sessionToken)] {
+            return removeSession(token);
+        });
+    }
+
     cancelReconnectWindow(std::string(sessionToken));
     PlayerSessionPtr session;
     {
@@ -371,6 +517,12 @@ bool SessionManager::removeSession(std::string_view sessionToken) {
 }
 
 bool SessionManager::removeSessionByTransport(mini::net::transport::TransportSessionId transportSessionId) {
+    if (logicLoop_ && !logicLoop_->isInLoopThread()) {
+        return callOnLogicLoopSync([this, transportSessionId] {
+            return removeSessionByTransport(transportSessionId);
+        });
+    }
+
     std::string token;
     {
         std::scoped_lock lock(mutex_);
@@ -387,6 +539,12 @@ bool SessionManager::removeSessionByTransport(mini::net::transport::TransportSes
 }
 
 bool SessionManager::cleanupClosedSessions(std::chrono::steady_clock::time_point now) {
+    if (logicLoop_ && !logicLoop_->isInLoopThread()) {
+        return callOnLogicLoopSync([this, now] {
+            return cleanupClosedSessions(now);
+        });
+    }
+
     std::vector<std::string> closed;
 
     {
@@ -521,7 +679,11 @@ void SessionManager::scheduleReconnectWindow(const SessionToken& sessionToken) {
                 logicLoop_->cancel(it->second);
             }
 
-            const auto timerId = logicLoop_->runAfter(reconnectWindow_, [this, token, currentEpoch] {
+            std::weak_ptr<void> lifetime = lifetimeToken_;
+            const auto timerId = logicLoop_->runAfter(reconnectWindow_, [this, lifetime, token, currentEpoch] {
+                if (!lifetime.lock()) {
+                    return;
+                }
                 onReconnectWindowExpired(token, currentEpoch);
             });
             reconnectTimer_[token] = timerId;
@@ -645,6 +807,80 @@ bool SessionManager::setTransportIndexLocked(const SessionToken& sessionToken,
     return true;
 }
 
+void SessionManager::postSessionEvent(AsyncSessionEvent event) {
+    if (!logicLoop_ || logicLoop_->isInLoopThread()) {
+        applySessionEvent(event);
+        return;
+    }
+
+    bool shouldSchedule = false;
+    {
+        std::scoped_lock lock(mutex_);
+        pendingSessionEvents_.push_back(std::move(event));
+        if (!sessionEventDrainScheduled_) {
+            sessionEventDrainScheduled_ = true;
+            shouldSchedule = true;
+        }
+    }
+
+    if (!shouldSchedule) {
+        return;
+    }
+
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    logicLoop_->queueInLoop([this, lifetime] {
+        if (!lifetime.lock()) {
+            return;
+        }
+        drainSessionEvents();
+    });
+}
+
+void SessionManager::drainSessionEvents() {
+    if (logicLoop_) {
+        logicLoop_->assertInLoopThread();
+    }
+
+    std::vector<AsyncSessionEvent> events;
+    {
+        std::scoped_lock lock(mutex_);
+        events.swap(pendingSessionEvents_);
+        sessionEventDrainScheduled_ = false;
+    }
+
+    for (auto& event : events) {
+        applySessionEvent(event);
+    }
+
+    if (!events.empty()) {
+        auto oldest = events.front().enqueuedAt;
+        for (const auto& event : events) {
+            if (event.enqueuedAt < oldest) {
+                oldest = event.enqueuedAt;
+            }
+        }
+
+        SessionMetricSample sample;
+        sample.event = SessionMetricEvent::AsyncEventsDrained;
+        sample.loop = logicLoop_;
+        sample.pendingEvents = events.size();
+        sample.drainedEvents = events.size();
+        sample.oldestEventLag = mini::base::now() - oldest;
+        emitSessionMetric(std::move(sample));
+    }
+}
+
+void SessionManager::applySessionEvent(AsyncSessionEvent& event) {
+    switch (event.type) {
+        case AsyncSessionEventType::kConnectionClose:
+            (void)onConnectionClose(event.transportSessionId, event.reason);
+            break;
+        case AsyncSessionEventType::kHeartbeat:
+            (void)refreshHeartbeat(event.sessionToken);
+            break;
+    }
+}
+
 template <typename Fn>
 void SessionManager::postOnLogicLoop(Fn&& fn) const {
     if (!logicLoop_) {
@@ -656,7 +892,13 @@ void SessionManager::postOnLogicLoop(Fn&& fn) const {
         return;
     }
 
-    logicLoop_->queueInLoop(std::forward<Fn>(fn));
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    logicLoop_->queueInLoop([lifetime, fn = std::forward<Fn>(fn)]() mutable {
+        if (!lifetime.lock()) {
+            return;
+        }
+        fn();
+    });
 }
 
 }  // namespace mini::game

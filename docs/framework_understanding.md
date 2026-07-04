@@ -2,22 +2,23 @@
 
 ## 0. 文档摘要
 
-- `mini-trantor` 是一个面向学习、演进和 AI 协作开发的 C++ Reactor 风格网络库。
+- `mini-trantor` 是一个面向学习、演进和 AI 协作开发的 C++ Reactor 风格游戏服务器网络底座。
 - 它解决的核心问题不是“功能很多”，而是“结构正确”：线程归属明确、生命周期可推理、回调上下文可预测。
 - 项目把 `intent -> rules -> tests -> implementation` 放在代码之前，代码只是设计意图的实现载体。
-- 当前真正参与构建和运行的核心代码位于 `mini/`，尤其是 `mini/net/`；旧 `src/` 路径已经从仓库移除，避免主线歧义。
-- v1 已落地的核心模块包括 `EventLoop`、`Channel`、`Poller/EPollPoller`、`Buffer`、`Acceptor`、`TcpConnection`、`TcpServer`、`EventLoopThread`、`EventLoopThreadPool`。
+- 当前真正参与构建和运行的核心代码位于 `mini/`，其中 `mini/net/` 是 Reactor/transport 主线，`mini/game/` 是游戏网络接入层，`mini/codec/` 是协议桥接层。
+- v1 foundation 已落地的核心模块包括 `EventLoop`、`Channel`、`Poller/EPollPoller`、`Buffer`、`Acceptor`、`TcpConnection`、`TcpServer`、`UdpSocket`、`UdpServer`、`EventLoopThread`、`EventLoopThreadPool`。
+- M1-M32 之后的收口定位是 `game-network foundation + transport preview`：KCP/PMTU/raw ICMP/redundant-copy/XOR parity/congestion-window 属于 preview/experimental，不代表生产级协议栈。
 - 协程能力已经有最小可运行形态，但它是“贴着 Reactor 语义扩展”的，不是另起一套调度体系。
 - 阅读这个项目时，最先要抓住的是三个约束：一个线程一个 `EventLoop`、跨线程操作必须回流到 owner loop、销毁前必须解除注册。
 - 与许多“先写代码再补文档”的小项目不同，本项目的 `intents/` 和 `rules/` 不是附属资料，而是理解实现边界的第一入口。
-- 当前项目最像“工业风缩小版 trantor 骨架”，而不是完整生产框架：它更强调模块边界、线程模型和生命周期纪律。
+- 当前项目最像“工业风缩小版 trantor 骨架 + 游戏网络底座预览”，而不是完整商业游戏网关：它更强调模块边界、线程模型和生命周期纪律。
 - 如果只想快速理解主线，先看 `examples/echo_server/main.cpp`，再回读 `EventLoop`、`Channel`、`EPollPoller`、`TcpConnection`、`TcpServer`。
 
 ## 1. 框架整体定位
 
 ### 1.1 它是什么
 
-`mini-trantor` 是一个小型、工业风、Reactor 风格的 C++ 网络库。它所在的技术领域是网络运行时基础设施，不是业务框架，也不是协议栈框架。
+`mini-trantor` 是一个小型、工业风、Reactor 风格的 C++ 游戏服务器网络底座。它所在的技术领域是网络运行时基础设施；当前允许游戏网络接入层和显式 transport preview，但不把账号、AOI、分布式网关、观测平台或生产级传输协议栈纳入 core。
 
 ### 1.2 它负责什么
 
@@ -31,8 +32,8 @@
 
 ### 1.3 它不负责什么
 
-- 不负责 HTTP/WebSocket/RPC 等高层协议
-- 不负责业务路由、序列化、鉴权、服务治理
+- 不负责账号系统、风控审计、AOI、房间状态、服务治理或部署拓扑
+- 不负责生产级 KCP/QUIC、Reed-Solomon FEC、跨进程 PMTU 服务或生产 congestion control
 - 不负责复杂的协程取消树或独立协程调度器
 - 不负责跨平台后端统一，当前实际后端只有 epoll
 - 不负责隐藏线程语义，反而刻意让线程归属暴露且可推理

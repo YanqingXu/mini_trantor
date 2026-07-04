@@ -15,9 +15,13 @@
 #include <memory>
 #include <functional>
 #include <cstdint>
+#include <future>
 #include <mutex>
+#include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace mini::game {
@@ -39,6 +43,7 @@ public:
         : logicLoop_(logicLoop) {
         setReconnectWindow(reconnectWindow);
     }
+    ~SessionManager();
 
     void setOwnerLoop(mini::net::EventLoop* loop) {
         logicLoop_ = loop;
@@ -81,8 +86,11 @@ public:
     bool onHeartbeatTimeout(std::string_view sessionToken);
     bool onConnectionClose(mini::net::transport::TransportSessionId transportSessionId,
                           std::string_view reason = "connection closed");
+    void postConnectionClose(mini::net::transport::TransportSessionId transportSessionId,
+                             std::string reason = "connection closed");
     bool markReconnecting(std::string_view sessionToken);
     bool markClosed(std::string_view sessionToken, std::string_view reason = "closed by manager");
+    void postRefreshHeartbeat(SessionToken sessionToken);
     bool bindTransport(std::string_view sessionToken,
                       mini::net::transport::TransportSessionId transportSessionId);
     bool bindTransportEndpoint(
@@ -104,8 +112,24 @@ public:
     getTransportEndpoint(mini::net::transport::TransportSessionId transportSessionId) const;
 
 private:
+    enum class AsyncSessionEventType {
+        kConnectionClose,
+        kHeartbeat,
+    };
+
+    struct AsyncSessionEvent {
+        AsyncSessionEventType type{AsyncSessionEventType::kHeartbeat};
+        mini::net::transport::TransportSessionId transportSessionId{
+            mini::net::transport::kInvalidTransportSessionId};
+        SessionToken sessionToken;
+        std::string reason;
+        PlayerSession::TimePoint enqueuedAt{};
+    };
+
     template <typename Fn>
     void postOnLogicLoop(Fn&& fn) const;
+    template <typename Fn>
+    decltype(auto) callOnLogicLoopSync(Fn&& fn) const;
 
     void emitState(const SessionToken& sessionToken,
                    State oldState,
@@ -123,6 +147,9 @@ private:
     void cancelReconnectWindow(const SessionToken& sessionToken);
     void cancelReconnectWindowLocked(const SessionToken& sessionToken);
     void onReconnectWindowExpired(const SessionToken& sessionToken, std::uint64_t epoch);
+    void postSessionEvent(AsyncSessionEvent event);
+    void drainSessionEvents();
+    void applySessionEvent(AsyncSessionEvent& event);
 
     mutable std::mutex mutex_;
     std::unordered_map<std::string, PlayerSessionPtr> sessions_;
@@ -134,11 +161,14 @@ private:
     std::unordered_map<SessionToken, mini::net::TimerId> reconnectTimer_;
     std::unordered_map<SessionToken, std::uint64_t> reconnectEpoch_;
     std::unordered_map<SessionToken, PlayerSession::TimePoint> reconnectStartedAt_;
+    std::vector<AsyncSessionEvent> pendingSessionEvents_;
 
     SessionStateCallback stateCallback_;
     SessionMetricCallback metricCallback_;
     mini::net::EventLoop* logicLoop_{nullptr};
     PlayerSession::Milliseconds reconnectWindow_{kDefaultReconnectWindow};
+    std::shared_ptr<void> lifetimeToken_{std::make_shared<int>(0)};
+    bool sessionEventDrainScheduled_{false};
 };
 
 }  // namespace mini::game

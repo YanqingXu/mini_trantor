@@ -44,6 +44,8 @@ TcpClient::TcpClient(EventLoop* loop, const InetAddress& serverAddr, std::string
 TcpClient::~TcpClient() {
     loop_->assertInLoopThread();
 
+    lifetimeToken_.reset();
+
     // Invalidate pending DNS resolve callback.
     if (resolveGuard_) {
         *resolveGuard_ = false;
@@ -67,11 +69,23 @@ TcpClient::~TcpClient() {
     }
 
     if (connector_) {
+        connector_->setNewConnectionCallback({});
         connector_->stop();
     }
 }
 
 void TcpClient::connect() {
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    loop_->runInLoop([this, lifetime] {
+        if (!lifetime.lock()) {
+            return;
+        }
+        connectInLoop();
+    });
+}
+
+void TcpClient::connectInLoop() {
+    loop_->assertInLoopThread();
     connect_ = true;
     if (connector_) {
         const auto state = connector_->state();
@@ -92,6 +106,17 @@ void TcpClient::connect() {
 }
 
 void TcpClient::disconnect() {
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    loop_->runInLoop([this, lifetime] {
+        if (!lifetime.lock()) {
+            return;
+        }
+        disconnectInLoop();
+    });
+}
+
+void TcpClient::disconnectInLoop() {
+    loop_->assertInLoopThread();
     connect_ = false;
 
     {
@@ -103,6 +128,17 @@ void TcpClient::disconnect() {
 }
 
 void TcpClient::stop() {
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    loop_->runInLoop([this, lifetime] {
+        if (!lifetime.lock()) {
+            return;
+        }
+        stopInLoop();
+    });
+}
+
+void TcpClient::stopInLoop() {
+    loop_->assertInLoopThread();
     connect_ = false;
     if (connector_) {
         connector_->stop();
@@ -195,7 +231,11 @@ void TcpClient::newConnection(int sockfd) {
 
     // Close callback with hook.
     auto tlsEventCb = tlsEventCallback_;
-    conn->setCloseCallback([this, connEventCb](const TcpConnectionPtr& c) {
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    conn->setCloseCallback([this, lifetime, connEventCb](const TcpConnectionPtr& c) {
+        if (!lifetime.lock()) {
+            return;
+        }
         if (connEventCb) {
             connEventCb(c, ConnectionEvent::Disconnected);
         }
@@ -244,7 +284,14 @@ void TcpClient::removeConnection(const TcpConnectionPtr& conn) {
 
 void TcpClient::initConnector(const InetAddress& serverAddr) {
     connector_ = std::make_shared<Connector>(loop_, serverAddr);
-    connector_->setNewConnectionCallback([this](int sockfd) { newConnection(sockfd); });
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    connector_->setNewConnectionCallback([this, lifetime](int sockfd) {
+        if (!lifetime.lock()) {
+            sockets::close(sockfd);
+            return;
+        }
+        newConnection(sockfd);
+    });
     if (connectorEventCallback_) {
         connector_->setConnectorEventCallback(connectorEventCallback_);
     }
@@ -252,7 +299,14 @@ void TcpClient::initConnector(const InetAddress& serverAddr) {
 
 void TcpClient::initConnector(const InetAddress& serverAddr, const ConnectorOptions& options) {
     connector_ = std::make_shared<Connector>(loop_, serverAddr, options);
-    connector_->setNewConnectionCallback([this](int sockfd) { newConnection(sockfd); });
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    connector_->setNewConnectionCallback([this, lifetime](int sockfd) {
+        if (!lifetime.lock()) {
+            sockets::close(sockfd);
+            return;
+        }
+        newConnection(sockfd);
+    });
     if (connectorEventCallback_) {
         connector_->setConnectorEventCallback(connectorEventCallback_);
     }

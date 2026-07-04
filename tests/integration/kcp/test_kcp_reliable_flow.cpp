@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cerrno>
 #include <future>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -62,9 +63,17 @@ void test_kcp_reliable_exchange() {
     auto recvOnBFuture = recvOnB.get_future();
     std::promise<bool> recvOnA;
     auto recvOnAFuture = recvOnA.get_future();
+    std::promise<bool> recvLargeOnB;
+    auto recvLargeOnBFuture = recvLargeOnB.get_future();
+    std::promise<bool> recvLargeOnA;
+    auto recvLargeOnAFuture = recvLargeOnA.get_future();
 
     std::atomic<int> pingCount{0};
     std::atomic<int> pongCount{0};
+    const auto largePayload = std::string("large-ping:") +
+        std::string(mini::net::kcp::KcpTransport::kMaxFragmentPayloadSize * 2 + 31, 'Z');
+    const auto largeReply = std::string("large-pong:") + largePayload;
+    assert(largePayload.size() > mini::net::kcp::KcpTransport::kMaxSingleFramePayloadSize);
 
     std::promise<mini::net::transport::TransportSessionId> sessionPromise;
     auto sessionFuture = sessionPromise.get_future();
@@ -73,6 +82,10 @@ void test_kcp_reliable_exchange() {
         transportA.setMessageCallback([&](mini::net::transport::TransportSessionId,
                                           std::string_view packet,
                                           const mini::net::InetAddress&) {
+            if (packet == largeReply) {
+                recvLargeOnA.set_value(true);
+                return;
+            }
             if (packet.rfind("pong", 0) == 0 && ++pongCount == 2) {
                 recvOnA.set_value(true);
             }
@@ -81,6 +94,11 @@ void test_kcp_reliable_exchange() {
         transportB.setMessageCallback([&](mini::net::transport::TransportSessionId sessionId,
                                           std::string_view packet,
                                           const mini::net::InetAddress&) {
+            if (packet == largePayload) {
+                transportB.sendTo(sessionId, largeReply);
+                recvLargeOnB.set_value(true);
+                return;
+            }
             if (packet == "ping1" || packet == "ping2") {
                 const auto currentPing = ++pingCount;
                 transportB.sendTo(sessionId, std::string("pong") + std::to_string(currentPing));
@@ -101,6 +119,7 @@ void test_kcp_reliable_exchange() {
 
         session->send("ping1");
         session->send("ping2");
+        session->send(largePayload);
         sessionPromise.set_value(session->sessionId());
     });
 
@@ -109,6 +128,8 @@ void test_kcp_reliable_exchange() {
 
     assert(recvOnBFuture.get());
     assert(recvOnAFuture.get());
+    assert(recvLargeOnBFuture.get());
+    assert(recvLargeOnAFuture.get());
 
     std::promise<void> closePromise;
     auto closeFuture = closePromise.get_future();
@@ -298,11 +319,74 @@ void test_kcp_retransmission_retry_count_observed() {
     closeFuture.get();
 }
 
+void test_kcp_stop_drops_raw_peer_send() {
+    const auto bindPort = allocatePort();
+    const auto latePeerPort = allocatePort();
+
+    mini::net::EventLoopThread loopThread;
+    auto* loop = loopThread.startLoop();
+
+    mini::net::kcp::KcpTransport transport(
+        loop,
+        mini::net::InetAddress(bindPort, true),
+        "integration-kcp-stop-drop-raw-send");
+
+    transport.start();
+
+    std::promise<void> stoppedPromise;
+    auto stoppedFuture = stoppedPromise.get_future();
+    loop->queueInLoop([&] {
+        transport.stop();
+        stoppedPromise.set_value();
+    });
+    stoppedFuture.get();
+
+    const int lateFd = ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_UDP);
+    assert(lateFd >= 0);
+
+    sockaddr_in lateAddr{};
+    lateAddr.sin_family = AF_INET;
+    lateAddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    lateAddr.sin_port = htons(latePeerPort);
+    assert(::bind(lateFd, reinterpret_cast<const sockaddr*>(&lateAddr), sizeof(lateAddr)) == 0);
+
+    timeval timeout{};
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 100000;
+    assert(::setsockopt(lateFd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0);
+
+    std::thread lateSender([&] {
+        transport.sendTo(mini::net::InetAddress("127.0.0.1", latePeerPort), "kcp-raw-after-stop");
+    });
+    lateSender.join();
+
+    auto drained = std::make_shared<std::promise<void>>();
+    auto drainedFuture = drained->get_future();
+    loop->queueInLoop([drained] {
+        drained->set_value();
+    });
+    drainedFuture.get();
+
+    char buffer[64]{};
+    sockaddr_storage from{};
+    socklen_t fromLen = static_cast<socklen_t>(sizeof(from));
+    const ssize_t n = ::recvfrom(lateFd,
+                                 buffer,
+                                 sizeof(buffer),
+                                 0,
+                                 reinterpret_cast<sockaddr*>(&from),
+                                 &fromLen);
+    assert(n < 0);
+    assert(errno == EAGAIN || errno == EWOULDBLOCK);
+    ::close(lateFd);
+}
+
 }  // namespace
 
 int main() {
     test_kcp_reliable_exchange();
     test_kcp_retransmission_timeout();
     test_kcp_retransmission_retry_count_observed();
+    test_kcp_stop_drops_raw_peer_send();
     return 0;
 }

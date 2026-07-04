@@ -30,6 +30,47 @@ void GameCommandQueue::enqueue(GameCommand command) {
     enqueue(std::move(owned));
 }
 
+GameCommandQueue::AdmissionResult GameCommandQueue::tryEnqueue(
+    GameCommandPtr command,
+    std::size_t hardBacklog,
+    std::chrono::milliseconds hardOldestLag) {
+    AdmissionResult result;
+    result.hardBacklog = hardBacklog;
+    result.hardOldestLag = hardOldestLag;
+
+    if (!command) {
+        result.status = AdmissionResult::Status::RejectedInvalidCommand;
+        return result;
+    }
+
+    ensureTimestamp(command->enqueuedAt);
+
+    std::scoped_lock lock(mutex_);
+    result.backlog = queue_.size();
+    if (!queue_.empty()) {
+        const auto& oldest = queue_.front();
+        if (oldest && oldest->enqueuedAt != GameCommand::TimePoint{}) {
+            result.oldestLag = std::chrono::duration_cast<std::chrono::milliseconds>(
+                mini::base::now() - oldest->enqueuedAt);
+        }
+    }
+
+    if (hardBacklog > 0 && queue_.size() >= hardBacklog) {
+        result.status = AdmissionResult::Status::RejectedHardBacklog;
+        return result;
+    }
+    if (hardOldestLag > std::chrono::milliseconds::zero() &&
+        result.oldestLag >= hardOldestLag) {
+        result.status = AdmissionResult::Status::RejectedHardOldestLag;
+        return result;
+    }
+
+    queue_.emplace_back(std::move(command));
+    result.status = AdmissionResult::Status::Accepted;
+    result.backlog = queue_.size();
+    return result;
+}
+
 GameCommandBatch GameCommandQueue::drain(std::size_t maxCommands) {
     GameCommandBatch commands;
     if (maxCommands == 0) {

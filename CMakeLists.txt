@@ -28,6 +28,7 @@ find_package(OpenSSL REQUIRED)
 
 add_library(mini_trantor
     mini/base/Logger.cc
+    mini/base/MetricsExporter.cc
     mini/net/InetAddress.cc
     mini/net/Buffer.cc
     mini/net/SocketsOps.cc
@@ -53,8 +54,11 @@ add_library(mini_trantor
     mini/net/TcpClient.cc
     mini/net/TcpServer.cc
     mini/net/TlsContext.cc
+    mini/net/udp/IcmpPathMtuListener.cc
+    mini/net/udp/PathMtuSignalAdapter.cc
     mini/net/udp/UdpSocket.cc
     mini/net/udp/UdpServer.cc
+    mini/net/transport/PathMtuCache.cc
     mini/net/framing/PacketFramer.cc
     mini/codec/ProtobufAdapter.cc
     mini/codec/FlatBuffersAdapter.cc

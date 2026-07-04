@@ -44,12 +44,12 @@ const mini::net::InetAddress& KcpSession::peerAddress() const noexcept {
 }
 
 bool KcpSession::connected() const noexcept {
-    return connected_;
+    return connected_.load(std::memory_order_acquire);
 }
 
 void KcpSession::send(std::string_view data) {
-    auto* owner = owner_;
-    if (!owner || !connected_) {
+    auto* owner = owner_.load(std::memory_order_acquire);
+    if (!owner || !connected_.load(std::memory_order_acquire)) {
         return;
     }
     owner->sendTo(sessionId_, data);
@@ -60,18 +60,19 @@ void KcpSession::shutdown() {
 }
 
 void KcpSession::forceClose() {
-    connected_ = false;
-    if (auto* owner = owner_) {
+    connected_.store(false, std::memory_order_release);
+    if (auto* owner = owner_.load(std::memory_order_acquire)) {
         owner->closeSession(sessionId_);
     }
 }
 
 void KcpSession::markClosed() noexcept {
-    connected_ = false;
+    connected_.store(false, std::memory_order_release);
+    owner_.store(nullptr, std::memory_order_release);
 }
 
 bool KcpSession::hasOwner() const noexcept {
-    return owner_ != nullptr;
+    return owner_.load(std::memory_order_acquire) != nullptr;
 }
 
 std::string_view KcpSession::name() const noexcept {
@@ -79,10 +80,11 @@ std::string_view KcpSession::name() const noexcept {
 }
 
 mini::net::EventLoop* KcpSession::getLoop() const noexcept {
-    if (!owner_) {
+    auto* owner = owner_.load(std::memory_order_acquire);
+    if (!owner) {
         return nullptr;
     }
-    return owner_->getLoop();
+    return owner->getLoop();
 }
 
 }  // namespace mini::net::kcp

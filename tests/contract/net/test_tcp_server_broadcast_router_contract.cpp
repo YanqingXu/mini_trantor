@@ -74,6 +74,19 @@ std::vector<mini::net::broadcast::BroadcastRouter::LoopBatch> routeAllOnBaseLoop
     return readyFuture.get();
 }
 
+std::vector<mini::net::broadcast::BroadcastRouter::LoopBatch> routeGroupOnBaseLoop(
+    mini::net::EventLoop* baseLoop,
+    mini::net::broadcast::BroadcastRouter& router,
+    std::string_view groupId) {
+    auto ready = std::make_shared<std::promise<std::vector<mini::net::broadcast::BroadcastRouter::LoopBatch>>>();
+    auto readyFuture = ready->get_future();
+    const auto target = std::string(groupId);
+    baseLoop->queueInLoop([&router, target = std::move(target), ready] {
+        ready->set_value(router.routeGroup(target));
+    });
+    return readyFuture.get();
+}
+
 std::size_t sessionCountOnBaseLoop(mini::net::EventLoop* baseLoop,
                                   mini::net::broadcast::BroadcastRouter& router) {
     auto ready = std::make_shared<std::promise<std::size_t>>();
@@ -225,10 +238,57 @@ void testRouteAllAndDeregister() {
     recycleConnection(loopB, std::move(connB));
 }
 
+void testGuardedDeregisterKeepsReboundSession() {
+    mini::net::EventLoopThread baseLoopThread;
+    auto* baseLoop = baseLoopThread.startLoop();
+    mini::net::EventLoopThread loopAThread;
+    auto* loopA = loopAThread.startLoop();
+    mini::net::EventLoopThread loopBThread;
+    auto* loopB = loopBThread.startLoop();
+
+    auto ioSocketsA = makeSocketPair();
+    auto ioSocketsB = makeSocketPair();
+    mini::net::broadcast::BroadcastRouter router(baseLoop);
+
+    auto connA = makeConnectionAsync(loopA, ioSocketsA.first, "old-transport");
+    auto connB = makeConnectionAsync(loopB, ioSocketsB.first, "new-transport");
+    const std::string sessionId = "sticky-player";
+    const std::string groupId = "room-sticky";
+
+    router.registerSession(sessionId, connA);
+    router.joinGroup(sessionId, groupId);
+
+    auto initial = routeGroupOnBaseLoop(baseLoop, router, groupId);
+    assert(initial.size() == 1);
+    assert(initial.front().connections.size() == 1);
+    assert(initial.front().connections.front() == connA);
+
+    router.registerSession(sessionId, connB);
+    router.deregisterSession(sessionId, connA);
+
+    auto afterStaleClose = routeGroupOnBaseLoop(baseLoop, router, groupId);
+    assert(afterStaleClose.size() == 1);
+    assert(afterStaleClose.front().connections.size() == 1);
+    assert(afterStaleClose.front().connections.front() == connB);
+    assert(hasSessionOnBaseLoop(baseLoop, router, sessionId));
+    assert(sessionCountOnBaseLoop(baseLoop, router) == 1);
+
+    router.deregisterSession(sessionId, connB);
+    assert(!hasSessionOnBaseLoop(baseLoop, router, sessionId));
+    assert(routeGroupOnBaseLoop(baseLoop, router, groupId).empty());
+
+    closeSocketPairPeer(ioSocketsA);
+    closeSocketPairPeer(ioSocketsB);
+
+    recycleConnection(loopA, std::move(connA));
+    recycleConnection(loopB, std::move(connB));
+}
+
 }  // namespace
 
 int main() {
     testRouteBySessionIds();
     testRouteAllAndDeregister();
+    testGuardedDeregisterKeepsReboundSession();
     return 0;
 }

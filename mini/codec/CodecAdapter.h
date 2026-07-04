@@ -15,10 +15,38 @@
 
 #pragma once
 
+#include <exception>
 #include <string>
 #include <string_view>
 
 namespace mini::codec {
+
+namespace detail {
+
+inline bool setCodecError(std::string* error, std::string_view message) {
+    if (error) {
+        *error = message;
+    }
+    return false;
+}
+
+inline bool setCodecExceptionError(std::string* error,
+                                   std::string_view action,
+                                   const std::exception& ex) {
+    if (error) {
+        *error = std::string(action) + " threw exception: " + ex.what();
+    }
+    return false;
+}
+
+inline bool setCodecUnknownExceptionError(std::string* error, std::string_view action) {
+    if (error) {
+        *error = std::string(action) + " threw unknown exception";
+    }
+    return false;
+}
+
+}  // namespace detail
 
 /// 编码成功或失败的状态。失败时可从 error 参数获取明确信息。
 enum class CodecStatus : bool {
@@ -63,30 +91,33 @@ public:
 
     bool encode(const void* message, std::string* payload, std::string* error) const final {
         if (message == nullptr) {
-            if (error) {
-                *error = "CodecAdapter::encode called with null message";
-            }
-            return static_cast<bool>(CodecStatus::kError);
+            return detail::setCodecError(error, "CodecAdapter::encode called with null message");
         }
         if (payload == nullptr) {
-            if (error) {
-                *error = "CodecAdapter::encode called with null payload";
-            }
-            return static_cast<bool>(CodecStatus::kError);
+            return detail::setCodecError(error, "CodecAdapter::encode called with null payload");
         }
 
-        return encodeMessage(*static_cast<const MessageType*>(message), payload, error);
+        try {
+            return encodeMessage(*static_cast<const MessageType*>(message), payload, error);
+        } catch (const std::exception& ex) {
+            return detail::setCodecExceptionError(error, "CodecAdapter::encode", ex);
+        } catch (...) {
+            return detail::setCodecUnknownExceptionError(error, "CodecAdapter::encode");
+        }
     }
 
     bool decode(std::string_view payload, void* message, std::string* error) const final {
         if (message == nullptr) {
-            if (error) {
-                *error = "CodecAdapter::decode called with null message";
-            }
-            return static_cast<bool>(CodecStatus::kError);
+            return detail::setCodecError(error, "CodecAdapter::decode called with null message");
         }
 
-        return decodeMessage(payload, *static_cast<MessageType*>(message), error);
+        try {
+            return decodeMessage(payload, *static_cast<MessageType*>(message), error);
+        } catch (const std::exception& ex) {
+            return detail::setCodecExceptionError(error, "CodecAdapter::decode", ex);
+        } catch (...) {
+            return detail::setCodecUnknownExceptionError(error, "CodecAdapter::decode");
+        }
     }
 
     /// 编码到具体消息类型。

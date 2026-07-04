@@ -4,6 +4,7 @@
 
 #include <cassert>
 #include <cstdio>
+#include <stdexcept>
 #include <string>
 
 using namespace mini::codec;
@@ -14,8 +15,13 @@ struct FakeProtoMessage {
     std::string payload;
     bool encodeOk = true;
     bool decodeOk = true;
+    bool throwEncode = false;
+    bool throwDecode = false;
 
     bool SerializeToString(std::string* out) const {
+        if (throwEncode) {
+            throw std::runtime_error("encode boom");
+        }
         if (!encodeOk) {
             return false;
         }
@@ -24,6 +30,9 @@ struct FakeProtoMessage {
     }
 
     bool ParseFromString(const std::string& data) {
+        if (throwDecode) {
+            throw std::runtime_error("decode boom");
+        }
         if (!decodeOk) {
             return false;
         }
@@ -32,6 +41,9 @@ struct FakeProtoMessage {
     }
 
     bool ParseFromArray(const void* data, int len) {
+        if (throwDecode) {
+            throw std::runtime_error("decode boom");
+        }
         if (!decodeOk) {
             return false;
         }
@@ -108,9 +120,25 @@ int main() {
     {
         assert(!codec.encode(nullptr, &payload, &err));
         assert(err == "CodecAdapter::encode called with null message");
+        assert(!codec.encodeMessage(src, nullptr, &err));
+        assert(err == "protobuf encode called with null payload");
         assert(!codec.decode("x", nullptr, &err));
         assert(err == "CodecAdapter::decode called with null message");
         std::printf("  PASS: protobuf null guard\n");
+    }
+
+    // 7. serializer exceptions should be converted to explicit errors
+    {
+        FakeProtoMessage throwingEncode;
+        throwingEncode.throwEncode = true;
+        assert(!codec.encodeMessage(throwingEncode, &payload, &err));
+        assert(err.rfind("protobuf encode threw exception", 0) == 0);
+
+        FakeProtoMessage throwingDecode;
+        throwingDecode.throwDecode = true;
+        assert(!codec.decodeMessage("boom", throwingDecode, &err));
+        assert(err.rfind("protobuf decode threw exception", 0) == 0);
+        std::printf("  PASS: protobuf exception guard\n");
     }
 
     std::printf("All protobuf adapter unit tests passed.\n");

@@ -4,6 +4,7 @@
 
 #include <arpa/inet.h>
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <future>
@@ -34,9 +35,33 @@ uint16_t allocatePort() {
     return port;
 }
 
-}  // namespace
+void sendDatagram(uint16_t serverPort, std::string_view payload) {
+    const int fd = ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_UDP);
+    assert(fd >= 0);
 
-int main() {
+    sockaddr_in serverAddr{};
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(serverPort);
+    assert(::inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr) == 1);
+
+    const ssize_t sent = ::sendto(
+        fd,
+        payload.data(),
+        payload.size(),
+        0,
+        reinterpret_cast<const sockaddr*>(&serverAddr),
+        sizeof(serverAddr));
+    assert(sent == static_cast<ssize_t>(payload.size()));
+    ::close(fd);
+}
+
+void sendBurst(uint16_t serverPort, int count) {
+    for (int i = 0; i < count; ++i) {
+        sendDatagram(serverPort, "burst");
+    }
+}
+
+void testUdpSocketLoopback() {
     const uint16_t serverPort = allocatePort();
     mini::net::EventLoop loop;
 
@@ -106,6 +131,135 @@ int main() {
 
     assert(packetFuture.get() == "ping");
     assert(responseFuture.get() == "pong");
+}
+
+void testUdpSocketReadBudgetStopsOneReadBatch() {
+    using namespace std::chrono_literals;
+
+    const uint16_t serverPort = allocatePort();
+    mini::net::EventLoop loop;
+
+    mini::net::udp::UdpSocket socket(&loop,
+                                     mini::net::InetAddress(serverPort, true),
+                                     true,
+                                     "unit-udp-budget");
+    socket.setMaxDatagramsPerRead(3);
+    assert(socket.maxDatagramsPerRead() == 3);
+
+    std::size_t received = 0;
+    bool budgetMetricObserved = false;
+
+    socket.setPacketCallback([&](std::string_view packet, const mini::net::InetAddress&) {
+        assert(packet == "burst");
+        ++received;
+    });
+    socket.setMetricCallback([&](const mini::net::UdpMetricSample& sample) {
+        assert(sample.event == mini::net::UdpMetricEvent::ReadBatch);
+        assert(sample.loop == &loop);
+        assert(sample.socketName == "unit-udp-budget");
+        assert(sample.maxDatagramsPerRead == 3);
+        assert(sample.readDuration >= mini::net::UdpMetricSample::Duration::zero());
+        if (!sample.budgetExhausted) {
+            return;
+        }
+        assert(sample.datagramsRead == 3);
+        assert(sample.bytesRead == 15);
+        assert(received == 3);
+        budgetMetricObserved = true;
+        loop.quit();
+    });
+
+    socket.start();
+    sendBurst(serverPort, 16);
+    loop.runAfter(1s, [&loop] { loop.quit(); });
+
+    loop.loop();
+
+    assert(budgetMetricObserved);
+    assert(received == 3);
+}
+
+void testUdpSocketReportsSynchronousPathMtuFailure() {
+    const uint16_t serverPort = allocatePort();
+    mini::net::EventLoop loop;
+
+    mini::net::udp::UdpSocket socket(&loop,
+                                     mini::net::InetAddress(0, true),
+                                     true,
+                                     "unit-udp-path-mtu-failure");
+
+    const mini::net::InetAddress peer("127.0.0.1", serverPort);
+    const std::string oversizedPayload(70000, 'x');
+    bool observed = false;
+
+    socket.setPathMtuFailureCallback(
+        [&](const mini::net::udp::PathMtuFailure& failure) {
+            observed = true;
+            assert(failure.errorCode == EMSGSIZE);
+            assert(failure.peerAddr.toIpPort() == peer.toIpPort());
+            assert(failure.failedDatagramPayloadSize == oversizedPayload.size());
+            assert(failure.suggestedDatagramPayloadSize == 0);
+            assert(failure.source == mini::net::udp::PathMtuSignalSource::kLocalSend);
+            assert(failure.quotedUdpPayloadPrefix.size() ==
+                   mini::net::udp::kMaxPathMtuQuotedUdpPayloadPrefix);
+            assert(failure.quotedUdpPayloadPrefix ==
+                   oversizedPayload.substr(
+                       0,
+                       mini::net::udp::kMaxPathMtuQuotedUdpPayloadPrefix));
+        });
+
+    socket.sendTo(oversizedPayload, peer);
+
+    assert(observed);
+}
+
+void testUdpSocketPlatformPathMtuSignalToggle() {
+    mini::net::EventLoop loop;
+    mini::net::udp::UdpSocket socket(&loop,
+                                     mini::net::InetAddress(0, true),
+                                     true,
+                                     "unit-udp-path-mtu-error-queue");
+
+#ifdef __linux__
+    assert(socket.enablePlatformPathMtuSignals(true));
+    assert(socket.platformPathMtuSignalsEnabled());
+    assert(socket.enablePlatformPathMtuSignals(false));
+    assert(!socket.platformPathMtuSignalsEnabled());
+    assert(socket.enablePathMtuErrorQueue(true));
+    assert(socket.pathMtuErrorQueueEnabled());
+    assert(socket.platformPathMtuSignalsEnabled());
+    assert(socket.enablePathMtuErrorQueue(false));
+    assert(!socket.pathMtuErrorQueueEnabled());
+    assert(!socket.platformPathMtuSignalsEnabled());
+#else
+    assert(!socket.enablePlatformPathMtuSignals(true));
+    assert(!socket.platformPathMtuSignalsEnabled());
+    assert(!socket.enablePathMtuErrorQueue(true));
+    assert(!socket.pathMtuErrorQueueEnabled());
+#endif
+}
+
+void testUdpSocketRawIcmpIpv6ToggleIsBestEffort() {
+    mini::net::EventLoop loop;
+    mini::net::udp::UdpSocket socket(&loop,
+                                     mini::net::InetAddress("::1", 0, true),
+                                     true,
+                                     "unit-udp-raw-icmpv6");
+
+    const bool enabled = socket.enableRawIcmpPathMtuListener(true);
+    assert(socket.rawIcmpPathMtuListenerEnabled() == enabled);
+    assert(socket.enableRawIcmpPathMtuListener(false));
+    assert(!socket.rawIcmpPathMtuListenerEnabled());
+}
+
+}  // namespace
+
+int main() {
+    testUdpSocketLoopback();
+    testUdpSocketReadBudgetStopsOneReadBatch();
+    testUdpSocketReportsSynchronousPathMtuFailure();
+    testUdpSocketPlatformPathMtuSignalToggle();
+    testUdpSocketRawIcmpIpv6ToggleIsBestEffort();
 
     return 0;
 }

@@ -13,6 +13,7 @@
 
 #include <concepts>
 #include <cstddef>
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -52,11 +53,21 @@ public:
     bool encodeMessage(const MessageT& message,
                        std::string* payload,
                        std::string* error) const override {
-        if (!message.SerializeToString(payload)) {
-            if (error) {
-                *error = "protobuf encode failed";
-            }
-            return static_cast<bool>(CodecStatus::kError);
+        if (payload == nullptr) {
+            return detail::setCodecError(error, "protobuf encode called with null payload");
+        }
+
+        bool ok = false;
+        try {
+            ok = message.SerializeToString(payload);
+        } catch (const std::exception& ex) {
+            return detail::setCodecExceptionError(error, "protobuf encode", ex);
+        } catch (...) {
+            return detail::setCodecUnknownExceptionError(error, "protobuf encode");
+        }
+
+        if (!ok) {
+            return detail::setCodecError(error, "protobuf encode failed");
         }
         if (error) {
             error->clear();
@@ -68,21 +79,29 @@ public:
                        MessageT& message,
                        std::string* error) const override {
         bool ok = false;
-        if constexpr (detail::ProtobufParsableFromArray<MessageT>) {
-            ok = message.ParseFromArray(payload.data(), static_cast<int>(payload.size()));
-        } else {
-            const std::string payloadStr(payload);
-            ok = message.ParseFromString(payloadStr);
+        try {
+            if constexpr (detail::ProtobufParsableFromArray<MessageT>) {
+                if (payload.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+                    return detail::setCodecError(error, "protobuf decode payload too large");
+                }
+                ok = message.ParseFromArray(payload.data(), static_cast<int>(payload.size()));
+            } else {
+                const std::string payloadStr(payload);
+                ok = message.ParseFromString(payloadStr);
+            }
+        } catch (const std::exception& ex) {
+            return detail::setCodecExceptionError(error, "protobuf decode", ex);
+        } catch (...) {
+            return detail::setCodecUnknownExceptionError(error, "protobuf decode");
         }
 
-        if (!ok && error) {
-            *error = "protobuf decode failed";
+        if (!ok) {
+            return detail::setCodecError(error, "protobuf decode failed");
         }
-        if (ok && error) {
+        if (error) {
             error->clear();
         }
-        return ok ? static_cast<bool>(CodecStatus::kOk)
-                  : static_cast<bool>(CodecStatus::kError);
+        return static_cast<bool>(CodecStatus::kOk);
     }
 };
 

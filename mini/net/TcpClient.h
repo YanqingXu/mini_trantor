@@ -77,6 +77,9 @@ public:
     void setTlsEventCallback(TlsEventCallback cb);
 
 private:
+    void connectInLoop();
+    void disconnectInLoop();
+    void stopInLoop();
     void newConnection(int sockfd);
     void removeConnection(const TcpConnectionPtr& conn);
     void initConnector(const InetAddress& serverAddr);
@@ -98,6 +101,7 @@ private:
     bool retry_;
     bool connect_;
     int nextConnId_;
+    std::shared_ptr<void> lifetimeToken_{std::make_shared<int>(0)};
     mutable std::mutex mutex_;
     TcpConnectionPtr connection_;  // guarded by mutex_
     std::shared_ptr<TlsContext> tlsContext_;

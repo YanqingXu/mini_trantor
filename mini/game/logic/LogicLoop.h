@@ -6,6 +6,7 @@
 #include "mini/base/MetricsHook.h"
 #include "mini/base/Timestamp.h"
 #include "mini/base/noncopyable.h"
+#include "mini/game/GameBackpressurePolicy.h"
 #include "mini/game/logic/GameCommandQueue.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/EventLoopThread.h"
@@ -14,6 +15,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -31,6 +33,24 @@ public:
     struct Options {
         TickDuration fixedStep{std::chrono::milliseconds(16)};
         std::size_t maxCommandsPerTick{128};
+        GameBackpressureOptions::LogicAdmission admission{};
+        GameBackpressureOptions::OutputSend output{};
+
+        void validate() const {
+            admission.validate();
+            output.validate();
+        }
+    };
+
+    struct SubmitResult {
+        bool accepted{false};
+        GameBackpressureReason reason{GameBackpressureReason::None};
+        GameBackpressureAction action{GameBackpressureAction::Accept};
+        std::size_t backlog{0};
+        std::size_t currentValue{0};
+        std::chrono::milliseconds oldestLag{std::chrono::milliseconds::zero()};
+        std::size_t softLimit{0};
+        std::size_t hardLimit{0};
     };
 
     LogicLoop();
@@ -40,15 +60,29 @@ public:
     void setProcessor(CommandProcessor processor);
     void setOutputDispatcher(OutputDispatcher dispatcher);
     void setMetricCallback(LogicLoopMetricCallback callback);
+    void setBackpressureMetricCallback(GameBackpressureMetricCallback callback);
+    void setOutputBackpressurePolicy(GameBackpressureOptions::OutputSend options);
 
     bool submit(std::string sessionId,
                 std::weak_ptr<mini::net::TcpConnection> sourceConnection,
-                std::string payload);
+                std::string payload,
+                std::uint32_t priority = toMetricPriority(GameMessagePriority::Normal));
     bool submit(std::string sessionId,
                 mini::net::transport::TransportSessionId transportSessionId,
                 std::weak_ptr<mini::net::transport::ITransportEndpoint> sourceTransport,
-                std::string payload);
+                std::string payload,
+                std::uint32_t priority = toMetricPriority(GameMessagePriority::Normal));
     bool submit(GameCommandPtr command);
+    SubmitResult submitWithResult(std::string sessionId,
+                                  std::weak_ptr<mini::net::TcpConnection> sourceConnection,
+                                  std::string payload,
+                                  std::uint32_t priority = toMetricPriority(GameMessagePriority::Normal));
+    SubmitResult submitWithResult(std::string sessionId,
+                                  mini::net::transport::TransportSessionId transportSessionId,
+                                  std::weak_ptr<mini::net::transport::ITransportEndpoint> sourceTransport,
+                                  std::string payload,
+                                  std::uint32_t priority = toMetricPriority(GameMessagePriority::Normal));
+    SubmitResult submitWithResult(GameCommandPtr command);
 
     void start();
     void stop();
@@ -64,23 +98,37 @@ private:
     CommandProcessor resolveProcessor() const;
     OutputDispatcher resolveOutputDispatcher() const;
     LogicLoopMetricCallback resolveMetricCallback() const;
+    GameBackpressureMetricCallback resolveBackpressureMetricCallback() const;
+    GameBackpressureOptions::OutputSend resolveOutputBackpressurePolicy() const;
 
-    static void defaultOutputDispatch(std::vector<GameCommand>&& outputs);
+    void defaultOutputDispatch(std::vector<GameCommand>&& outputs,
+                               LogicLoopMetricCallback metricCallback,
+                               GameBackpressureMetricCallback backpressureMetricCallback);
+    void emitBackpressureMetric(const SubmitResult& result,
+                                const GameCommandPtr& command,
+                                GameBackpressureMetricCallback callback);
+    void emitBackpressureMetric(GameBackpressureMetricSample sample,
+                                GameBackpressureMetricCallback callback);
+    SubmitResult makeSubmitResult(const GameCommandQueue::AdmissionResult& admission) const;
 
     mini::net::EventLoopThread logicThread_;
     std::shared_ptr<GameCommandQueue> queue_;
     TickDuration fixedStep_;
     std::size_t maxCommandsPerTick_;
+    GameBackpressureOptions::LogicAdmission admissionOptions_;
+    GameBackpressureOptions::OutputSend outputOptions_;
     std::atomic<bool> running_;
     mini::net::TimerId tickTimerId_;
     std::atomic<mini::net::EventLoop*> logicLoop_;
     std::atomic<std::size_t> processedCount_{0};
     mini::base::Timestamp lastTickAt_{};
+    std::shared_ptr<void> lifetimeToken_{std::make_shared<int>(0)};
 
     mutable std::mutex stateMutex_;
     CommandProcessor processor_;
     OutputDispatcher outputDispatcher_;
     LogicLoopMetricCallback metricCallback_;
+    GameBackpressureMetricCallback backpressureMetricCallback_;
 };
 
 }  // namespace mini::game::logic

@@ -83,6 +83,7 @@ struct BroadcastMetricSample {
     std::size_t loopBatches{0};
     std::size_t fanoutConnections{0};
     std::size_t payloadBytes{0};
+    std::uint32_t priority{1};
     Duration routeLatency{Duration::zero()};
     Duration queueLatency{Duration::zero()};
     Duration fanoutLatency{Duration::zero()};
@@ -110,9 +111,166 @@ struct EventLoopMetricSample {
 
 using EventLoopMetricCallback = std::function<void(const EventLoopMetricSample&)>;
 
+// ── UDP 读批次指标 ──
+
+enum class UdpMetricEvent {
+    ReadBatch,  ///< UdpSocket 完成一次 read handler 批处理
+};
+
+struct UdpMetricSample {
+    using Duration = std::chrono::steady_clock::duration;
+
+    UdpMetricEvent event{UdpMetricEvent::ReadBatch};
+    EventLoop* loop{nullptr};
+    std::string socketName;
+    std::size_t datagramsRead{0};
+    std::size_t bytesRead{0};
+    std::size_t maxDatagramsPerRead{0};
+    bool budgetExhausted{false};
+    Duration readDuration{Duration::zero()};
+};
+
+using UdpMetricCallback = std::function<void(const UdpMetricSample&)>;
+
 }  // namespace mini::net
 
 namespace mini::game {
+
+// ── 游戏层背压策略决策指标 ──
+
+enum class GameBackpressureMetricEvent {
+    InputDeferred,      ///< 输入批次达到预算并安排 continuation
+    InputRejected,      ///< 输入超过策略限制，被拒绝/关闭
+    LogicAccepted,      ///< command 被 LogicLoop admission 接受
+    LogicRejected,      ///< command 被 backlog/lag 策略拒绝
+    OutputQueued,       ///< 输出被排入目标 endpoint owner loop
+    OutputDropped,      ///< 输出因策略或 endpoint 状态被丢弃/拒绝
+    BroadcastAccepted,  ///< 广播 fanout 被接受并调度
+    BroadcastDeferred,  ///< 广播 fanout 被拆分或延后
+    BroadcastRejected,  ///< 广播 fanout 在调度前被拒绝
+};
+
+enum class GameBackpressureLayer {
+    InputFraming,
+    LogicAdmission,
+    OutputSend,
+    BroadcastFanout,
+};
+
+enum class GameBackpressureAction {
+    Accept,
+    Defer,
+    DropLowPriority,
+    Reject,
+    Close,
+};
+
+enum class GameBackpressureReason {
+    None,
+    InvalidCommand,
+    LogicLoopNotRunning,
+    FrameBatchBudget,
+    InputBufferedBytesSoftLimit,
+    InputBufferedBytesHardLimit,
+    LogicBacklogSoftLimit,
+    LogicBacklogHardLimit,
+    LogicOldestLagSoftLimit,
+    LogicOldestLagHardLimit,
+    OutputQueuedBytesSoftLimit,
+    OutputQueuedBytesHardLimit,
+    OutputQueueLatencySoftLimit,
+    OutputQueueLatencyHardLimit,
+    BroadcastFanoutSoftLimit,
+    BroadcastFanoutHardLimit,
+    BroadcastPayloadBytesSoftLimit,
+    BroadcastPayloadBytesHardLimit,
+    EndpointExpired,
+};
+
+struct GameBackpressureMetricSample {
+    using Duration = std::chrono::steady_clock::duration;
+
+    GameBackpressureMetricEvent event{GameBackpressureMetricEvent::LogicAccepted};
+    GameBackpressureLayer layer{GameBackpressureLayer::LogicAdmission};
+    GameBackpressureAction action{GameBackpressureAction::Accept};
+    GameBackpressureReason reason{GameBackpressureReason::None};
+    mini::net::EventLoop* loop{nullptr};
+    std::string sessionToken;
+    std::uint64_t transportSessionId{0};
+    std::uint32_t msgId{0};
+    std::uint32_t priority{1};
+    std::size_t currentValue{0};
+    std::size_t softLimit{0};
+    std::size_t hardLimit{0};
+    std::size_t backlog{0};
+    std::size_t fanoutConnections{0};
+    std::size_t payloadBytes{0};
+    Duration queueLatency{Duration::zero()};
+};
+
+using GameBackpressureMetricCallback = std::function<void(const GameBackpressureMetricSample&)>;
+
+// ── 游戏网关安全指标 ──
+
+enum class GameSecurityMetricEvent {
+    AuthAccepted,   ///< auth frame accepted and session bind may proceed
+    AuthRejected,   ///< auth frame rejected by gateway security policy
+    RateLimited,    ///< authenticated session exceeded per-window frame budget
+    AbnormalClose,  ///< connection closed for a security-sensitive reason
+};
+
+enum class GameSecurityReason {
+    None,
+    EmptyAuthToken,
+    EmptyAuthNonce,
+    AuthTokenTooLarge,
+    AuthTokenValidatorRejected,
+    AuthReplay,
+    SessionEnsureFailed,
+    UnauthenticatedFrame,
+    SessionRateLimit,
+    InvalidFrame,
+    PipelineStateMissing,
+};
+
+struct GameSecurityMetricSample {
+    GameSecurityMetricEvent event{GameSecurityMetricEvent::AuthAccepted};
+    GameSecurityReason reason{GameSecurityReason::None};
+    mini::net::EventLoop* loop{nullptr};
+    std::string sessionToken;
+    std::uint64_t transportSessionId{0};
+    std::uint32_t msgId{0};
+    std::size_t payloadBytes{0};
+    std::size_t currentValue{0};
+    std::size_t limit{0};
+};
+
+using GameSecurityMetricCallback = std::function<void(const GameSecurityMetricSample&)>;
+
+// ── 游戏服务器 Pipeline 指标 ──
+
+enum class GamePipelineMetricEvent {
+    InputBatchProcessed,  ///< pipeline 完成一次 framed input 批处理
+    LogicSubmitResult,    ///< command frame 提交 LogicLoop 的结果
+};
+
+struct GamePipelineMetricSample {
+    using Duration = std::chrono::steady_clock::duration;
+
+    GamePipelineMetricEvent event{GamePipelineMetricEvent::InputBatchProcessed};
+    mini::net::EventLoop* loop{nullptr};
+    std::string sessionToken;
+    std::uint32_t msgId{0};
+    std::size_t framesDecoded{0};
+    std::size_t bytesConsumed{0};
+    std::size_t bufferedBytes{0};
+    std::size_t logicBacklog{0};
+    bool continuationScheduled{false};
+    bool logicSubmitted{false};
+    Duration batchDuration{Duration::zero()};
+};
+
+using GamePipelineMetricCallback = std::function<void(const GamePipelineMetricSample&)>;
 
 // ── 会话重连指标 ──
 
@@ -120,15 +278,20 @@ enum class SessionMetricEvent {
     ReconnectWindowStarted,  ///< session 进入可重连窗口
     ReconnectSucceeded,      ///< session 在窗口内重绑 transport
     ReconnectExpired,        ///< session 重连窗口超时
+    AsyncEventsDrained,      ///< session 异步事件队列完成一次批量 drain
 };
 
 struct SessionMetricSample {
     using Duration = std::chrono::steady_clock::duration;
 
     SessionMetricEvent event{SessionMetricEvent::ReconnectWindowStarted};
+    mini::net::EventLoop* loop{nullptr};
     std::string sessionToken;
     bool success{false};
+    std::size_t pendingEvents{0};
+    std::size_t drainedEvents{0};
     Duration reconnectDuration{Duration::zero()};
+    Duration oldestEventLag{Duration::zero()};
 };
 
 using SessionMetricCallback = std::function<void(const SessionMetricSample&)>;
@@ -140,6 +303,8 @@ namespace logic {
 enum class LogicLoopMetricEvent {
     CommandEnqueued,  ///< 命令进入逻辑队列后，在 logic loop 上观测
     TickCompleted,    ///< 一个 fixed-step tick 完成
+    OutputDispatched, ///< 逻辑输出批次已提交给默认回写路径
+    OutputSent,       ///< 单条逻辑输出已在目标 loop 执行发送
 };
 
 struct LogicLoopMetricSample {
@@ -149,9 +314,14 @@ struct LogicLoopMetricSample {
     mini::net::EventLoop* loop{nullptr};
     std::size_t backlog{0};
     std::size_t drainedCommands{0};
+    std::size_t outputBatch{0};
+    std::size_t queuedOutputs{0};
+    std::size_t droppedOutputs{0};
+    std::size_t outputBytes{0};
     std::chrono::milliseconds oldestLag{std::chrono::milliseconds::zero()};
     Duration tickDuration{Duration::zero()};
     Duration tickJitter{Duration::zero()};
+    Duration outputQueueLatency{Duration::zero()};
 };
 
 using LogicLoopMetricCallback = std::function<void(const LogicLoopMetricSample&)>;

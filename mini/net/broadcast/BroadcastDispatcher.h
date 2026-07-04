@@ -15,6 +15,7 @@
 #include "mini/net/broadcast/BroadcastRouter.h"
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -37,11 +38,13 @@ public:
         std::size_t loopBatches{0};
         std::size_t fanoutConnections{0};
         std::size_t payloadBytes{0};
+        std::uint32_t priority{1};
         std::chrono::steady_clock::duration routeLatency{
             std::chrono::steady_clock::duration::zero()};
     };
 
     explicit BroadcastDispatcher(EventLoop* baseLoop);
+    ~BroadcastDispatcher();
 
     void setBroadcastMetricCallback(BroadcastMetricCallback cb);
 
@@ -85,6 +88,7 @@ private:
     void emitBroadcastMetric(BroadcastMetricSample sample) const;
 
     EventLoop* baseLoop_{nullptr};
+    std::shared_ptr<void> lifetimeToken_;
     BroadcastMetricCallback broadcastMetricCallback_;
     mutable std::mutex mutex_;
     std::unordered_map<EventLoop*, std::shared_ptr<LoopState>> pendingByLoop_;
