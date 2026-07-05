@@ -96,6 +96,62 @@ sequenceDiagram
 
 `GameServerPipeline` 还通过 `GamePipelineMetricEvent::InputBatchProcessed` 上报每次 framed input 批处理的 frame 数、消耗字节、剩余缓冲和是否安排 continuation；通过 `GamePipelineMetricEvent::LogicSubmitResult` 上报 command frame 是否成功进入 `LogicLoop` 以及当时 backlog。
 
+## 游戏网络 handoff 生命周期
+
+```mermaid
+sequenceDiagram
+    participant Client as Game Client
+    participant Conn as TcpConnection owner loop
+    participant Pipe as GameServerPipeline
+    participant Mgr as SessionManager
+    participant Logic as LogicLoop
+    participant Route as BroadcastRouter/Dispatcher
+
+    Client->>Conn: auth frame
+    Conn->>Pipe: message callback
+    Pipe->>Mgr: ensureSession/authenticate/markOnline
+    Pipe->>Route: bind session + default group/aoi
+    Pipe-->>Client: auth-ok
+
+    Client->>Conn: command frame
+    Pipe->>Logic: submit(session, transport endpoint, payload)
+    Logic->>Logic: fixed-step processor
+    Logic->>Conn: queue output to endpoint owner loop
+    Conn-->>Client: response frame
+
+    Client->>Conn: broadcast frame
+    Pipe->>Route: route default group on base loop
+    Route->>Conn: queue per-owner-loop batch send
+    Conn-->>Client: broadcast response frame
+
+    Client--xConn: disconnect
+    Conn->>Pipe: connection callback(disconnected)
+    Pipe->>Route: guarded unbind(session, expected connection)
+    Pipe->>Mgr: postConnectionClose(transport id)
+```
+
+```mermaid
+stateDiagram-v2
+    [*] --> Connected
+    Connected --> Authenticated: auth accepted
+    Authenticated --> LogicHandoff: command frame
+    LogicHandoff --> Authenticated: response queued to owner loop
+    Authenticated --> BroadcastRouted: broadcast frame
+    BroadcastRouted --> Authenticated: per-loop batch flushed
+    Authenticated --> Reconnecting: transport close posted
+    Reconnecting --> Authenticated: same session token rebound
+    Reconnecting --> Closed: reconnect window expired
+    Closed --> [*]
+```
+
+约束：
+- `GameServerPipeline` 只绑定默认网络切片：framing、auth/session、logic handoff、broadcast route 和基础指标；它不拥有业务状态、账号系统、房间/AOI 空间状态、Actor/Scene 或 DB/Redis proxy。
+- command frame 从连接 owner loop 进入 `LogicLoop` 后，processor 只能在 logic loop 线程执行；默认输出必须再 marshal 回目标 connection/endpoint owner loop 发送。
+- 多客户端交错 command 必须按各自 `sessionToken` 和 `transportSessionId` 回写到正确 endpoint；一个连接断开只清理该 connection 当前仍拥有的 broadcast route，不得影响其他 session。
+- 同 token reconnect / rebind 下，旧连接迟到 close 只能通过 guarded unbind 观察当前路由是否仍指向旧 connection；若已经绑定到新 connection，旧 close 不得删除新路由。
+- Broadcast group/aoi id 在当前底座中只是网络 bucket，不代表业务 AOI/房间状态；真正的 Actor/Scene/Room/DB/Redis 等上层系统必须在 out-of-core 项目中实现。
+- 直接验证文件：`tests/integration/game/test_game_server_handoff_contract.cpp`、`tests/contract/logic/test_logic_loop_timing_contract.cpp`、`tests/contract/net/test_tcp_server_broadcast_router_contract.cpp`。
+
 `LogicLoop` 默认输出回写路径通过两段指标形成闭环：
 - `LogicLoopMetricEvent::OutputDispatched` 在 logic loop 线程上报输出 batch 数、成功排队数、丢弃数和输出字节数。
 - `LogicLoopMetricEvent::OutputSent` 在目标 connection/endpoint owner loop 上报单条输出发送和 queue-to-send 延迟。
@@ -242,7 +298,7 @@ sequenceDiagram
 2. Ownership / Release：回调和 continuation 均通过生命周期令牌或 weak connection 观察目标对象；security replay/rate cache 由 pipeline 持有，`SessionManager` 仍持有 session ownership。
 3. Re-entrant Callbacks：client close callback、pipeline message callback、pipeline metric/security/backpressure callback、logic tick 均可能在 owner loop 内继续排队；priority shedding metric callback 只能观察 DropLowPriority 决策。
 4. Cross-thread：client connect/disconnect/stop 统一 marshal；pipeline 批处理超过上限后重新 queue continuation；security 共享 cache 用 pipeline mutex 同步；默认输出先在 logic loop 做 payload hard/soft/adaptive-limit，再 marshal 到目标 owner loop 做 send/latency hard/soft/adaptive-limit。
-5. Tests：`tests/contract/tcp_client/test_tcp_client.cpp`、`tests/contract/logic/test_logic_loop_timing_contract.cpp`、`tests/contract/net/test_game_metrics_contract.cpp`、`tests/contract/game/test_game_gateway_security_contract.cpp`、`tests/integration/game/test_game_server_vertical_slice.cpp`、`tests/integration/game/test_game_backpressure_policy.cpp`、`tests/integration/game/test_game_gateway_security.cpp`。
+5. Tests：`tests/contract/tcp_client/test_tcp_client.cpp`、`tests/contract/logic/test_logic_loop_timing_contract.cpp`、`tests/contract/net/test_game_metrics_contract.cpp`、`tests/contract/game/test_game_gateway_security_contract.cpp`、`tests/integration/game/test_game_server_vertical_slice.cpp`、`tests/integration/game/test_game_server_handoff_contract.cpp`、`tests/integration/game/test_game_backpressure_policy.cpp`、`tests/integration/game/test_game_gateway_security.cpp`。
 
 ### Game Gateway Security
 

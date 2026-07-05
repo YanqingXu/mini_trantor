@@ -8,6 +8,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -118,6 +119,97 @@ void testProcessorRunsOnLogicThread() {
     assert(logicThreadId != std::this_thread::get_id());
     waitUntil([&] { return logicLoop.processedCount() == 1; }, 500ms);
     assert(logicLoop.processedCount() == 1);
+    assert(logicLoop.backlog() == 0);
+
+    logicLoop.stop();
+}
+
+void testSubmitWithResultReportsLifecycleState() {
+    using namespace std::chrono_literals;
+
+    mini::game::logic::LogicLoop logicLoop({.fixedStep = 50ms, .maxCommandsPerTick = 4});
+
+    auto beforeStart = logicLoop.submitWithResult(
+        "before-start",
+        std::weak_ptr<mini::net::TcpConnection>{},
+        "payload");
+    assert(!beforeStart.accepted);
+    assert(beforeStart.action == mini::game::GameBackpressureAction::Reject);
+    assert(beforeStart.reason == mini::game::GameBackpressureReason::LogicLoopNotRunning);
+    assert(logicLoop.backlog() == 0);
+
+    logicLoop.start();
+    auto running = logicLoop.submitWithResult(
+        "running",
+        std::weak_ptr<mini::net::TcpConnection>{},
+        "payload");
+    assert(running.accepted);
+    assert(running.action == mini::game::GameBackpressureAction::Accept);
+
+    logicLoop.stop();
+    auto afterStop = logicLoop.submitWithResult(
+        "after-stop",
+        std::weak_ptr<mini::net::TcpConnection>{},
+        "payload");
+    assert(!afterStop.accepted);
+    assert(afterStop.action == mini::game::GameBackpressureAction::Reject);
+    assert(afterStop.reason == mini::game::GameBackpressureReason::LogicLoopNotRunning);
+    assert(logicLoop.backlog() == 0);
+}
+
+void testConcurrentSubmittersStillProcessOnSingleLogicThread() {
+    using namespace std::chrono_literals;
+
+    constexpr int kProducerThreads = 4;
+    constexpr int kCommandsPerThread = 24;
+    constexpr int kTotalCommands = kProducerThreads * kCommandsPerThread;
+
+    mini::game::logic::LogicLoop logicLoop({.fixedStep = 4ms, .maxCommandsPerTick = 64});
+    std::atomic<int> processed{0};
+    std::mutex observedMutex;
+    std::set<std::thread::id> processorThreads;
+    std::set<std::thread::id> producerThreads;
+
+    logicLoop.setProcessor([&](const mini::game::logic::GameCommand&,
+                               std::vector<mini::game::logic::GameCommand>&) {
+        {
+            std::scoped_lock lock(observedMutex);
+            processorThreads.insert(std::this_thread::get_id());
+        }
+        ++processed;
+    });
+
+    logicLoop.start();
+
+    std::vector<std::thread> producers;
+    producers.reserve(kProducerThreads);
+    for (int i = 0; i < kProducerThreads; ++i) {
+        producers.emplace_back([&, i] {
+            {
+                std::scoped_lock lock(observedMutex);
+                producerThreads.insert(std::this_thread::get_id());
+            }
+            for (int j = 0; j < kCommandsPerThread; ++j) {
+                auto result = logicLoop.submitWithResult(
+                    "producer-" + std::to_string(i),
+                    std::weak_ptr<mini::net::TcpConnection>{},
+                    "cmd-" + std::to_string(j));
+                assert(result.accepted);
+            }
+        });
+    }
+
+    for (auto& producer : producers) {
+        producer.join();
+    }
+
+    waitUntil([&] { return processed.load() == kTotalCommands; }, 2s);
+    {
+        std::scoped_lock lock(observedMutex);
+        assert(processorThreads.size() == 1);
+        assert(producerThreads.size() == kProducerThreads);
+        assert(producerThreads.find(*processorThreads.begin()) == producerThreads.end());
+    }
     assert(logicLoop.backlog() == 0);
 
     logicLoop.stop();
@@ -581,6 +673,8 @@ void testDestructorStopsRunningLoop() {
 
 int main() {
     testProcessorRunsOnLogicThread();
+    testSubmitWithResultReportsLifecycleState();
+    testConcurrentSubmittersStillProcessOnSingleLogicThread();
     testDefaultOutputDispatchMetrics();
     testDefaultOutputDropsPayloadOverHardLimit();
     testDefaultOutputDropsOnlyLowPriorityAtSoftLimit();

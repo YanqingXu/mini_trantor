@@ -74,6 +74,7 @@ private:
                         std::weak_ptr<transport::ITransportEndpoint> endpoint,
                         EventLoop* loop);
     void deregisterInLoop(std::string sessionId);
+    void deregisterConnectionInLoop(std::weak_ptr<TcpConnection> expectedConnection);
     void deregisterIfConnectionMatchesInLoop(std::string sessionId,
                                              std::weak_ptr<TcpConnection> expectedConnection);
     void joinBucketInLoop(std::string sessionId,

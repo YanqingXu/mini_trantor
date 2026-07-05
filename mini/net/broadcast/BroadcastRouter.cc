@@ -82,10 +82,23 @@ void BroadcastRouter::registerEndpoint(
 }
 
 void BroadcastRouter::deregisterConnection(const TcpConnectionPtr& connection) {
-    if (!connection) {
+    if (!baseLoop_ || !connection) {
         return;
     }
-    deregisterSession(connection->name());
+
+    auto expected = std::weak_ptr<TcpConnection>(connection);
+    if (baseLoop_->isInLoopThread()) {
+        deregisterConnectionInLoop(std::move(expected));
+        return;
+    }
+
+    std::weak_ptr<void> lifetime = lifetimeToken_;
+    baseLoop_->queueInLoop([this, lifetime, expected = std::move(expected)]() mutable {
+        if (!lifetime.lock()) {
+            return;
+        }
+        deregisterConnectionInLoop(std::move(expected));
+    });
 }
 
 void BroadcastRouter::deregisterSession(std::string_view sessionId) {
@@ -290,6 +303,30 @@ void BroadcastRouter::deregisterIfConnectionMatchesInLoop(
     }
 
     deregisterInLoop(std::move(sessionId));
+}
+
+void BroadcastRouter::deregisterConnectionInLoop(std::weak_ptr<TcpConnection> expectedConnection) {
+    baseLoop_->assertInLoopThread();
+
+    auto expected = expectedConnection.lock();
+    if (!expected) {
+        return;
+    }
+
+    std::vector<std::string> matchingSessions;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& [sessionId, record] : sessionById_) {
+            auto current = record.connection.lock();
+            if (current && current == expected) {
+                matchingSessions.push_back(sessionId);
+            }
+        }
+    }
+
+    for (auto& sessionId : matchingSessions) {
+        deregisterInLoop(std::move(sessionId));
+    }
 }
 
 void BroadcastRouter::joinBucketInLoop(

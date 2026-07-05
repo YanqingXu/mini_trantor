@@ -255,6 +255,7 @@ add_mini_test(integration transport ${CMAKE_CURRENT_SOURCE_DIR}/integration/tran
 add_mini_test(integration game ${CMAKE_CURRENT_SOURCE_DIR}/integration/game/test_connect_auth_replay.cpp lifecycle protocol)
 add_mini_test(integration game ${CMAKE_CURRENT_SOURCE_DIR}/integration/game/test_reconnect_flow.cpp lifecycle threading)
 add_mini_test(integration game ${CMAKE_CURRENT_SOURCE_DIR}/integration/game/test_game_server_vertical_slice.cpp protocol threading lifecycle)
+add_mini_test(integration game ${CMAKE_CURRENT_SOURCE_DIR}/integration/game/test_game_server_handoff_contract.cpp protocol threading lifecycle metrics)
 add_mini_test(integration game ${CMAKE_CURRENT_SOURCE_DIR}/integration/game/test_game_backpressure_policy.cpp protocol threading lifecycle metrics)
 add_mini_test(integration game ${CMAKE_CURRENT_SOURCE_DIR}/integration/game/test_game_gateway_security.cpp protocol threading lifecycle metrics)
 add_mini_test(integration logic ${CMAKE_CURRENT_SOURCE_DIR}/integration/logic/test_network_to_logic_roundtrip.cpp threading)

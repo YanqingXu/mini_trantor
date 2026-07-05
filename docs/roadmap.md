@@ -362,6 +362,34 @@ mini-trantor 目前已经具备一个"小而完整"的网络库骨架：
 
 ---
 
+### G1：Scope hardening / boundary split（当前收口）
+
+目标：
+- 暂停核心功能膨胀，把当前项目明确收口为 `game-network foundation + explicit transport preview`
+- 让读者可以从真实示例和架构图理解游戏网络底座边界
+- 保持 KCP/PMTU/FEC 类能力为 preview/experimental，而不是 core roadmap 主线
+
+主要模块 / 文件：
+- [intents/architecture/game_network_base_scope.intent.md](/home/xyq/mini-trantor/intents/architecture/game_network_base_scope.intent.md)
+- [docs/game_server_network_base_scope_boundary.md](/home/xyq/mini-trantor/docs/game_server_network_base_scope_boundary.md)
+- [docs/00_overview/01_architecture_overview.md](/home/xyq/mini-trantor/docs/00_overview/01_architecture_overview.md)
+- [README.md](/home/xyq/mini-trantor/README.md)
+- [examples/game_server/main.cpp](/home/xyq/mini-trantor/examples/game_server/main.cpp)
+- [tests/CMakeLists.txt](/home/xyq/mini-trantor/tests/CMakeLists.txt)
+
+测试 / 验证关联：
+- `cmake --build build --target game_server`
+- [tests/integration/game/test_game_server_vertical_slice.cpp](/home/xyq/mini-trantor/tests/integration/game/test_game_server_vertical_slice.cpp)
+- `transport-experimental` / `kcp-preview` / `pmtu-preview` 测试标签继续默认构建
+
+退出信号：
+- `game_server` 示例入口可编译，展示 `framed packet -> auth/session -> logic -> response/broadcast`
+- README、overview、scope intent 对 KCP/PMTU/FEC 的 preview 边界表述一致
+- AOI、账号、安全平台、分布式网关、生产 FEC/拥塞控制默认进入 adapter/example/downstream，而不是 core
+- 后续变更能在 change description 中回答 scope gate 与 core-module change gate
+
+---
+
 ## 5. 建议执行顺序
 
 建议按下面顺序推进：
@@ -372,7 +400,8 @@ mini-trantor 目前已经具备一个"小而完整"的网络库骨架：
 4. `v5-delta`
 5. `v5-zeta`
 6. `v5-epsilon`
-7. `v6-alpha`
+7. `G1 scope hardening / boundary split`
+8. `v6-alpha`
 
 说明：
 - `G0` 与 `v5-alpha` 可以并行，因为它们分别修"认知一致性"和"运行时一致性"
@@ -380,6 +409,7 @@ mini-trantor 目前已经具备一个"小而完整"的网络库骨架：
 - `v5-gamma` 应早于 HTTP client / 更强 client 生态，否则地址模型会在新增 API 中固化
 - `v5-delta` 与 `v5-zeta` 可以部分并行，但前者更偏库能力，后者更偏工程护栏
 - `v5-epsilon` 放在 client 生态前，避免上层能力继续绑定现有传输细节
+- `G1` 放在继续扩展前，避免 KCP/PMTU/FEC 或游戏业务层能力继续被误认为 core 主线
 
 ---
 

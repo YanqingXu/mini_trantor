@@ -87,6 +87,19 @@ std::vector<mini::net::broadcast::BroadcastRouter::LoopBatch> routeGroupOnBaseLo
     return readyFuture.get();
 }
 
+std::vector<mini::net::broadcast::BroadcastRouter::LoopBatch> routeAoiOnBaseLoop(
+    mini::net::EventLoop* baseLoop,
+    mini::net::broadcast::BroadcastRouter& router,
+    std::string_view aoiId) {
+    auto ready = std::make_shared<std::promise<std::vector<mini::net::broadcast::BroadcastRouter::LoopBatch>>>();
+    auto readyFuture = ready->get_future();
+    const auto target = std::string(aoiId);
+    baseLoop->queueInLoop([&router, target = std::move(target), ready] {
+        ready->set_value(router.routeAoi(target));
+    });
+    return readyFuture.get();
+}
+
 std::size_t sessionCountOnBaseLoop(mini::net::EventLoop* baseLoop,
                                   mini::net::broadcast::BroadcastRouter& router) {
     auto ready = std::make_shared<std::promise<std::size_t>>();
@@ -105,6 +118,34 @@ bool hasSessionOnBaseLoop(mini::net::EventLoop* baseLoop,
     const auto target = std::string(sessionId);
     baseLoop->queueInLoop([&router, target = std::move(target), ready] {
         ready->set_value(router.hasSession(target));
+    });
+    return readyFuture.get();
+}
+
+bool hasGroupMemberOnBaseLoop(mini::net::EventLoop* baseLoop,
+                             mini::net::broadcast::BroadcastRouter& router,
+                             std::string_view groupId,
+                             std::string_view sessionId) {
+    auto ready = std::make_shared<std::promise<bool>>();
+    auto readyFuture = ready->get_future();
+    const auto group = std::string(groupId);
+    const auto session = std::string(sessionId);
+    baseLoop->queueInLoop([&router, group, session, ready] {
+        ready->set_value(router.hasGroupMember(group, session));
+    });
+    return readyFuture.get();
+}
+
+bool hasAoiMemberOnBaseLoop(mini::net::EventLoop* baseLoop,
+                           mini::net::broadcast::BroadcastRouter& router,
+                           std::string_view aoiId,
+                           std::string_view sessionId) {
+    auto ready = std::make_shared<std::promise<bool>>();
+    auto readyFuture = ready->get_future();
+    const auto aoi = std::string(aoiId);
+    const auto session = std::string(sessionId);
+    baseLoop->queueInLoop([&router, aoi, session, ready] {
+        ready->set_value(router.hasAoiMember(aoi, session));
     });
     return readyFuture.get();
 }
@@ -133,6 +174,28 @@ void recycleConnection(mini::net::EventLoop* loop, mini::net::TcpConnectionPtr c
         ready->set_value();
     });
     readyFuture.get();
+}
+
+std::size_t totalRoutedConnections(
+    const std::vector<mini::net::broadcast::BroadcastRouter::LoopBatch>& batches) {
+    std::size_t total = 0;
+    for (const auto& batch : batches) {
+        total += batch.connections.size();
+    }
+    return total;
+}
+
+bool batchContainsConnection(
+    const std::vector<mini::net::broadcast::BroadcastRouter::LoopBatch>& batches,
+    const mini::net::TcpConnectionPtr& expected) {
+    for (const auto& batch : batches) {
+        for (const auto& connection : batch.connections) {
+            if (connection == expected) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 void testRouteBySessionIds() {
@@ -238,6 +301,72 @@ void testRouteAllAndDeregister() {
     recycleConnection(loopB, std::move(connB));
 }
 
+void testGroupAndAoiMembershipLeaveAndDeregister() {
+    mini::net::EventLoopThread baseLoopThread;
+    auto* baseLoop = baseLoopThread.startLoop();
+    mini::net::EventLoopThread loopAThread;
+    auto* loopA = loopAThread.startLoop();
+    mini::net::EventLoopThread loopBThread;
+    auto* loopB = loopBThread.startLoop();
+
+    auto ioSocketsA = makeSocketPair();
+    auto ioSocketsB = makeSocketPair();
+    mini::net::broadcast::BroadcastRouter router(baseLoop);
+
+    auto connA = makeConnectionAsync(loopA, ioSocketsA.first, "player-a-conn");
+    auto connB = makeConnectionAsync(loopB, ioSocketsB.first, "player-b-conn");
+    const std::string sessionA = "player-a";
+    const std::string sessionB = "player-b";
+    const std::string group = "room-alpha";
+    const std::string aoi = "aoi-alpha";
+
+    router.registerSession(sessionA, connA);
+    router.registerSession(sessionB, connB);
+    router.joinGroup(sessionA, group);
+    router.joinGroup(sessionB, group);
+    router.joinAoi(sessionA, aoi);
+    router.joinAoi(sessionB, aoi);
+
+    assert(hasGroupMemberOnBaseLoop(baseLoop, router, group, sessionA));
+    assert(hasGroupMemberOnBaseLoop(baseLoop, router, group, sessionB));
+    assert(hasAoiMemberOnBaseLoop(baseLoop, router, aoi, sessionA));
+    assert(hasAoiMemberOnBaseLoop(baseLoop, router, aoi, sessionB));
+    assert(totalRoutedConnections(routeGroupOnBaseLoop(baseLoop, router, group)) == 2);
+    assert(totalRoutedConnections(routeAoiOnBaseLoop(baseLoop, router, aoi)) == 2);
+
+    router.leaveGroup(sessionA, group);
+    const auto groupAfterLeave = routeGroupOnBaseLoop(baseLoop, router, group);
+    assert(!hasGroupMemberOnBaseLoop(baseLoop, router, group, sessionA));
+    assert(hasGroupMemberOnBaseLoop(baseLoop, router, group, sessionB));
+    assert(totalRoutedConnections(groupAfterLeave) == 1);
+    assert(batchContainsConnection(groupAfterLeave, connB));
+
+    router.leaveAoi(sessionB, aoi);
+    const auto aoiAfterLeave = routeAoiOnBaseLoop(baseLoop, router, aoi);
+    assert(hasAoiMemberOnBaseLoop(baseLoop, router, aoi, sessionA));
+    assert(!hasAoiMemberOnBaseLoop(baseLoop, router, aoi, sessionB));
+    assert(totalRoutedConnections(aoiAfterLeave) == 1);
+    assert(batchContainsConnection(aoiAfterLeave, connA));
+
+    router.deregisterConnection(connA);
+    assert(!hasSessionOnBaseLoop(baseLoop, router, sessionA));
+    assert(!hasAoiMemberOnBaseLoop(baseLoop, router, aoi, sessionA));
+    assert(routeAoiOnBaseLoop(baseLoop, router, aoi).empty());
+    assert(sessionCountOnBaseLoop(baseLoop, router) == 1);
+
+    router.deregisterConnection(connB);
+    assert(!hasSessionOnBaseLoop(baseLoop, router, sessionB));
+    assert(!hasGroupMemberOnBaseLoop(baseLoop, router, group, sessionB));
+    assert(routeGroupOnBaseLoop(baseLoop, router, group).empty());
+    assert(sessionCountOnBaseLoop(baseLoop, router) == 0);
+
+    closeSocketPairPeer(ioSocketsA);
+    closeSocketPairPeer(ioSocketsB);
+
+    recycleConnection(loopA, std::move(connA));
+    recycleConnection(loopB, std::move(connB));
+}
+
 void testGuardedDeregisterKeepsReboundSession() {
     mini::net::EventLoopThread baseLoopThread;
     auto* baseLoop = baseLoopThread.startLoop();
@@ -289,6 +418,7 @@ void testGuardedDeregisterKeepsReboundSession() {
 int main() {
     testRouteBySessionIds();
     testRouteAllAndDeregister();
+    testGroupAndAoiMembershipLeaveAndDeregister();
     testGuardedDeregisterKeepsReboundSession();
     return 0;
 }

@@ -30,7 +30,7 @@ mini-trantor 当前不是：
 - Coroutine bridge：`Task<T>`、`SleepAwaitable`、`WhenAll`、`WhenAny`、`Timeout`、`ResolveAwaitable`。
 - 协议层：HTTP/1.1、WebSocket、RPC，协议层通过窄接口适配连接。
 - 客户端生态：`HttpClient`、`RpcConnectionPool`、DNS、TLS、IPv6。
-- 游戏底座 preview：TCP/UDP/KCP transport、PacketFramer、CodecAdapter、SessionManager、LogicLoop、GameServerPipeline、广播与指标 hook。
+- 游戏网络底座：TCP/UDP transport、KCP preview、PacketFramer、CodecAdapter、SessionManager、LogicLoop、GameServerPipeline、广播与指标 hook。
 - 工程护栏：GitHub Actions、ASan/UBSan、TSan 入口、fuzz 入口、benchmark 标签、install + `find_package` 验证。
 
 最近本地验证快照：
@@ -60,14 +60,22 @@ mini-trantor 当前不是：
 | TLS / IPv6 / graceful shutdown / signal | Beta | TLS echo/handshake、IPv6 connect、graceful shutdown 基线可用 | 补齐证书失败、peer close during handshake、shutdown stress |
 | HTTP / WebSocket / RPC | Beta | server/client/pool 主路径可用，协议层已与 transport 窄接口解耦 | fuzz corpus 长跑、畸形输入覆盖、协议错误路径补齐 |
 | `ProtocolConnectionAdapter` / `PacketFramer` / `CodecAdapter` | Beta | adapter、framing、codec roundtrip 有 unit/contract/integration，已新增 fuzz 入口 | fuzz smoke 进入 CI 后继续扩展 corpus 与 oversized/halfpack 压测 |
-| BroadcastRouter / BroadcastDispatcher / PayloadPool / metrics hooks | Beta | owner-loop fanout、payload sharing、广播延迟 benchmark 已存在 | 扩大连接数、房间/组/AOI bucket、重连窗口压力基线 |
-| UDP / KCP transport | Experimental | loopback、reliable-flow、transport abstraction 基线已跑通 | 拥塞、重传、乱序、丢包、真实游戏消息路径验证 |
-| PlayerSession / SessionManager / LogicLoop / GameServerPipeline | Experimental | vertical slice 已接通：framed packet -> auth/session -> logic -> response/broadcast | 示例 main、长跑、AOI 空间索引、reconnect replay 压测、生产可观测性文档 |
+| BroadcastRouter / BroadcastDispatcher / PayloadPool / metrics hooks | Beta | owner-loop fanout、payload sharing、广播延迟 benchmark 已存在 | 扩大连接数、group/aoi-id bucket、重连窗口压力基线 |
+| UDP / KCP transport | Experimental | loopback、reliable-flow、transport abstraction 基线已跑通 | 保持 KCP/PMTU/FEC preview 标签与 opt-in；补基础 UDP/KCP 游戏消息路径验证 |
+| PlayerSession / SessionManager / LogicLoop / GameServerPipeline | Experimental | vertical slice 已接通：framed packet -> auth/session -> logic -> response/broadcast | 示例 main、长跑、reconnect replay 压测、边界文档持续同步 |
 
 ## Architecture Map
 
 ```text
-Application / Game Server
+Client
+  |
+TCP / TLS / UDP / KCP preview
+  |
+TransportEndpoint / TransportManager
+  |
+PacketFramer / CodecAdapter
+  |
+Game Network Foundation
   └── GameServerPipeline
         ├── SessionManager / PlayerSession
         ├── LogicLoop / GameCommandQueue
@@ -75,7 +83,12 @@ Application / Game Server
         └── TransportManager
               ├── TCP endpoint
               ├── UDP endpoint
-              └── KCP endpoint
+              └── KCP endpoint (preview)
+
+Upper Game Server (out of core)
+  ├── Actor / Scene / Room
+  ├── DB / Redis / service proxy
+  └── Match / Rank / Guild / Mail
 
 Protocol Layer
   ├── HTTP / HttpClient
@@ -118,7 +131,10 @@ ctest --test-dir build --output-on-failure
 ```bash
 ./build/echo_server
 ./build/coroutine_echo_server
+./build/game_server 8890 0
 ```
+
+`game_server` 使用 `PacketFramer` 帧协议：`auth=1`、`command=2`、`broadcast=3`、`response=4`。认证 payload 可使用 `<session>` 或 `<session>|<nonce>`；成功后默认 command 响应为 `logic:<payload>`，broadcast 响应为 `broadcast:<payload>`。
 
 ### Install And Consume
 
@@ -154,8 +170,7 @@ int main() {
     mini::net::EventLoop loop;
     mini::net::TcpServer server(&loop, mini::net::InetAddress(8080, true), "echo");
     server.setMessageCallback([](const mini::net::TcpConnectionPtr& conn,
-                                 mini::net::Buffer* buffer,
-                                 mini::base::Timestamp) {
+                                 mini::net::Buffer* buffer) {
         conn->send(buffer->retrieveAllAsString());
     });
     server.start();
@@ -266,7 +281,7 @@ mini-trantor 不是“先写代码，再补说明”的项目。重要模块遵�
 - `mini/codec/`: Protobuf-style / FlatBuffers-style codec adapter。
 - `mini/game/`: PlayerSession、SessionManager、LogicLoop、GameServerPipeline。
 - `tests/`: `unit`、`contract`、`integration`、`fuzz` 分层测试。
-- `examples/`: 最小 echo 与 coroutine echo 示例。
+- `examples/`: 最小 echo、coroutine echo 与 game server vertical-slice 示例。
 - `docs/`: 架构阅读、模块说明、路线图、调用链与设计记录。
 
 ## Roadmap
@@ -275,13 +290,16 @@ mini-trantor 不是“先写代码，再补说明”的项目。重要模块遵�
 
 1. P1：README 与模块状态持续同步，避免定位漂移。
 2. P2：扩展 benchmark、长期 fuzz corpus、soak test 与生产就绪度文档。
-3. v6-alpha：补齐客户端生态示例和游戏服务端示例 main。
-4. 游戏底座后续：真实 AOI 空间索引、UDP/KCP 策略、重连窗口长跑、广播规模压测。
+3. Scope hardening：持续打磨 `game_server` vertical-slice 示例、scope gate、测试标签和边界文档。
+4. v6-alpha：继续补齐客户端生态示例与 HTTP/RPC client 复用能力。
+5. 游戏底座后续：重连窗口长跑、广播规模压测、基础 UDP/KCP 消息路径验证；AOI、账号、安全平台和分布式网关默认进入 adapter/example/downstream。
 
 详细路线：
 
 - [plan_and_execute.md](plan_and_execute.md)
 - [docs/roadmap.md](docs/roadmap.md)
 - [docs/roadmap_game_server_network_base_execution_plan.md](docs/roadmap_game_server_network_base_execution_plan.md)
+- [docs/game_server_network_base_scope_boundary.md](docs/game_server_network_base_scope_boundary.md)
+- [intents/architecture/game_network_base_scope.intent.md](intents/architecture/game_network_base_scope.intent.md)
 - [intents/architecture/v5_zeta_engineering_guardrails.intent.md](intents/architecture/v5_zeta_engineering_guardrails.intent.md)
 - [intents/architecture/v6_stages.intent.md](intents/architecture/v6_stages.intent.md)

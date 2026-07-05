@@ -5,8 +5,8 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Application Layer                         │
-│  (echo_server, coroutine_echo_server, HttpServer, WsServer,     │
-│   RpcServer/RpcClient-based apps)                               │
+│  (echo_server, coroutine_echo_server, game_server, HttpServer,  │
+│   WsServer, RpcServer/RpcClient-based apps)                     │
 ├─────────────────────────────────────────────────────────────────┤
 │                       Protocol Layer                             │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
@@ -70,6 +70,35 @@
         (epoll/timerfd/         (SSL_CTX/
          eventfd/socket)         SSL)
 ```
+
+## 游戏网络底座边界图
+
+mini-trantor 当前收口为 **game-network foundation + explicit transport preview**。它提供网络入口、会话生命周期、framing/codec、logic handoff、广播、基础背压和基础安全骨架；不继续内置账号系统、AOI 空间状态、房间模拟、分布式网关或生产级传输协议栈。
+
+```
+Client
+  |
+TCP / TLS / UDP / KCP preview
+  |
+TransportEndpoint / TransportManager
+  |
+PacketFramer / CodecAdapter
+  |
+GameServerPipeline
+  |
+SessionManager
+  |
+GameCommandQueue
+  |
+LogicLoop
+  |
+Upper Game Server (out of core)
+  |-- Actor / Scene / Room
+  |-- DB / Redis / service proxy
+  |-- Match / Rank / Guild / Mail
+```
+
+`KcpTransport`、PMTU signal/cache、raw ICMP listener、redundant copy、XOR parity 等能力只属于 transport preview：可以保留 contract，不能被描述为生产级 KCP/FEC/PMTU 栈。范围判断以 `docs/game_server_network_base_scope_boundary.md` 和 `intents/architecture/game_network_base_scope.intent.md` 为准。
 
 ## 分层说明
 

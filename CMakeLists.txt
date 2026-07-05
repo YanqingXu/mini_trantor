@@ -108,6 +108,9 @@ target_link_libraries(echo_server PRIVATE mini_trantor)
 add_executable(coroutine_echo_server examples/coroutine_echo_server/main.cpp)
 target_link_libraries(coroutine_echo_server PRIVATE mini_trantor)
 
+add_executable(game_server examples/game_server/main.cpp)
+target_link_libraries(game_server PRIVATE mini_trantor)
+
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()

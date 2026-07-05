@@ -201,4 +201,8 @@ Timestamp → noncopyable → InetAddress → Socket
   → HttpContext → HttpServer
   → WebSocketCodec → WebSocketServer
   → RpcCodec → RpcChannel → RpcServer / RpcClient
+  → PacketFramer → TransportManager
+  → PlayerSession → SessionManager
+  → GameCommandQueue → LogicLoop → GameServerPipeline
+  → docs/game_server_network_base_scope_boundary.md
 ```
