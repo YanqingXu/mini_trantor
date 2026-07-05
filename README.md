@@ -139,6 +139,7 @@ Windows 构建使用 CMake 的 `Visual Studio 18 2026` generator。项目提供 
 ```
 
 `windows-vs2026-x64` preset 固定 `CMAKE_GENERATOR_INSTANCE=D:/VS2026/2026`，避免同机多个 VS instance 时选错编译器。
+生成的 VS2026 解决方案与项目文件位于 `out/windows/windows-vs2026-x64/`，不再放在被 `.gitignore` 忽略的 `out/build/` 下。
 
 Windows preset 默认 `MINI_ENABLE_TLS=OFF`，因此无需 OpenSSL 也能构建普通 TCP/UDP、HTTP、WebSocket、RPC、KCP 与示例。若 OpenSSL 由 vcpkg 提供，可显式开启 TLS：
 

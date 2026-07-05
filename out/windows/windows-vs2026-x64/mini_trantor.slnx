@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Solution>
+	<Configurations>
+		<BuildType Name="Debug"/>
+		<BuildType Name="Release"/>
+		<BuildType Name="MinSizeRel"/>
+		<BuildType Name="RelWithDebInfo"/>
+		<Platform Name="x64"/>
+	</Configurations>
+	<Project Path="ALL_BUILD.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="29bc71b2-e39c-3196-943b-b320f2c0dd36" DefaultStartup="true">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="tests/contract_coroutine_test_cancellation_contract.vcxproj"/>
+		<BuildDependency Project="tests/contract_coroutine_test_combinator_contract.vcxproj"/>
+		<BuildDependency Project="tests/contract_coroutine_test_sleep_awaitable.vcxproj"/>
+		<BuildDependency Project="tests/contract_coroutine_test_timeout_contract.vcxproj"/>
+		<BuildDependency Project="tests/contract_event_loop_test_event_loop.vcxproj"/>
+		<BuildDependency Project="tests/contract_event_loop_thread_pool_test_event_loop_thread_pool.vcxproj"/>
+		<BuildDependency Project="tests/contract_event_loop_thread_test_event_loop_thread.vcxproj"/>
+		<BuildDependency Project="tests/contract_framing_test_framer_contract.vcxproj"/>
+		<BuildDependency Project="tests/contract_game_test_game_backpressure_policy_contract.vcxproj"/>
+		<BuildDependency Project="tests/contract_game_test_game_gateway_security_contract.vcxproj"/>
+		<BuildDependency Project="tests/contract_game_test_session_manager_contract.vcxproj"/>
+		<BuildDependency Project="tests/contract_logic_test_logic_loop_timing_contract.vcxproj"/>
+		<BuildDependency Project="tests/contract_timer_queue_test_timer_queue.vcxproj"/>
+		<BuildDependency Project="coroutine_echo_server.vcxproj"/>
+		<BuildDependency Project="echo_server.vcxproj"/>
+		<BuildDependency Project="game_server.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+		<BuildDependency Project="tests/unit_coroutine_test_cancellation_token.vcxproj"/>
+		<BuildDependency Project="tests/unit_coroutine_test_sleep_awaitable.vcxproj"/>
+		<BuildDependency Project="tests/unit_coroutine_test_task.vcxproj"/>
+		<BuildDependency Project="tests/unit_coroutine_test_when_all.vcxproj"/>
+		<BuildDependency Project="tests/unit_coroutine_test_when_any.vcxproj"/>
+		<BuildDependency Project="tests/unit_framing_test_framer.vcxproj"/>
+		<BuildDependency Project="tests/unit_game_test_game_backpressure_policy.vcxproj"/>
+		<BuildDependency Project="tests/unit_game_test_game_gateway_security_policy.vcxproj"/>
+		<BuildDependency Project="tests/unit_game_test_player_session_fsm.vcxproj"/>
+		<BuildDependency Project="tests/unit_kcp_test_kcp_codec.vcxproj"/>
+		<BuildDependency Project="tests/unit_logic_test_game_command_queue.vcxproj"/>
+		<BuildDependency Project="tests/unit_metrics_test_metrics_exporter.vcxproj"/>
+		<BuildDependency Project="tests/unit_metrics_test_metrics_hook_ext.vcxproj"/>
+		<BuildDependency Project="tests/unit_timer_queue_test_timer_id.vcxproj"/>
+	</Project>
+	<Project Path="Continuous.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="3b6463f9-7093-380a-9486-272319229a60">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="Experimental.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="e1fae76f-001f-3e49-a884-c284ad6ffa1c">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="INSTALL.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="f8cbaf4a-eb40-3b03-9001-917e8311c6f5">
+		<BuildDependency Project="ALL_BUILD.vcxproj"/>
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="Nightly.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="33566239-3184-3960-beaf-911507a9388b">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="NightlyMemoryCheck.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="57e48dfa-1bc7-388c-b76e-0a9495dcf9bd">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="RUN_TESTS.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="aee2c517-b6a1-3310-92c7-e4eb4b4646c2">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Project Path="ZERO_CHECK.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="5594af68-8211-365b-bd27-9a136f12c61d"/>
+	<Project Path="tests/contract_coroutine_test_cancellation_contract.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="82f3a269-9130-31a2-8723-8c2e1d65cfbd">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/contract_coroutine_test_combinator_contract.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="47946263-7d4e-34c1-b064-8260353a7df8">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/contract_coroutine_test_sleep_awaitable.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="5fd7da79-8681-39de-b579-145aafaee096">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/contract_coroutine_test_timeout_contract.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="1d7c0afa-6101-3f48-9411-25369f9ee0a5">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/contract_event_loop_test_event_loop.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="15f8272a-653a-3db9-aa81-118e6bc9603a">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/contract_event_loop_thread_pool_test_event_loop_thread_pool.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="b334aa30-6cb3-3d2d-ad9b-17659fe4747e">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/contract_event_loop_thread_test_event_loop_thread.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="3eabbaaa-ec94-34c4-ae4e-e71d7bdd8367">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/contract_framing_test_framer_contract.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="869e379c-3984-3be7-b7c7-e197f90d2222">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/contract_game_test_game_backpressure_policy_contract.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="699df154-f7d3-3c6d-b0b2-fd3f7646ff12">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/contract_game_test_game_gateway_security_contract.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="19c731c2-9f71-36a6-942a-d19fca4ff9f0">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/contract_game_test_session_manager_contract.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="1e7252dc-e025-3f5b-bdf1-8cca7bb6dc48">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/contract_logic_test_logic_loop_timing_contract.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="cbcd385f-3009-3393-8789-02dd76f73df0">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/contract_timer_queue_test_timer_queue.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="e439e392-1f42-3602-9a99-fe7e35b6ef4f">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="coroutine_echo_server.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="a10aca6e-3c89-39b2-9fa4-4185e8e456da">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="echo_server.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="c6c6cc36-a144-3828-92d6-98573016541d">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="game_server.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="c05888ab-989d-3555-babe-d6ee33cc20c1">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="mini_trantor.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="33b75bc8-70ab-3520-9fd4-11e2814c26de">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="tests/unit_coroutine_test_cancellation_token.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="4ad22081-2b8e-391f-b2eb-25beb62a6521">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/unit_coroutine_test_sleep_awaitable.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="b2a0aaa4-46bd-3e16-a356-e7374d60de06">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/unit_coroutine_test_task.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="502034d2-a9e5-3edd-834e-d424d2012fd5">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/unit_coroutine_test_when_all.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="11bd1257-6725-326b-b0d0-eb3889364678">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/unit_coroutine_test_when_any.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="fc8ddb5c-c5f4-3c7c-9078-0dd3722ea2fc">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/unit_framing_test_framer.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="26e924fd-dded-38f2-b83e-0bb88f2b658f">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/unit_game_test_game_backpressure_policy.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="bc2c2a9e-f42d-3977-973b-176158aa7a1c">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/unit_game_test_game_gateway_security_policy.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="32acfb25-4da8-3d4c-a240-c18ea2d4004d">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/unit_game_test_player_session_fsm.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="2b834e74-d853-303a-86e9-4b923803a0b6">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/unit_kcp_test_kcp_codec.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="5cbc3dfa-722b-3b3d-b0ab-aee6fa7cf538">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/unit_logic_test_game_command_queue.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="b7216438-5268-38f2-bbe5-cb4642b36fa0">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/unit_metrics_test_metrics_exporter.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="4847f0a0-60bd-3fec-989c-3293bbd4b633">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/unit_metrics_test_metrics_hook_ext.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="b2bc3592-5ec7-39e5-8c66-1d02cba75233">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+	<Project Path="tests/unit_timer_queue_test_timer_id.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="f52264c3-ef7c-3f46-b4be-b05eb250df6a">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="mini_trantor.vcxproj"/>
+	</Project>
+</Solution>

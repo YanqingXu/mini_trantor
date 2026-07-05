@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"E:/Programming2/mini_trantor/out/windows/windows-vs2026-x64/cmake_install.cmake",
+		"E:/Programming2/mini_trantor/out/windows/windows-vs2026-x64/tests/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
