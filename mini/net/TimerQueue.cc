@@ -1,71 +1,42 @@
 #include "mini/net/TimerQueue.h"
 
-#include "mini/net/Channel.h"
 #include "mini/net/EventLoop.h"
 
-#include "mini/base/Logger.h"
-
-#include <cerrno>
-#include <cstring>
+#include <algorithm>
+#include <chrono>
 #include <limits>
 #include <stdexcept>
-
-#include <sys/timerfd.h>
-#include <unistd.h>
 
 namespace mini::net {
 
 namespace {
 
-int createTimerfd() {
-    const int timerfd = ::timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
-    if (timerfd < 0) {
-        LOG_SYSFATAL << "timerfd_create: " << std::strerror(errno);
-    }
-    return timerfd;
-}
-
-timespec toTimespec(std::chrono::steady_clock::duration delay) {
+int ceilMilliseconds(std::chrono::steady_clock::duration delay) {
     using namespace std::chrono;
 
-    if (delay < 1us) {
-        delay = 1us;
+    if (delay <= steady_clock::duration::zero()) {
+        return 0;
     }
 
-    const auto secondsPart = duration_cast<seconds>(delay);
-    const auto nanosecondsPart = duration_cast<nanoseconds>(delay - secondsPart);
-
-    timespec ts{};
-    ts.tv_sec = static_cast<time_t>(secondsPart.count());
-    ts.tv_nsec = static_cast<long>(nanosecondsPart.count());
-    return ts;
-}
-
-void readTimerfdOrDie(int timerfd) {
-    std::uint64_t expirations = 0;
-    const ssize_t n = ::read(timerfd, &expirations, sizeof(expirations));
-    if (n == static_cast<ssize_t>(sizeof(expirations)) || errno == EAGAIN) {
-        return;
+    auto millisecondsPart = duration_cast<milliseconds>(delay);
+    if (millisecondsPart < delay) {
+        ++millisecondsPart;
     }
-    LOG_SYSFATAL << "TimerQueue::handleRead: " << std::strerror(errno);
+    const auto capped = std::min<std::int64_t>(
+        millisecondsPart.count(),
+        std::numeric_limits<int>::max());
+    return static_cast<int>(std::max<std::int64_t>(1, capped));
 }
 
 }  // namespace
 
 TimerQueue::TimerQueue(EventLoop* loop)
     : loop_(loop),
-      timerfd_(createTimerfd()),
-      timerfdChannel_(std::make_unique<Channel>(loop, timerfd_)),
       nextSequence_(1) {
-    timerfdChannel_->setReadCallback([this](mini::base::Timestamp receiveTime) { handleRead(receiveTime); });
-    timerfdChannel_->enableReading();
 }
 
 TimerQueue::~TimerQueue() {
     loop_->assertInLoopThread();
-    timerfdChannel_->disableAll();
-    timerfdChannel_->remove();
-    ::close(timerfd_);
 }
 
 TimerId TimerQueue::addTimer(TimerCallback cb, mini::base::Timestamp when, Duration interval) {
@@ -114,28 +85,35 @@ void TimerQueue::cancelInLoop(TimerId timerId) {
         timer->inQueue = false;
         timersById_.erase(found);
 
-        if (timers_.empty()) {
-            disarmTimerfd();
-        } else {
-            resetTimerfd(timers_.begin()->second->expiration);
-        }
         return;
     }
 
     timersById_.erase(found);
 }
 
-void TimerQueue::handleRead(mini::base::Timestamp receiveTime) {
+int TimerQueue::pollTimeoutMs(int defaultTimeoutMs) const {
     loop_->assertInLoopThread();
-    readTimerfdOrDie(timerfd_);
+    if (timers_.empty()) {
+        return defaultTimeoutMs;
+    }
 
-    auto expired = getExpired(receiveTime);
+    const int nextTimerMs = ceilMilliseconds(timers_.begin()->second->expiration - mini::base::now());
+    return std::min(defaultTimeoutMs, nextTimerMs);
+}
+
+void TimerQueue::handleExpired(mini::base::Timestamp now) {
+    loop_->assertInLoopThread();
+    if (timers_.empty() || timers_.begin()->second->expiration > now) {
+        return;
+    }
+
+    auto expired = getExpired(now);
     for (const auto& timer : expired) {
         if (!timer->canceled) {
             timer->callback();
         }
     }
-    reset(expired, receiveTime);
+    reset(expired, mini::base::now());
 }
 
 bool TimerQueue::insert(TimerPtr timer) {
@@ -146,10 +124,6 @@ bool TimerQueue::insert(TimerPtr timer) {
     timer->canceled = false;
     timersById_[timer->sequence] = timer;
     timers_.emplace(TimerKey{timer->expiration, timer->sequence}, timer);
-
-    if (earliestChanged) {
-        resetTimerfd(timer->expiration);
-    }
 
     return earliestChanged;
 }
@@ -178,29 +152,6 @@ void TimerQueue::reset(const std::vector<TimerPtr>& expired, mini::base::Timesta
         timersById_.erase(timer->sequence);
     }
 
-    if (timers_.empty()) {
-        disarmTimerfd();
-    } else {
-        resetTimerfd(timers_.begin()->second->expiration);
-    }
-}
-
-void TimerQueue::resetTimerfd(mini::base::Timestamp expiration) const {
-    const auto delay = expiration - mini::base::now();
-
-    itimerspec newValue{};
-    newValue.it_value = toTimespec(delay);
-
-    if (::timerfd_settime(timerfd_, 0, &newValue, nullptr) < 0) {
-        LOG_SYSFATAL << "TimerQueue::resetTimerfd: " << std::strerror(errno);
-    }
-}
-
-void TimerQueue::disarmTimerfd() const {
-    const itimerspec disarmed{};
-    if (::timerfd_settime(timerfd_, 0, &disarmed, nullptr) < 0) {
-        LOG_SYSFATAL << "TimerQueue::disarmTimerfd: " << std::strerror(errno);
-    }
 }
 
 }  // namespace mini::net

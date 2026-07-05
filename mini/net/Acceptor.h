@@ -7,6 +7,7 @@
 #include "mini/net/Channel.h"
 #include "mini/net/InetAddress.h"
 #include "mini/net/Socket.h"
+#include "mini/net/SocketTypes.h"
 
 #include <functional>
 
@@ -16,7 +17,7 @@ class EventLoop;
 
 class Acceptor : private mini::base::noncopyable {
 public:
-    using NewConnectionCallback = std::function<void(int sockfd, const InetAddress&)>;
+    using NewConnectionCallback = std::function<void(SocketFd sockfd, const InetAddress&)>;
 
     Acceptor(EventLoop* loop, const InetAddress& listenAddr, bool reusePort);
     ~Acceptor();

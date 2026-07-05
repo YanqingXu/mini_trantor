@@ -23,26 +23,22 @@ loop->runAfter(delay, cb)
 addTimerInLoop():
   → auto timer = make_unique<Timer>(cb, when, interval)
   → timers_.insert({TimerKey{when, sequence++}, move(timer)})
-  → 如果新定时器是最早的:
-      → resetTimerfd(timerfd_, when)       // 更新 timerfd 超时时间
-      → timerfd_settime(timerfd_, ...)
   → return TimerId(timer.get(), sequence)
 ```
 
 ## 定时器触发流程
 
 ```
-timerfd 到期
-  → 内核写入 timerfd (变为可读)
-  → epoll_wait 返回 EPOLLIN on timerfd
-  → Channel::handleEvent()
-  → TimerQueue::handleRead()
+EventLoop::loop()
+  → timerQueue_->pollTimeoutMs(defaultTimeout)
+  → poller_->poll(timeoutMs, activeChannels)
+  → dispatch active Channel callbacks
+  → timerQueue_->handleExpired(now)
 ```
 
 ```cpp
-void TimerQueue::handleRead() {
+void TimerQueue::handleExpired(Timestamp now) {
     Timestamp now = Timestamp::now();
-    readTimerfd(timerfd_);          // 消费 timerfd 数据，防止重复触发
 
     // 1. 收集所有已到期的定时器
     auto expired = getExpired(now);
@@ -89,11 +85,7 @@ void TimerQueue::reset(const std::vector<Entry>& expired, Timestamp now) {
         // 非重复定时器自动销毁（unique_ptr）
     }
 
-    // 更新 timerfd 为下一个最早到期的时间
-    if (!timers_.empty()) {
-        Timestamp nextExpire = timers_.begin()->second->expiration();
-        resetTimerfd(timerfd_, nextExpire);
-    }
+    // 下一轮 EventLoop::poll 前会重新计算最近超时
 }
 ```
 
@@ -118,25 +110,24 @@ loop->cancelTimer(timerId)
    ├─ addTimer(cb1, t=2)                   │
    ├─ addTimer(cb2, t=3, repeat=1s)        │
    │       │       │       │       │       │
-   │       │    timerfd    │       │       │
-   │       │    fires ─►   │       │       │
+   │       │    poll timeout        │       │
+   │       │    returns ─►          │       │
    │       │    cb1()      │       │       │
-   │       │       │    timerfd    │       │
-   │       │       │    fires ─►  │       │
+   │       │       │    poll timeout        │
+   │       │       │    returns ─►          │
    │       │       │    cb2()     │       │
    │       │       │    reset cb2 │       │
-   │       │       │    to t=4  timerfd   │
-   │       │       │       │   fires ─►   │
+   │       │       │    to t=4  poll timeout
+   │       │       │       │   returns ─► │
    │       │       │       │   cb2()      │
    │       │       │       │   reset to t=5
 ```
 
-## timerfd 与 eventfd 的对比
+## TimerQueue 与 EventLoop wakeup 的对比
 
-| 特性 | timerfd | eventfd |
-|------|---------|---------|
-| 用途 | 定时触发 | 线程唤醒 |
-| 触发方式 | 到期自动可读 | 手动 write |
-| 精度 | 纳秒级 | N/A |
-| 一次读取 | uint64_t 过期次数 | uint64_t 累计值 |
-| 本项目使用 | TimerQueue | EventLoop::wakeup |
+| 特性 | TimerQueue poll timeout | EventLoop wakeup |
+|------|--------------------------|------------------|
+| 用途 | 定时触发 | 跨线程任务唤醒 |
+| 触发方式 | Poller 等待到最近 timer 到期 | 其他线程写入 wakeup fd/socket |
+| 执行线程 | owner EventLoop | owner EventLoop |
+| 本项目使用 | `runAt/runAfter/runEvery/cancel` | `runInLoop/queueInLoop/quit` |

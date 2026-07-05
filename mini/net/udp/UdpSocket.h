@@ -9,13 +9,13 @@
 #include "mini/net/Channel.h"
 #include "mini/net/InetAddress.h"
 #include "mini/net/Socket.h"
+#include "mini/net/SocketTypes.h"
 #include "mini/net/udp/PathMtuSignal.h"
 
 #include <atomic>
 #include <functional>
 #include <cstddef>
 #include <memory>
-#include <netinet/in.h>
 #include <string>
 #include <string_view>
 
@@ -59,7 +59,7 @@ public:
     void sendTo(std::string_view data, const InetAddress& peerAddr);
 
     EventLoop* getLoop() const noexcept;
-    int fd() const noexcept;
+    SocketFd fd() const noexcept;
     std::string_view name() const noexcept;
 
 private:

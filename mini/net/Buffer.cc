@@ -1,10 +1,14 @@
 #include "mini/net/Buffer.h"
 
+#include "mini/net/SocketsOps.h"
+
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+
+#ifndef _WIN32
 #include <sys/uio.h>
-#include <unistd.h>
+#endif
 
 namespace mini::net {
 
@@ -88,7 +92,19 @@ void Buffer::hasWritten(std::size_t len) {
     writerIndex_ += len;
 }
 
-ssize_t Buffer::readFd(int fd, int* savedErrno) {
+ssize_t Buffer::readFd(SocketFd fd, int* savedErrno) {
+#ifdef _WIN32
+    if (writableBytes() < 65536) {
+        makeSpace(65536);
+    }
+    const ssize_t n = sockets::read(fd, beginWrite(), writableBytes());
+    if (n < 0) {
+        *savedErrno = sockets::lastError();
+        return n;
+    }
+    writerIndex_ += static_cast<std::size_t>(n);
+    return n;
+#else
     char extraBuffer[65536];
     struct iovec vec[2];
     const std::size_t writable = writableBytes();
@@ -101,7 +117,7 @@ ssize_t Buffer::readFd(int fd, int* savedErrno) {
     const int iovcnt = writable < sizeof(extraBuffer) ? 2 : 1;
     const ssize_t n = ::readv(fd, vec, iovcnt);
     if (n < 0) {
-        *savedErrno = errno;
+        *savedErrno = sockets::lastError();
         return n;
     }
     if (static_cast<std::size_t>(n) <= writable) {
@@ -111,12 +127,13 @@ ssize_t Buffer::readFd(int fd, int* savedErrno) {
         append(extraBuffer, static_cast<std::size_t>(n) - writable);
     }
     return n;
+#endif
 }
 
-ssize_t Buffer::writeFd(int fd, int* savedErrno) {
-    const ssize_t n = ::write(fd, peek(), readableBytes());
+ssize_t Buffer::writeFd(SocketFd fd, int* savedErrno) {
+    const ssize_t n = sockets::write(fd, peek(), readableBytes());
     if (n < 0) {
-        *savedErrno = errno;
+        *savedErrno = sockets::lastError();
     }
     return n;
 }

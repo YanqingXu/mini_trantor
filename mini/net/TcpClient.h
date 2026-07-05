@@ -11,6 +11,7 @@
 #include "mini/base/noncopyable.h"
 #include "mini/net/Callbacks.h"
 #include "mini/net/InetAddress.h"
+#include "mini/net/SocketTypes.h"
 #include "mini/net/TcpClientOptions.h"
 
 #include <cstdint>
@@ -80,7 +81,7 @@ private:
     void connectInLoop();
     void disconnectInLoop();
     void stopInLoop();
-    void newConnection(int sockfd);
+    void newConnection(SocketFd sockfd);
     void removeConnection(const TcpConnectionPtr& conn);
     void initConnector(const InetAddress& serverAddr);
     void initConnector(const InetAddress& serverAddr, const ConnectorOptions& options);

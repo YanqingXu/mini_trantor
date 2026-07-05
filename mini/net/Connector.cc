@@ -9,7 +9,6 @@
 #include <cassert>
 #include <cerrno>
 #include <cstring>
-#include <sys/socket.h>
 
 namespace mini::net {
 
@@ -104,7 +103,7 @@ void Connector::stopInLoop() {
     }
     if (state_ == kConnecting) {
         state_ = kDisconnected;
-        const int sockfd = removeAndResetChannel();
+        const SocketFd sockfd = removeAndResetChannel();
         sockets::close(sockfd);
     }
 }
@@ -114,47 +113,31 @@ void Connector::connect() {
         connectorEventCallback_(serverAddr_, ConnectorEvent::ConnectAttempt);
     }
 
-    const int sockfd = sockets::createNonblockingOrDie(serverAddr_.family());
-    const int ret = ::connect(sockfd, serverAddr_.getSockAddr(), serverAddr_.getSockAddrLen());
-    const int savedErrno = (ret == 0) ? 0 : errno;
+    const SocketFd sockfd = sockets::createNonblockingOrDie(serverAddr_.family());
+    const int ret = sockets::connect(sockfd, serverAddr_.getSockAddr(), serverAddr_.getSockAddrLen());
+    const int savedError = (ret == 0) ? 0 : sockets::lastError();
 
-    switch (savedErrno) {
-        case 0:
-        case EINPROGRESS:
-        case EINTR:
-        case EISCONN:
-            connecting(sockfd);
-            break;
-
-        case EAGAIN:
-        case EADDRINUSE:
-        case EADDRNOTAVAIL:
-        case ECONNREFUSED:
-        case ENETUNREACH:
-            if (connectorEventCallback_) {
-                connectorEventCallback_(serverAddr_, ConnectorEvent::ConnectFailed);
-            }
-            retry(sockfd);
-            break;
-
-        case EACCES:
-        case EPERM:
-        case EAFNOSUPPORT:
-        case EALREADY:
-        case EBADF:
-        case EFAULT:
-        case ENOTSOCK:
-        default:
-            LOG_ERROR << "Connector::connect error: " << std::strerror(savedErrno);
-            if (connectorEventCallback_) {
-                connectorEventCallback_(serverAddr_, ConnectorEvent::ConnectFailed);
-            }
-            sockets::close(sockfd);
-            break;
+    if (savedError == 0 || sockets::isInProgress(savedError) || sockets::isInterrupted(savedError)) {
+        connecting(sockfd);
+        return;
     }
+
+    if (sockets::isConnectRetryable(savedError)) {
+        if (connectorEventCallback_) {
+            connectorEventCallback_(serverAddr_, ConnectorEvent::ConnectFailed);
+        }
+        retry(sockfd);
+        return;
+    }
+
+    LOG_ERROR << "Connector::connect error: " << sockets::errorMessage(savedError);
+    if (connectorEventCallback_) {
+        connectorEventCallback_(serverAddr_, ConnectorEvent::ConnectFailed);
+    }
+    sockets::close(sockfd);
 }
 
-void Connector::connecting(int sockfd) {
+void Connector::connecting(SocketFd sockfd) {
     state_ = kConnecting;
     assert(!channel_);
     channel_ = std::make_unique<Channel>(loop_, sockfd);
@@ -182,11 +165,11 @@ void Connector::handleWrite() {
     }
 
     // Remove channel before delivering fd — ownership transfers to upper layer.
-    const int sockfd = removeAndResetChannel();
+    const SocketFd sockfd = removeAndResetChannel();
 
     const int err = sockets::getSocketError(sockfd);
     if (err != 0) {
-        LOG_ERROR << "Connector::handleWrite SO_ERROR = " << err << ": " << std::strerror(err);
+        LOG_ERROR << "Connector::handleWrite SO_ERROR = " << err << ": " << sockets::errorMessage(err);
         if (connectorEventCallback_) {
             connectorEventCallback_(serverAddr_, ConnectorEvent::ConnectFailed);
         }
@@ -244,9 +227,9 @@ void Connector::handleError() {
         connectTimeoutTimerId_ = {};
     }
 
-    const int sockfd = removeAndResetChannel();
+    const SocketFd sockfd = removeAndResetChannel();
     const int err = sockets::getSocketError(sockfd);
-    LOG_ERROR << "Connector::handleError SO_ERROR = " << err << ": " << std::strerror(err);
+    LOG_ERROR << "Connector::handleError SO_ERROR = " << err << ": " << sockets::errorMessage(err);
     if (connectorEventCallback_) {
         connectorEventCallback_(serverAddr_, ConnectorEvent::ConnectFailed);
     }
@@ -268,17 +251,17 @@ void Connector::handleConnectTimeout() {
     }
 
     // Close the connecting socket and retry or fail.
-    const int sockfd = removeAndResetChannel();
+    const SocketFd sockfd = removeAndResetChannel();
     sockets::close(sockfd);
     state_ = kDisconnected;
 
     if (connect_) {
-        retry(0);  // No socket to close (already closed), but schedule retry.
+        retry(kInvalidSocket);  // No socket to close (already closed), but schedule retry.
     }
 }
 
-void Connector::retry(int sockfd) {
-    if (sockfd >= 0) {
+void Connector::retry(SocketFd sockfd) {
+    if (sockets::isValid(sockfd)) {
         sockets::close(sockfd);
     }
     state_ = kDisconnected;
@@ -296,10 +279,10 @@ void Connector::retry(int sockfd) {
     }
 }
 
-int Connector::removeAndResetChannel() {
+SocketFd Connector::removeAndResetChannel() {
     channel_->disableAll();
     channel_->remove();
-    const int sockfd = channel_->fd();
+    const SocketFd sockfd = channel_->fd();
     // Can't reset channel_ here because we're inside a channel callback.
     // Defer the reset via queueInLoop.
     loop_->queueInLoop([self = shared_from_this()] { self->resetChannel(); });

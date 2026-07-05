@@ -8,6 +8,8 @@
 #include <string_view>
 #include <vector>
 
+#include "mini/net/SocketTypes.h"
+
 namespace mini::net {
 
 class Buffer {
@@ -38,8 +40,8 @@ public:
     void ensureWritableBytes(std::size_t len);
     void hasWritten(std::size_t len);
 
-    ssize_t readFd(int fd, int* savedErrno);
-    ssize_t writeFd(int fd, int* savedErrno);
+    ssize_t readFd(SocketFd fd, int* savedErrno);
+    ssize_t writeFd(SocketFd fd, int* savedErrno);
 
 private:
     char* begin() noexcept;

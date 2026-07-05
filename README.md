@@ -32,6 +32,7 @@ mini-trantor 当前不是：
 - 客户端生态：`HttpClient`、`RpcConnectionPool`、DNS、TLS、IPv6。
 - 游戏网络底座：TCP/UDP transport、KCP preview、PacketFramer、CodecAdapter、SessionManager、LogicLoop、GameServerPipeline、广播与指标 hook。
 - 工程护栏：GitHub Actions、ASan/UBSan、TSan 入口、fuzz 入口、benchmark 标签、install + `find_package` 验证。
+- 平台后端：Linux 使用 `EPollPoller`，Windows 使用 `SelectPoller` 预览后端；核心 EventLoop/TimerQueue/TCP 语义保持一致。
 
 最近本地验证快照：
 
@@ -52,7 +53,7 @@ mini-trantor 当前不是：
 
 | 模块 | 状态 | 当前依据 | 升级或保持条件 |
 | --- | --- | --- | --- |
-| `EventLoop` / `Channel` / `Poller` / `EPollPoller` / `TimerQueue` | Stable | Reactor 主链路与 owner-thread contract 已建立，ASan 覆盖核心路径 | 持续通过 ASan/UBSan；TSan 风险集合长期无告警 |
+| `EventLoop` / `Channel` / `Poller` / `EPollPoller` / `SelectPoller` / `TimerQueue` | Stable | Reactor 主链路与 owner-thread contract 已建立，ASan 覆盖核心路径；Windows select 后端保持同一 Channel 语义 | 持续通过 ASan/UBSan；TSan 风险集合长期无告警；Windows VS2026 构建持续验证 |
 | `Buffer` / `Acceptor` / `TcpConnection` / `TcpServer` | Stable | 服务端主路径、关闭路径、连接生命周期与 coroutine awaiter 有 contract/integration 覆盖 | 增加更多 close race、half-close、soak 与 backpressure 压测 |
 | `EventLoopThread` / `EventLoopThreadPool` | Stable | one-loop-per-thread、stop、join、queued functor drain 语义已有测试 | Clang TSan 长期覆盖 threading 标签 |
 | `TcpClient` / `Connector` / `DnsResolver` | Beta | 主链路、hostname connect、DNS awaitable、重连路径可用 | 补齐 DNS fail/cache-expire/cancel race 与更多重连压力测试 |
@@ -106,7 +107,7 @@ Async Layer
 Reactor Core
   ├── EventLoop
   ├── Channel
-  ├── Poller / EPollPoller
+  ├── Poller / EPollPoller / SelectPoller
   ├── TimerQueue
   └── PendingFunctor queue
 
@@ -125,6 +126,31 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
 cmake --build build -j$(nproc)
 ctest --test-dir build --output-on-failure
 ```
+
+### Windows / Visual Studio 2026
+
+Windows 构建使用 CMake 的 `Visual Studio 18 2026` generator。项目提供 preset：
+
+```powershell
+cmake --preset windows-vs2026-x64
+cmake --build --preset windows-vs2026-x64
+ctest --preset windows-vs2026-x64
+```
+
+如果 OpenSSL 由 vcpkg 提供，可在配置时加上 toolchain：
+
+```powershell
+cmake --preset windows-vs2026-x64 `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+```
+
+Windows 当前后端说明：
+
+- `EventLoop` 使用 WinSock loopback socket pair 作为 wakeup 机制。
+- `Poller::newDefaultPoller()` 在 Windows 返回 `SelectPoller`，在 Linux 返回 `EPollPoller`。
+- `TimerQueue` 由 `Poller::poll(timeoutMs)` 驱动，不依赖 Linux `timerfd`。
+- Linux-only `SignalWatcher` / raw ICMP PMTU listener 在 Windows 上显式不可用；普通 TCP/UDP、HTTP/WebSocket/RPC/KCP 代码可编译。
+- Windows 测试矩阵先覆盖核心可移植契约子集；Linux 继续构建完整测试矩阵。
 
 ### Run Examples
 

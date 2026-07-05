@@ -10,9 +10,6 @@
 #include <array>
 #include <cerrno>
 #include <cstring>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
 #include <utility>
 
 namespace mini::net::udp {
@@ -30,6 +27,14 @@ constexpr std::uint8_t kIpProtocolUdp = 17;
 constexpr std::uint8_t kIpProtocolIcmpv6 = 58;
 constexpr std::size_t kIpv6HeaderSize = 40;
 constexpr std::size_t kUdpHeaderSize = 8;
+
+int messageSizeErrorCode() noexcept {
+#ifdef _WIN32
+    return WSAEMSGSIZE;
+#else
+    return EMSGSIZE;
+#endif
+}
 
 std::uint16_t read16(std::string_view data, std::size_t offset) {
     return static_cast<std::uint16_t>(
@@ -145,17 +150,29 @@ bool IcmpPathMtuListener::start() {
     if (addressFamily_ == AF_INET6) {
         protocol = IPPROTO_ICMPV6;
     }
-    const int fd = ::socket(addressFamily_, SOCK_RAW | SOCK_NONBLOCK | SOCK_CLOEXEC, protocol);
+    const SocketFd fd = ::socket(addressFamily_, SOCK_RAW | SOCK_NONBLOCK | SOCK_CLOEXEC, protocol);
 #else
-    const int fd = -1;
-    errno = EOPNOTSUPP;
+    const SocketFd fd = kInvalidSocket;
+    sockets::setLastError(
+#ifdef _WIN32
+        WSAEOPNOTSUPP
+#else
+        EOPNOTSUPP
 #endif
-    if (fd < 0) {
+    );
+#endif
+    if (!sockets::isValid(fd)) {
         available_ = false;
-        if (errno != EPERM && errno != EACCES && errno != EPROTONOSUPPORT &&
-            errno != EAFNOSUPPORT && errno != EOPNOTSUPP) {
+        const int error = sockets::lastError();
+#ifdef _WIN32
+        if (error != WSAEACCES && error != WSAEPROTONOSUPPORT &&
+            error != WSAEAFNOSUPPORT && error != WSAEOPNOTSUPP) {
+#else
+        if (error != EPERM && error != EACCES && error != EPROTONOSUPPORT &&
+            error != EAFNOSUPPORT && error != EOPNOTSUPP) {
+#endif
             LOG_SYSERR << "IcmpPathMtuListener::start raw socket failed: "
-                       << std::strerror(errno);
+                       << sockets::errorMessage(error);
         }
         return false;
     }
@@ -246,7 +263,7 @@ bool IcmpPathMtuListener::parseIpv4PacketTooBig(std::string_view packet,
     out.peerAddr = InetAddress(makeIpv4Address(peerAddress, htons(destPort)));
     out.failedDatagramPayloadSize = static_cast<std::size_t>(udpLength - kUdpHeaderSize);
     out.suggestedDatagramPayloadSize = udpPayloadSizeFromIpv4Mtu(nextHopMtu);
-    out.errorCode = EMSGSIZE;
+    out.errorCode = messageSizeErrorCode();
     out.source = PathMtuSignalSource::kRawIcmp;
     out.quotedUdpPayloadPrefix = quotedUdpPayloadPrefix(packet, udpOffset + kUdpHeaderSize);
     return true;
@@ -306,7 +323,7 @@ bool IcmpPathMtuListener::parseIpv6PacketTooBig(std::string_view packet,
         makeIpv6Address(packet.data() + innerIpOffset + 24, htons(destPort)));
     out.failedDatagramPayloadSize = static_cast<std::size_t>(udpLength - kUdpHeaderSize);
     out.suggestedDatagramPayloadSize = udpPayloadSizeFromIpv6Mtu(nextHopMtu);
-    out.errorCode = EMSGSIZE;
+    out.errorCode = messageSizeErrorCode();
     out.source = PathMtuSignalSource::kRawIcmp;
     out.quotedUdpPayloadPrefix = quotedUdpPayloadPrefix(packet, udpOffset + kUdpHeaderSize);
     return true;
@@ -319,15 +336,16 @@ void IcmpPathMtuListener::handleRead() {
 
     for (std::size_t count = 0; count < kMaxIcmpPacketsPerRead; ++count) {
         std::array<char, kRawPacketBufferSize> buffer{};
-        const ssize_t n = ::recv(socket_->fd(), buffer.data(), buffer.size(), 0);
+        const ssize_t n = sockets::read(socket_->fd(), buffer.data(), buffer.size());
         if (n < 0) {
-            if (errno == EINTR) {
+            const int error = sockets::lastError();
+            if (sockets::isInterrupted(error)) {
                 --count;
                 continue;
             }
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            if (!sockets::isWouldBlock(error)) {
                 LOG_SYSERR << "IcmpPathMtuListener::handleRead recv failed: "
-                           << std::strerror(errno);
+                           << sockets::errorMessage(error);
             }
             return;
         }

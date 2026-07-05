@@ -11,6 +11,7 @@
 #include "mini/net/Callbacks.h"
 #include "mini/net/InetAddress.h"
 #include "mini/net/NetError.h"
+#include "mini/net/SocketTypes.h"
 
 #include <any>
 #include <coroutine>
@@ -36,7 +37,7 @@ public:
     TcpConnection(
         EventLoop* loop,
         std::string name,
-        int sockfd,
+        SocketFd sockfd,
         const InetAddress& localAddr,
         const InetAddress& peerAddr);
     ~TcpConnection();

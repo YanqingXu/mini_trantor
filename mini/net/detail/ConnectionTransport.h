@@ -4,6 +4,8 @@
 #include <memory>
 #include <string_view>
 
+#include "mini/net/SocketTypes.h"
+
 typedef struct ssl_st SSL;
 
 namespace mini::net {
@@ -40,7 +42,7 @@ public:
     ConnectionTransport() = default;
     ~ConnectionTransport();
 
-    bool enableTls(int fd, std::shared_ptr<TlsContext> ctx, bool isServer, std::string_view hostname);
+    bool enableTls(SocketFd fd, std::shared_ptr<TlsContext> ctx, bool isServer, std::string_view hostname);
 
     bool handshakePending() const noexcept;
     bool isTlsEstablished() const noexcept;

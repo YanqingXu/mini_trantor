@@ -2,12 +2,12 @@
 
 #include "mini/base/Logger.h"
 #include "mini/net/InetAddress.h"
+#include "mini/net/SocketsOps.h"
 
 #include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cstring>
-#include <sys/socket.h>
 
 #ifdef __linux__
 #include <linux/errqueue.h>
@@ -108,28 +108,28 @@ PathMtuSignalAdapter::platformCapabilities(sa_family_t family) noexcept {
 #endif
 }
 
-bool PathMtuSignalAdapter::configurePlatformPathMtuSignals(int fd,
+bool PathMtuSignalAdapter::configurePlatformPathMtuSignals(SocketFd fd,
                                                            sa_family_t family,
                                                            bool enabled) {
     return configureUdpErrorQueue(fd, family, enabled);
 }
 
 bool PathMtuSignalAdapter::drainPlatformPathMtuSignals(
-    int fd,
+    SocketFd fd,
     const FailureCallback& failureCallback,
     const ErrorCallback& errorCallback) {
     return drainUdpErrorQueue(fd, failureCallback, errorCallback);
 }
 
 std::optional<std::size_t> PathMtuSignalAdapter::queryConnectedUdpPayloadMtu(
-    int fd,
+    SocketFd fd,
     sa_family_t family) noexcept {
     std::uint32_t pathMtu = 0;
     socklen_t len = static_cast<socklen_t>(sizeof(pathMtu));
 
     if (family == AF_INET) {
 #if defined(IP_MTU)
-        if (::getsockopt(fd, IPPROTO_IP, IP_MTU, &pathMtu, &len) == 0) {
+        if (::getsockopt(fd, IPPROTO_IP, IP_MTU, reinterpret_cast<char*>(&pathMtu), &len) == 0) {
             return udpPayloadSizeFromPathMtu(pathMtu, family);
         }
 #endif
@@ -138,7 +138,7 @@ std::optional<std::size_t> PathMtuSignalAdapter::queryConnectedUdpPayloadMtu(
 
     if (family == AF_INET6) {
 #if defined(IPV6_MTU)
-        if (::getsockopt(fd, IPPROTO_IPV6, IPV6_MTU, &pathMtu, &len) == 0) {
+        if (::getsockopt(fd, IPPROTO_IPV6, IPV6_MTU, reinterpret_cast<char*>(&pathMtu), &len) == 0) {
             return udpPayloadSizeFromPathMtu(pathMtu, family);
         }
 #endif
@@ -148,7 +148,7 @@ std::optional<std::size_t> PathMtuSignalAdapter::queryConnectedUdpPayloadMtu(
     return std::nullopt;
 }
 
-bool PathMtuSignalAdapter::configureUdpErrorQueue(int fd,
+bool PathMtuSignalAdapter::configureUdpErrorQueue(SocketFd fd,
                                                   sa_family_t family,
                                                   bool enabled) {
 #ifdef __linux__
@@ -158,7 +158,7 @@ bool PathMtuSignalAdapter::configureUdpErrorQueue(int fd,
 
     const auto trySet = [&](int level, int option) {
         attempted = true;
-        if (::setsockopt(fd, level, option, &value, sizeof(value)) == 0) {
+        if (::setsockopt(fd, level, option, reinterpret_cast<const char*>(&value), sizeof(value)) == 0) {
             succeeded = true;
             return;
         }
@@ -187,7 +187,7 @@ bool PathMtuSignalAdapter::configureUdpErrorQueue(int fd,
 #endif
 }
 
-bool PathMtuSignalAdapter::drainUdpErrorQueue(int fd,
+bool PathMtuSignalAdapter::drainUdpErrorQueue(SocketFd fd,
                                               const FailureCallback& failureCallback,
                                               const ErrorCallback& errorCallback) {
 #ifdef __linux__

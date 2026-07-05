@@ -1,8 +1,11 @@
 #include "mini/net/InetAddress.h"
 
-#include <arpa/inet.h>
 #include <cstring>
 #include <stdexcept>
+
+#ifndef _WIN32
+#include <arpa/inet.h>
+#endif
 
 namespace mini::net {
 

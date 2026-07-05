@@ -6,12 +6,12 @@
 // CAP_NET_RAW, and callers must continue to rely on normal UDP/KCP probing.
 
 #include "mini/base/noncopyable.h"
+#include "mini/net/SocketTypes.h"
 #include "mini/net/udp/PathMtuSignal.h"
 
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <netinet/in.h>
 #include <string>
 #include <string_view>
 

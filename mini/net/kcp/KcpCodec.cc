@@ -1,6 +1,7 @@
 #include "mini/net/kcp/KcpCodec.h"
 
-#include <arpa/inet.h>
+#include "mini/net/SocketTypes.h"
+
 #include <cstring>
 
 namespace mini::net::kcp {

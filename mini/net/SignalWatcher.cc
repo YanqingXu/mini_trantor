@@ -6,9 +6,12 @@
 
 #include <cerrno>
 #include <cstring>
+#include <stdexcept>
 #include <signal.h>
+#ifndef _WIN32
 #include <sys/signalfd.h>
 #include <unistd.h>
+#endif
 #include <unordered_set>
 
 namespace mini::net {
@@ -17,6 +20,8 @@ namespace {
 
 /// Ignore SIGPIPE process-wide.  Safe to call repeatedly.
 void ignoreSigpipeImpl() {
+#ifdef _WIN32
+#else
     struct sigaction sa{};
     sa.sa_handler = SIG_IGN;
     sigemptyset(&sa.sa_mask);
@@ -24,11 +29,15 @@ void ignoreSigpipeImpl() {
     if (::sigaction(SIGPIPE, &sa, nullptr) != 0) {
         LOG_SYSERR << "SignalWatcher: failed to ignore SIGPIPE: " << std::strerror(errno);
     }
+#endif
 }
 
 }  // namespace
 
 void SignalWatcher::blockSignals(const std::vector<int>& signals) {
+#ifdef _WIN32
+    (void)signals;
+#else
     sigset_t mask;
     ::sigemptyset(&mask);
     for (int sig : signals) {
@@ -37,6 +46,7 @@ void SignalWatcher::blockSignals(const std::vector<int>& signals) {
     if (::pthread_sigmask(SIG_BLOCK, &mask, nullptr) != 0) {
         LOG_SYSERR << "SignalWatcher::blockSignals: pthread_sigmask failed: " << std::strerror(errno);
     }
+#endif
 }
 
 void SignalWatcher::ignoreSigpipe() {
@@ -47,6 +57,10 @@ SignalWatcher::SignalWatcher(EventLoop* loop, std::vector<int> signals)
     : loop_(loop),
       signals_(std::move(signals)),
       signalfd_(-1) {
+#ifdef _WIN32
+    (void)loop_;
+    throw std::runtime_error("SignalWatcher is not supported on Windows");
+#else
     // Ignore SIGPIPE globally (idempotent).
     ignoreSigpipeImpl();
 
@@ -71,9 +85,13 @@ SignalWatcher::SignalWatcher(EventLoop* loop, std::vector<int> signals)
     signalChannel_ = std::make_unique<Channel>(loop_, signalfd_);
     signalChannel_->setReadCallback([this](mini::base::Timestamp) { handleRead(); });
     signalChannel_->enableReading();
+#endif
 }
 
 SignalWatcher::~SignalWatcher() {
+#ifdef _WIN32
+    return;
+#else
     if (!loop_->isInLoopThread()) {
         LOG_FATAL << "SignalWatcher destroyed from non-owner thread";
     }
@@ -87,6 +105,7 @@ SignalWatcher::~SignalWatcher() {
     // be delivered via default handlers in threads that haven't set up
     // their own signalfd.  Callers who need to restore the signal mask
     // should manage that themselves.
+#endif
 }
 
 void SignalWatcher::setSignalCallback(SignalCallback cb) {
@@ -98,6 +117,9 @@ const std::vector<int>& SignalWatcher::signals() const noexcept {
 }
 
 void SignalWatcher::handleRead() {
+#ifdef _WIN32
+    return;
+#else
     loop_->assertInLoopThread();
 
     while (true) {
@@ -118,6 +140,7 @@ void SignalWatcher::handleRead() {
             callback_(static_cast<int>(si.ssi_signo));
         }
     }
+#endif
 }
 
 }  // namespace mini::net

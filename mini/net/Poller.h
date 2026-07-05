@@ -5,6 +5,7 @@
 
 #include "mini/base/Timestamp.h"
 #include "mini/base/noncopyable.h"
+#include "mini/net/SocketTypes.h"
 
 #include <memory>
 #include <unordered_map>
@@ -30,7 +31,7 @@ public:
     static std::unique_ptr<Poller> newDefaultPoller(EventLoop* loop);
 
 protected:
-    using ChannelMap = std::unordered_map<int, Channel*>;
+    using ChannelMap = std::unordered_map<SocketFd, Channel*>;
     ChannelMap channels_;
 
 private:

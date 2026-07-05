@@ -18,6 +18,34 @@ namespace {
     __builtin_unreachable();
 }
 
+uint32_t toEpollEvents(uint32_t events) noexcept {
+    uint32_t epollEvents = 0;
+    if (events & Channel::kReadEvent) {
+        epollEvents |= EPOLLIN | EPOLLPRI;
+    }
+    if (events & Channel::kWriteEvent) {
+        epollEvents |= EPOLLOUT;
+    }
+    return epollEvents;
+}
+
+uint32_t fromEpollEvents(uint32_t events) noexcept {
+    uint32_t channelEvents = 0;
+    if (events & (EPOLLIN | EPOLLPRI)) {
+        channelEvents |= Channel::kReadEvent;
+    }
+    if (events & EPOLLOUT) {
+        channelEvents |= Channel::kWriteEvent;
+    }
+    if (events & EPOLLERR) {
+        channelEvents |= Channel::kErrorEvent;
+    }
+    if (events & (EPOLLHUP | EPOLLRDHUP)) {
+        channelEvents |= Channel::kCloseEvent;
+    }
+    return channelEvents;
+}
+
 }  // namespace
 
 EPollPoller::EPollPoller(EventLoop* loop)
@@ -48,7 +76,7 @@ mini::base::Timestamp EPollPoller::poll(int timeoutMs, ChannelList* activeChanne
 
 void EPollPoller::updateChannel(Channel* channel) {
     const int index = channel->index();
-    const int fd = channel->fd();
+    const SocketFd fd = channel->fd();
 
     if (index == kNew || index == kDeleted) {
         if (index == kNew) {
@@ -69,7 +97,7 @@ void EPollPoller::updateChannel(Channel* channel) {
 }
 
 void EPollPoller::removeChannel(Channel* channel) {
-    const int fd = channel->fd();
+    const SocketFd fd = channel->fd();
     channels_.erase(fd);
 
     if (channel->index() == kAdded) {
@@ -81,14 +109,14 @@ void EPollPoller::removeChannel(Channel* channel) {
 void EPollPoller::fillActiveChannels(int numEvents, ChannelList* activeChannels) const {
     for (int i = 0; i < numEvents; ++i) {
         auto* channel = static_cast<Channel*>(events_[i].data.ptr);
-        channel->setRevents(events_[i].events);
+        channel->setRevents(fromEpollEvents(events_[i].events));
         activeChannels->push_back(channel);
     }
 }
 
 void EPollPoller::update(int operation, Channel* channel) {
     epoll_event event{};
-    event.events = channel->events();
+    event.events = toEpollEvents(channel->events());
     event.data.ptr = channel;
     if (::epoll_ctl(epollfd_, operation, channel->fd(), &event) < 0) {
         epollDie("epoll_ctl");

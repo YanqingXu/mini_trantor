@@ -3,11 +3,12 @@
 #include "mini/base/Logger.h"
 #include "mini/net/Buffer.h"
 #include "mini/net/Channel.h"
+#include "mini/net/SocketsOps.h"
 #include "mini/net/Socket.h"
 #include "mini/net/TlsContext.h"
 
 #include <cerrno>
-#include <unistd.h>
+#include <limits>
 
 #include <openssl/err.h>
 #include <openssl/ssl.h>
@@ -19,7 +20,7 @@ ConnectionTransport::~ConnectionTransport() {
 }
 
 bool ConnectionTransport::enableTls(
-    int fd,
+    SocketFd fd,
     std::shared_ptr<TlsContext> ctx,
     bool isServer,
     std::string_view hostname) {
@@ -32,7 +33,12 @@ bool ConnectionTransport::enableTls(
         return false;
     }
 
-    SSL_set_fd(ssl_, fd);
+    if (fd > static_cast<SocketFd>((std::numeric_limits<int>::max)())) {
+        LOG_ERROR << "ConnectionTransport::enableTls: socket handle too large for SSL_set_fd";
+        resetTls();
+        return false;
+    }
+    SSL_set_fd(ssl_, static_cast<int>(fd));
     if (isServer) {
         SSL_set_accept_state(ssl_);
     } else {
@@ -95,7 +101,7 @@ ConnectionTransport::ReadResult ConnectionTransport::readInto(Buffer& inputBuffe
     if (n == 0) {
         return {.status = Status::kPeerClosed};
     }
-    if (savedErrno == EWOULDBLOCK || savedErrno == EAGAIN) {
+    if (sockets::isWouldBlock(savedErrno)) {
         return {.status = Status::kWouldBlock};
     }
     return {.status = Status::kError, .savedErrno = savedErrno};
@@ -106,14 +112,15 @@ ConnectionTransport::WriteResult ConnectionTransport::writeRaw(std::string_view 
         return sslWriteRaw(data, channel);
     }
 
-    const ssize_t nwrote = ::write(channel.fd(), data.data(), data.size());
+    const ssize_t nwrote = sockets::write(channel.fd(), data.data(), data.size());
     if (nwrote >= 0) {
         return {.status = Status::kOk, .bytes = static_cast<std::size_t>(nwrote)};
     }
-    if (errno == EWOULDBLOCK || errno == EAGAIN) {
+    const int error = sockets::lastError();
+    if (sockets::isWouldBlock(error)) {
         return {.status = Status::kWouldBlock};
     }
-    return {.status = Status::kError, .savedErrno = errno};
+    return {.status = Status::kError, .savedErrno = error};
 }
 
 ConnectionTransport::WriteResult ConnectionTransport::writeFromBuffer(Buffer& outputBuffer, Channel& channel) {
@@ -127,7 +134,7 @@ ConnectionTransport::WriteResult ConnectionTransport::writeFromBuffer(Buffer& ou
         outputBuffer.retrieve(static_cast<std::size_t>(n));
         return {.status = Status::kOk, .bytes = static_cast<std::size_t>(n)};
     }
-    if (savedErrno == EWOULDBLOCK || savedErrno == EAGAIN) {
+    if (sockets::isWouldBlock(savedErrno)) {
         return {.status = Status::kWouldBlock};
     }
     return {.status = Status::kError, .savedErrno = savedErrno};

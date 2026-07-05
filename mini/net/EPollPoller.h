@@ -5,6 +5,7 @@
 
 #include "mini/net/Poller.h"
 
+#ifndef _WIN32
 #include <sys/epoll.h>
 
 #include <vector>
@@ -34,3 +35,5 @@ private:
 };
 
 }  // namespace mini::net
+
+#endif

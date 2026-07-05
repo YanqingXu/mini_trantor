@@ -3,33 +3,43 @@
 #include "mini/net/SocketsOps.h"
 
 #include <cstring>
+
+#ifdef _WIN32
+#include <mstcpip.h>
+#else
 #include <netinet/tcp.h>
+#endif
 
 namespace mini::net {
 
 namespace {
 
-void setSocketOption(int sockfd, int level, int option, bool on) {
+void setSocketOption(SocketFd sockfd, int level, int option, bool on) {
+#ifdef _WIN32
+    const char optval = on ? 1 : 0;
+    ::setsockopt(sockfd, level, option, &optval, static_cast<socklen_t>(sizeof(optval)));
+#else
     const int optval = on ? 1 : 0;
     ::setsockopt(sockfd, level, option, &optval, static_cast<socklen_t>(sizeof(optval)));
+#endif
 }
 
 }  // namespace
 
-Socket::Socket(int sockfd) : sockfd_(sockfd) {
+Socket::Socket(SocketFd sockfd) : sockfd_(sockfd) {
 }
 
 Socket::~Socket() {
     sockets::close(sockfd_);
 }
 
-int Socket::fd() const noexcept {
+SocketFd Socket::fd() const noexcept {
     return sockfd_;
 }
 
-int Socket::releaseFd() noexcept {
-    const int fd = sockfd_;
-    sockfd_ = -1;
+SocketFd Socket::releaseFd() noexcept {
+    const SocketFd fd = sockfd_;
+    sockfd_ = kInvalidSocket;
     return fd;
 }
 
@@ -43,10 +53,10 @@ void Socket::listen() {
     sockets::listenOrDie(sockfd_);
 }
 
-int Socket::accept(InetAddress* peerAddr) {
+SocketFd Socket::accept(InetAddress* peerAddr) {
     sockaddr_storage addr{};
-    const int connfd = sockets::accept(sockfd_, &addr);
-    if (connfd >= 0 && peerAddr != nullptr) {
+    const SocketFd connfd = sockets::accept(sockfd_, &addr);
+    if (sockets::isValid(connfd) && peerAddr != nullptr) {
         if (addr.ss_family == AF_INET6) {
             peerAddr->setSockAddrInet6(*reinterpret_cast<const sockaddr_in6*>(&addr));
         } else {

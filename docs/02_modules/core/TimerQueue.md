@@ -2,7 +2,7 @@
 
 ## 1. 类定位
 
-* **角色**：为单个 EventLoop 提供**基于 timerfd 的定时任务管理**
+* **角色**：为单个 EventLoop 提供**基于 poll timeout 的定时任务管理**
 * **层级**：Reactor 层（核心底层）
 * 支持 one-shot 和 repeating 定时器，回调在 owner loop 线程执行
 
@@ -10,10 +10,11 @@
 
 **核心问题**：如何在 Reactor 框架中高效地管理多个定时器？
 
-选择 timerfd 而非 poll timeout 的原因：
-- timerfd 作为 fd 可以统一加入 epoll，不需要特殊逻辑
-- 纳秒精度
-- 多个 timer 但只需一个 timerfd（只设置最近的超时时间）
+当前选择 poll timeout 而非 timerfd 的原因：
+- 保持 Linux epoll 与 Windows select 后端共享同一 TimerQueue 实现
+- 定时器仍由 owner EventLoop 驱动，不引入后台调度线程
+- `TimerQueue` 不再拥有额外 fd/Channel，生命周期边界更窄
+- 多个 timer 仍只需维护一个按到期时间排序的 map，EventLoop 每轮 poll 前取最近超时
 
 ## 3. 对外接口
 
@@ -26,8 +27,6 @@
 
 ```cpp
 EventLoop* loop_;                              // 所属 EventLoop
-const int timerfd_;                            // timerfd 文件描述符
-std::unique_ptr<Channel> timerfdChannel_;      // timerfd 的 Channel
 std::atomic<std::int64_t> nextSequence_;       // 定时器 ID 递增计数器（跨线程安全）
 TimerMap timers_;                              // {Timestamp, sequence} → TimerPtr 有序映射
 std::unordered_map<int64_t, TimerPtr> timersById_;  // sequence → TimerPtr 快速查找
@@ -62,22 +61,23 @@ addTimerInLoop(timer):
   ├─ timer->inQueue = true
   ├─ timersById_[seq] = timer
   ├─ timers_[{when, seq}] = timer
-  └─ if 新 timer 是最早的:
-      └─ resetTimerfd(when)  → timerfd_settime()
+  └─ 下一轮 EventLoop::loop() 会用 timers_.begin() 计算 poll timeout
 ```
 
 ### 5.2 定时器触发
 
 ```
-timerfd 到期 → EPOLLIN
-  → Channel::handleEvent
-  → TimerQueue::handleRead():
-      ├─ readTimerfdOrDie(timerfd_)        // 消费 timerfd 数据
-      ├─ expired = getExpired(now)          // 收集已到期 timer
-      ├─ for timer in expired:
-      │   if (!timer->canceled):
-      │       timer->callback()             // 执行回调
-      └─ reset(expired, now)                // 重新调度重复 timer
+EventLoop::loop():
+  ├─ timeoutMs = timerQueue_->pollTimeoutMs(defaultTimeout)
+  ├─ poller_->poll(timeoutMs, activeChannels)
+  ├─ dispatch active Channel callbacks
+  ├─ timerQueue_->handleExpired(now)
+  │   ├─ expired = getExpired(now)
+  │   ├─ for timer in expired:
+  │   │   if (!timer->canceled):
+  │   │       timer->callback()
+  │   └─ reset(expired, now)
+  └─ doPendingFunctors()
 ```
 
 ### 5.3 getExpired
@@ -108,11 +108,7 @@ void reset(expired, now) {
             timersById_.erase(seq);  // one-shot 或已取消，清理
         }
     }
-    // 更新 timerfd 为下一个最早的
-    if (!timers_.empty())
-        resetTimerfd(timers_.begin()->expiration);
-    else
-        disarmTimerfd();             // 无定时器，解除 timerfd
+    // 不直接操作 OS timer fd；下一轮 EventLoop poll 前重新计算 timeout。
 }
 ```
 
@@ -126,7 +122,7 @@ cancelInLoop(timerId):
   │   ├─ timers_.erase({expiration, seq})
   │   └─ timer->inQueue = false
   │   └─ timersById_.erase(seq)
-  │   └─ 更新 timerfd（如果影响了最早的 timer）
+  │   └─ 下一轮 poll 前自然重新计算 timeout
   └─ else:
       └─ timersById_.erase(seq)      // 已被 getExpired 取出
 ```
@@ -139,15 +135,13 @@ EventLoop
   ▼
 TimerQueue
   │ owns
-  ├─ timerfd (fd)
-  ├─ timerfdChannel_ (Channel)
-  └─ timers_ (map of Timer)
+  └─ timers_ / timersById_ (timer metadata)
 ```
 
 | 类 | 关系 |
 |----|------|
 | **EventLoop** | 拥有 TimerQueue，调用 addTimer/cancel |
-| **Channel** | TimerQueue 拥有 timerfdChannel_ |
+| **Poller** | EventLoop 根据 TimerQueue 最近到期时间设置 poll timeout |
 | **TcpServer** | 间接使用（IdleTimeout 通过 EventLoop::runAfter） |
 
 ## 7. 关键设计点
@@ -171,6 +165,26 @@ TimerQueue
 Timer 可能同时被 timers_、timersById_、getExpired 返回的 vector 持有，
 shared_ptr 保证不会悬空。
 
+### 跨平台 poll timeout 驱动
+
+TimerQueue 不再注册 fd 到 Poller。EventLoop 仍保持固定执行顺序：
+
+```mermaid
+sequenceDiagram
+    participant L as EventLoop
+    participant T as TimerQueue
+    participant P as Poller
+
+    L->>T: pollTimeoutMs(defaultTimeout)
+    T-->>L: nearest timer timeout
+    L->>P: poll(timeoutMs)
+    P-->>L: active channels or timeout
+    L->>L: dispatch active Channel callbacks
+    L->>T: handleExpired(now)
+    T->>T: run ready callbacks on owner loop
+    L->>L: doPendingFunctors()
+```
+
 ## 8. 潜在问题
 
 ### 大量定时器的性能
@@ -180,20 +194,22 @@ shared_ptr 保证不会悬空。
 
 ### 系统时钟调整
 
-使用 `CLOCK_MONOTONIC`，不受系统时间调整影响。
+使用 `std::chrono::steady_clock`，不受系统时间调整影响。
 
 ## 9. 极简实现
 
 ```cpp
 class MinimalTimerQueue {
-    int timerfd_;
     std::map<Timestamp, std::function<void()>> timers_;
 public:
     void addTimer(std::function<void()> cb, Timestamp when) {
         timers_[when] = cb;
-        // timerfd_settime to earliest
     }
-    void handleRead() {
+    int pollTimeoutMs(int defaultTimeout) const {
+        if (timers_.empty()) return defaultTimeout;
+        return millisecondsUntil(timers_.begin()->first);
+    }
+    void handleExpired() {
         auto now = Timestamp::now();
         auto end = timers_.upper_bound(now);
         for (auto it = timers_.begin(); it != end; ++it)
@@ -205,8 +221,8 @@ public:
 
 ## 10. 面试角度
 
-**Q: 为什么用 timerfd 而不是 epoll_wait 的 timeout？**
-A: timerfd 统一在 epoll 事件框架中处理，不需要特殊逻辑。多个 timer 只需一个 timerfd（设置最近的超时）。
+**Q: 为什么现在用 poll timeout 而不是 timerfd？**
+A: 为了让 Linux epoll 和 Windows select 共享同一 TimerQueue 语义，并避免 TimerQueue 拥有平台特定 fd。定时器仍在 owner EventLoop 上执行，没有绕开 reactor 调度。
 
 **Q: 如何处理同一时刻多个 timer 到期？**
 A: TimerKey 是 `{Timestamp, sequence}`，sequence 保证唯一性。getExpired 用 upper_bound 一次取出所有。

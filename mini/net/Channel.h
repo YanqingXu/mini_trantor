@@ -5,11 +5,10 @@
 
 #include "mini/base/Timestamp.h"
 #include "mini/base/noncopyable.h"
+#include "mini/net/SocketTypes.h"
 
 #include <functional>
 #include <memory>
-
-#include <sys/epoll.h>
 
 namespace mini::net {
 
@@ -20,7 +19,7 @@ public:
     using EventCallback = std::function<void()>;
     using ReadEventCallback = std::function<void(mini::base::Timestamp)>;
 
-    Channel(EventLoop* loop, int fd);
+    Channel(EventLoop* loop, SocketFd fd);
     ~Channel();
 
     void handleEvent(mini::base::Timestamp receiveTime);
@@ -31,7 +30,7 @@ public:
 
     void tie(const std::shared_ptr<void>& object);
 
-    int fd() const noexcept;
+    SocketFd fd() const noexcept;
     uint32_t events() const noexcept;
     void setRevents(uint32_t revents) noexcept;
     bool isNoneEvent() const noexcept;
@@ -51,17 +50,17 @@ public:
     EventLoop* ownerLoop() noexcept;
 
     static constexpr uint32_t kNoneEvent = 0;
-    static constexpr uint32_t kReadEvent = EPOLLIN | EPOLLPRI;
-    static constexpr uint32_t kWriteEvent = EPOLLOUT;
-    static constexpr uint32_t kErrorEvent = EPOLLERR;
-    static constexpr uint32_t kCloseEvent = EPOLLHUP | EPOLLRDHUP;
+    static constexpr uint32_t kReadEvent = 0x01;
+    static constexpr uint32_t kWriteEvent = 0x02;
+    static constexpr uint32_t kErrorEvent = 0x04;
+    static constexpr uint32_t kCloseEvent = 0x08;
 
 private:
     void update();
     void handleEventWithGuard(mini::base::Timestamp receiveTime);
 
     EventLoop* loop_;
-    const int fd_;
+    const SocketFd fd_;
     uint32_t events_;
     uint32_t revents_;
     int index_;

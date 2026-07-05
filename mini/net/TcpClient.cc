@@ -206,7 +206,7 @@ void TcpClient::setTlsEventCallback(TlsEventCallback cb) {
 
 // ── Internal ──
 
-void TcpClient::newConnection(int sockfd) {
+void TcpClient::newConnection(SocketFd sockfd) {
     loop_->assertInLoopThread();
 
     const InetAddress peerAddr(sockets::getPeerAddr(sockfd));
@@ -285,7 +285,7 @@ void TcpClient::removeConnection(const TcpConnectionPtr& conn) {
 void TcpClient::initConnector(const InetAddress& serverAddr) {
     connector_ = std::make_shared<Connector>(loop_, serverAddr);
     std::weak_ptr<void> lifetime = lifetimeToken_;
-    connector_->setNewConnectionCallback([this, lifetime](int sockfd) {
+    connector_->setNewConnectionCallback([this, lifetime](SocketFd sockfd) {
         if (!lifetime.lock()) {
             sockets::close(sockfd);
             return;
@@ -300,7 +300,7 @@ void TcpClient::initConnector(const InetAddress& serverAddr) {
 void TcpClient::initConnector(const InetAddress& serverAddr, const ConnectorOptions& options) {
     connector_ = std::make_shared<Connector>(loop_, serverAddr, options);
     std::weak_ptr<void> lifetime = lifetimeToken_;
-    connector_->setNewConnectionCallback([this, lifetime](int sockfd) {
+    connector_->setNewConnectionCallback([this, lifetime](SocketFd sockfd) {
         if (!lifetime.lock()) {
             sockets::close(sockfd);
             return;

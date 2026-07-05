@@ -56,24 +56,24 @@ int main() {
         channel.setErrorCallback([&] { errorFired = true; });
         channel.setCloseCallback([&] { closeFired = true; });
 
-        // simulate EPOLLIN
-        channel.setRevents(EPOLLIN);
+        // simulate backend-neutral readable readiness
+        channel.setRevents(mini::net::Channel::kReadEvent);
         channel.handleEvent(mini::base::now());
         assert(readFired);
         assert(!writeFired);
 
-        // simulate EPOLLOUT
-        channel.setRevents(EPOLLOUT);
+        // simulate backend-neutral writable readiness
+        channel.setRevents(mini::net::Channel::kWriteEvent);
         channel.handleEvent(mini::base::now());
         assert(writeFired);
 
-        // simulate EPOLLERR
-        channel.setRevents(EPOLLERR);
+        // simulate backend-neutral error readiness
+        channel.setRevents(mini::net::Channel::kErrorEvent);
         channel.handleEvent(mini::base::now());
         assert(errorFired);
 
-        // simulate EPOLLHUP without EPOLLIN
-        channel.setRevents(EPOLLHUP);
+        // simulate backend-neutral close readiness without readable data
+        channel.setRevents(mini::net::Channel::kCloseEvent);
         channel.handleEvent(mini::base::now());
         assert(closeFired);
 
@@ -94,13 +94,13 @@ int main() {
             auto owner = std::make_shared<int>(42);
             channel.tie(owner);
 
-            channel.setRevents(EPOLLIN);
+            channel.setRevents(mini::net::Channel::kReadEvent);
             channel.handleEvent(mini::base::now());
             assert(readFired);  // owner alive, callback fires
         }
         // owner expired
         readFired = false;
-        channel.setRevents(EPOLLIN);
+        channel.setRevents(mini::net::Channel::kReadEvent);
         channel.handleEvent(mini::base::now());
         assert(!readFired);  // owner expired, callback blocked
 

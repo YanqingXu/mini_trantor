@@ -26,7 +26,7 @@ endif()
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 
-add_library(mini_trantor
+set(MINI_TRANTOR_SOURCES
     mini/base/Logger.cc
     mini/base/MetricsExporter.cc
     mini/net/InetAddress.cc
@@ -35,7 +35,6 @@ add_library(mini_trantor
     mini/net/Socket.cc
     mini/net/Channel.cc
     mini/net/Poller.cc
-    mini/net/EPollPoller.cc
     mini/net/EventLoop.cc
     mini/net/TimerQueue.cc
     mini/net/Acceptor.cc
@@ -90,6 +89,14 @@ add_library(mini_trantor
     mini/rpc/RpcConnectionPool.cc
 )
 
+if(WIN32)
+    list(APPEND MINI_TRANTOR_SOURCES mini/net/SelectPoller.cc)
+else()
+    list(APPEND MINI_TRANTOR_SOURCES mini/net/EPollPoller.cc)
+endif()
+
+add_library(mini_trantor ${MINI_TRANTOR_SOURCES})
+
 add_library(mini_trantor::mini_trantor ALIAS mini_trantor)
 
 target_include_directories(
@@ -100,6 +107,10 @@ target_include_directories(
 )
 target_compile_features(mini_trantor PUBLIC cxx_std_23)
 target_link_libraries(mini_trantor PUBLIC Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+if(WIN32)
+    target_compile_definitions(mini_trantor PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
+    target_link_libraries(mini_trantor PUBLIC ws2_32)
+endif()
 enable_sanitizers(mini_trantor)
 
 add_executable(echo_server examples/echo_server/main.cpp)

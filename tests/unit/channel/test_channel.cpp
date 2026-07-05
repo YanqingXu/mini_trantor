@@ -17,7 +17,7 @@ int main() {
 
         bool readCalled = false;
         channel.setReadCallback([&](mini::base::Timestamp) { readCalled = true; });
-        channel.setRevents(EPOLLIN);
+        channel.setRevents(mini::net::Channel::kReadEvent);
         channel.handleEvent(mini::base::now());
         assert(readCalled);
 
@@ -25,7 +25,7 @@ int main() {
         auto owner = std::make_shared<int>(42);
         channel.tie(owner);
         owner.reset();
-        channel.setRevents(EPOLLIN);
+        channel.setRevents(mini::net::Channel::kReadEvent);
         channel.handleEvent(mini::base::now());
         assert(!readCalled);
     }

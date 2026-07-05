@@ -15,6 +15,7 @@
 #include "mini/net/broadcast/BroadcastRouter.h"
 #include "mini/net/broadcast/BroadcastDispatcher.h"
 #include "mini/net/EventLoopThreadPool.h"
+#include "mini/net/SocketTypes.h"
 #include "mini/net/TcpServerOptions.h"
 #include "mini/net/TimerId.h"
 
@@ -102,7 +103,7 @@ public:
     void stop(Duration drainTimeout);
 
 private:
-    void newConnection(int sockfd, const InetAddress& peerAddr);
+    void newConnection(SocketFd sockfd, const InetAddress& peerAddr);
     void removeConnection(const TcpConnectionPtr& connection);
     void removeConnectionInLoop(const TcpConnectionPtr& connection);
     void broadcastToInLoopWithMetrics(

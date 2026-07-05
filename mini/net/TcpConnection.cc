@@ -27,7 +27,7 @@ struct TcpConnection::Impl {
     Impl(
         EventLoop* loop,
         std::string connName,
-        int sockfd,
+        SocketFd sockfd,
         const InetAddress& local,
         const InetAddress& peer)
         : loop(loop),
@@ -68,7 +68,7 @@ struct TcpConnection::Impl {
 TcpConnection::TcpConnection(
     EventLoop* loop,
     std::string name,
-    int sockfd,
+    SocketFd sockfd,
     const InetAddress& localAddr,
     const InetAddress& peerAddr)
     : impl_(std::make_unique<Impl>(loop, std::move(name), sockfd, localAddr, peerAddr)) {

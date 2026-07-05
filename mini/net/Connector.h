@@ -9,6 +9,7 @@
 #include "mini/base/noncopyable.h"
 #include "mini/net/ConnectorOptions.h"
 #include "mini/net/InetAddress.h"
+#include "mini/net/SocketTypes.h"
 #include "mini/net/TimerId.h"
 
 #include <chrono>
@@ -22,7 +23,7 @@ class EventLoop;
 
 class Connector : public std::enable_shared_from_this<Connector>, private mini::base::noncopyable {
 public:
-    using NewConnectionCallback = std::function<void(int sockfd)>;
+    using NewConnectionCallback = std::function<void(SocketFd sockfd)>;
     using Duration = std::chrono::steady_clock::duration;
 
     enum StateE { kDisconnected, kConnecting, kConnected };
@@ -55,12 +56,12 @@ private:
     void startInLoop();
     void stopInLoop();
     void connect();
-    void connecting(int sockfd);
+    void connecting(SocketFd sockfd);
     void handleWrite();
     void handleError();
     void handleConnectTimeout();
-    void retry(int sockfd);
-    int removeAndResetChannel();
+    void retry(SocketFd sockfd);
+    SocketFd removeAndResetChannel();
     void resetChannel();
 
     EventLoop* loop_;

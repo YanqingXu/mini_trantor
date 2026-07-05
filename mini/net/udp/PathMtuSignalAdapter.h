@@ -5,11 +5,11 @@
 // and guarded hooks so KCP policy can stay independent from OS-specific APIs.
 
 #include "mini/net/udp/PathMtuSignal.h"
+#include "mini/net/SocketTypes.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <netinet/in.h>
 #include <optional>
 
 namespace mini::net::udp {
@@ -37,15 +37,15 @@ public:
     };
 
     static PlatformCapabilities platformCapabilities(sa_family_t family) noexcept;
-    static bool configurePlatformPathMtuSignals(int fd, sa_family_t family, bool enabled);
-    static bool drainPlatformPathMtuSignals(int fd,
+    static bool configurePlatformPathMtuSignals(SocketFd fd, sa_family_t family, bool enabled);
+    static bool drainPlatformPathMtuSignals(SocketFd fd,
                                             const FailureCallback& failureCallback,
                                             const ErrorCallback& errorCallback);
-    static std::optional<std::size_t> queryConnectedUdpPayloadMtu(int fd,
+    static std::optional<std::size_t> queryConnectedUdpPayloadMtu(SocketFd fd,
                                                                   sa_family_t family) noexcept;
 
-    static bool configureUdpErrorQueue(int fd, sa_family_t family, bool enabled);
-    static bool drainUdpErrorQueue(int fd,
+    static bool configureUdpErrorQueue(SocketFd fd, sa_family_t family, bool enabled);
+    static bool drainUdpErrorQueue(SocketFd fd,
                                    const FailureCallback& failureCallback,
                                    const ErrorCallback& errorCallback);
     static std::size_t udpPayloadSizeFromPathMtu(std::uint32_t pathMtu,

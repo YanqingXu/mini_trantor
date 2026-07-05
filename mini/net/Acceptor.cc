@@ -60,8 +60,8 @@ void Acceptor::stop() {
     acceptChannel_.remove();
     // Close the listen socket so the kernel rejects further connections.
     // Release the fd from the Socket RAII wrapper first to avoid double-close.
-    const int fd = acceptSocket_.releaseFd();
-    if (fd >= 0) {
+    const SocketFd fd = acceptSocket_.releaseFd();
+    if (sockets::isValid(fd)) {
         sockets::close(fd);
     }
 }
@@ -72,8 +72,8 @@ void Acceptor::handleRead(mini::base::Timestamp receiveTime) {
 
     while (true) {
         InetAddress peerAddr;
-        const int connfd = acceptSocket_.accept(&peerAddr);
-        if (connfd >= 0) {
+        const SocketFd connfd = acceptSocket_.accept(&peerAddr);
+        if (sockets::isValid(connfd)) {
             if (newConnectionCallback_) {
                 newConnectionCallback_(connfd, peerAddr);
             } else {
@@ -82,10 +82,11 @@ void Acceptor::handleRead(mini::base::Timestamp receiveTime) {
             continue;
         }
 
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        const int error = sockets::lastError();
+        if (sockets::isWouldBlock(error)) {
             break;
         }
-        if (errno == EINTR) {
+        if (sockets::isInterrupted(error)) {
             continue;
         }
         break;

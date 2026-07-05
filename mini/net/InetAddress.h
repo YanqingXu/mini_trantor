@@ -6,8 +6,9 @@
 // 同时新增 IPv6 API (getSockAddrInet6 / setSockAddrInet6)，
 // 以及泛型 API (getSockAddr / getSockAddrLen / sockaddr_storage 构造)。
 
+#include "mini/net/SocketTypes.h"
+
 #include <cstdint>
-#include <netinet/in.h>
 #include <string>
 
 namespace mini::net {

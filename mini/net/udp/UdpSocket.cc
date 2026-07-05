@@ -13,8 +13,6 @@
 #include <cstring>
 #include <future>
 #include <memory>
-#include <netinet/in.h>
-#include <sys/socket.h>
 
 namespace mini::net::udp {
 
@@ -199,17 +197,19 @@ bool UdpSocket::started() const noexcept {
 }
 
 void UdpSocket::sendTo(std::string_view data, const InetAddress& peerAddr) {
-    const ssize_t n = ::sendto(
+    const ssize_t n = sockets::sendTo(
         socket_.fd(),
         data.data(),
         data.size(),
-        0,
         peerAddr.getSockAddr(),
         peerAddr.getSockAddrLen());
 
-    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-        const int error = errno;
-        if (error == EMSGSIZE) {
+    if (n < 0) {
+        const int error = sockets::lastError();
+        if (sockets::isWouldBlock(error) || sockets::isInterrupted(error)) {
+            return;
+        }
+        if (sockets::isMessageSize(error)) {
             emitPathMtuFailure(
                 peerAddr,
                 data.size(),
@@ -218,7 +218,7 @@ void UdpSocket::sendTo(std::string_view data, const InetAddress& peerAddr) {
                 PathMtuSignalSource::kLocalSend,
                 quotedUdpPayloadPrefix(data));
         }
-        LOG_SYSERR << "UdpSocket::sendTo failed: " << std::strerror(error);
+        LOG_SYSERR << "UdpSocket::sendTo failed: " << sockets::errorMessage(error);
         if (errorCallback_) {
             errorCallback_(error);
         }
@@ -229,7 +229,7 @@ EventLoop* UdpSocket::getLoop() const noexcept {
     return loop_;
 }
 
-int UdpSocket::fd() const noexcept {
+SocketFd UdpSocket::fd() const noexcept {
     return socket_.fd();
 }
 
@@ -247,12 +247,11 @@ void UdpSocket::handleRead() {
     while (datagramsRead < maxDatagrams) {
         sockaddr_storage from{};
         socklen_t fromLen = static_cast<socklen_t>(sizeof(from));
-        const ssize_t n = ::recvfrom(
+        const ssize_t n = sockets::recvFrom(
             socket_.fd(),
             buffer,
             sizeof(buffer),
-            0,
-            reinterpret_cast<sockaddr*>(&from),
+            &from,
             &fromLen);
 
         if (n >= 0) {
@@ -264,7 +263,8 @@ void UdpSocket::handleRead() {
             continue;
         }
 
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        const int error = sockets::lastError();
+        if (sockets::isWouldBlock(error)) {
             emitReadBatchMetric(
                 datagramsRead,
                 bytesRead,
@@ -273,12 +273,12 @@ void UdpSocket::handleRead() {
                 std::chrono::steady_clock::now() - batchStart);
             return;
         }
-        if (errno == EINTR) {
+        if (sockets::isInterrupted(error)) {
             continue;
         }
 
         if (errorCallback_) {
-            errorCallback_(errno);
+            errorCallback_(error);
         }
         emitReadBatchMetric(
             datagramsRead,
@@ -305,7 +305,12 @@ void UdpSocket::handleError() {
 
     int error = 0;
     socklen_t len = static_cast<socklen_t>(sizeof(error));
-    if (::getsockopt(socket_.fd(), SOL_SOCKET, SO_ERROR, &error, &len) == 0 &&
+    if (::getsockopt(
+            socket_.fd(),
+            SOL_SOCKET,
+            SO_ERROR,
+            reinterpret_cast<char*>(&error),
+            &len) == 0 &&
         error != 0 &&
         errorCallback_) {
         errorCallback_(error);

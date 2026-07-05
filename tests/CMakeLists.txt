@@ -23,6 +23,50 @@ endfunction()
 # Scope labels such as transport-experimental/kcp-preview/pmtu-preview mark
 # preview boundaries only; they must not be used to hide failing foundation tests.
 
+if(WIN32)
+    add_mini_test(unit timer_queue ${CMAKE_CURRENT_SOURCE_DIR}/unit/timer_queue/test_timer_id.cpp)
+    add_mini_test(unit coroutine ${CMAKE_CURRENT_SOURCE_DIR}/unit/coroutine/test_task.cpp coro lifecycle)
+    add_mini_test(unit coroutine ${CMAKE_CURRENT_SOURCE_DIR}/unit/coroutine/test_sleep_awaitable.cpp coro lifecycle)
+    add_mini_test(unit coroutine ${CMAKE_CURRENT_SOURCE_DIR}/unit/coroutine/test_cancellation_token.cpp coro lifecycle)
+    add_mini_test(unit coroutine ${CMAKE_CURRENT_SOURCE_DIR}/unit/coroutine/test_when_all.cpp coro lifecycle)
+    add_mini_test(unit coroutine ${CMAKE_CURRENT_SOURCE_DIR}/unit/coroutine/test_when_any.cpp coro lifecycle)
+    add_mini_test(unit framing ${CMAKE_CURRENT_SOURCE_DIR}/unit/framing/test_framer.cpp protocol transport)
+    add_mini_test(unit kcp ${CMAKE_CURRENT_SOURCE_DIR}/unit/kcp/test_kcp_codec.cpp protocol transport transport-experimental kcp-preview)
+    add_mini_test(unit game ${CMAKE_CURRENT_SOURCE_DIR}/unit/game/test_player_session_fsm.cpp lifecycle)
+    add_mini_test(unit game ${CMAKE_CURRENT_SOURCE_DIR}/unit/game/test_game_backpressure_policy.cpp metrics)
+    add_mini_test(unit game ${CMAKE_CURRENT_SOURCE_DIR}/unit/game/test_game_gateway_security_policy.cpp protocol)
+    add_mini_test(unit logic ${CMAKE_CURRENT_SOURCE_DIR}/unit/logic/test_game_command_queue.cpp threading)
+    add_mini_test(unit metrics ${CMAKE_CURRENT_SOURCE_DIR}/unit/metrics/test_metrics_hook_ext.cpp)
+    add_mini_test(unit metrics ${CMAKE_CURRENT_SOURCE_DIR}/unit/metrics/test_metrics_exporter.cpp metrics)
+
+    add_mini_test(contract event_loop ${CMAKE_CURRENT_SOURCE_DIR}/contract/event_loop/test_event_loop.cpp threading lifecycle)
+    add_mini_test(
+        contract
+        event_loop_thread
+        ${CMAKE_CURRENT_SOURCE_DIR}/contract/event_loop_thread/test_event_loop_thread.cpp
+        threading
+        lifecycle
+    )
+    add_mini_test(
+        contract
+        event_loop_thread_pool
+        ${CMAKE_CURRENT_SOURCE_DIR}/contract/event_loop_thread_pool/test_event_loop_thread_pool.cpp
+        threading
+        lifecycle
+    )
+    add_mini_test(contract timer_queue ${CMAKE_CURRENT_SOURCE_DIR}/contract/timer_queue/test_timer_queue.cpp)
+    add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_sleep_awaitable.cpp coro lifecycle)
+    add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_combinator_contract.cpp coro lifecycle)
+    add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_cancellation_contract.cpp coro lifecycle)
+    add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_timeout_contract.cpp coro lifecycle)
+    add_mini_test(contract framing ${CMAKE_CURRENT_SOURCE_DIR}/contract/framing/test_framer_contract.cpp protocol transport)
+    add_mini_test(contract game ${CMAKE_CURRENT_SOURCE_DIR}/contract/game/test_session_manager_contract.cpp lifecycle)
+    add_mini_test(contract game ${CMAKE_CURRENT_SOURCE_DIR}/contract/game/test_game_backpressure_policy_contract.cpp metrics)
+    add_mini_test(contract game ${CMAKE_CURRENT_SOURCE_DIR}/contract/game/test_game_gateway_security_contract.cpp protocol lifecycle)
+    add_mini_test(contract logic ${CMAKE_CURRENT_SOURCE_DIR}/contract/logic/test_logic_loop_timing_contract.cpp threading)
+    return()
+endif()
+
 add_mini_test(unit buffer ${CMAKE_CURRENT_SOURCE_DIR}/unit/buffer/test_buffer.cpp)
 add_mini_test(unit buffer ${CMAKE_CURRENT_SOURCE_DIR}/unit/buffer/test_payload_pool.cpp)
 add_mini_test(unit channel ${CMAKE_CURRENT_SOURCE_DIR}/unit/channel/test_channel.cpp)

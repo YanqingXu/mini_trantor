@@ -98,7 +98,7 @@ TcpServer::TcpServer(EventLoop* loop, const InetAddress& listenAddr, std::string
     }
 
     acceptor_->setNewConnectionCallback(
-        [this](int sockfd, const InetAddress& peerAddr) { newConnection(sockfd, peerAddr); });
+        [this](SocketFd sockfd, const InetAddress& peerAddr) { newConnection(sockfd, peerAddr); });
 }
 
 TcpServer::~TcpServer() {
@@ -719,7 +719,7 @@ void TcpServer::forceCloseAllConnections() {
     }
 }
 
-void TcpServer::newConnection(int sockfd, const InetAddress& peerAddr) {
+void TcpServer::newConnection(SocketFd sockfd, const InetAddress& peerAddr) {
     loop_->assertInLoopThread();
 
     // If server is stopped/draining, reject the new connection.

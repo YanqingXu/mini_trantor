@@ -2,12 +2,13 @@
 
 #include "mini/base/Logger.h"
 #include "mini/net/EventLoop.h"
+#include "mini/net/SocketsOps.h"
 
 #include <cstring>
+
+#ifndef _WIN32
 #include <netdb.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <sys/types.h>
+#endif
 
 namespace mini::net {
 
@@ -124,6 +125,8 @@ std::shared_ptr<DnsResolver> DnsResolver::getShared() {
 }
 
 void DnsResolver::workerThread() {
+    sockets::ensureInitialized();
+
     while (true) {
         ResolveRequest req;
         {

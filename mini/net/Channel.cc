@@ -8,7 +8,7 @@
 
 namespace mini::net {
 
-Channel::Channel(EventLoop* loop, int fd)
+Channel::Channel(EventLoop* loop, SocketFd fd)
     : loop_(loop),
       fd_(fd),
       events_(kNoneEvent),
@@ -61,7 +61,7 @@ void Channel::tie(const std::shared_ptr<void>& object) {
     tied_ = true;
 }
 
-int Channel::fd() const noexcept {
+SocketFd Channel::fd() const noexcept {
     return fd_;
 }
 
@@ -153,7 +153,7 @@ void Channel::handleEventWithGuard(mini::base::Timestamp receiveTime) {
             readCallback_(receiveTime);
         }
     }
-    if (revents_ & EPOLLOUT) {
+    if (revents_ & kWriteEvent) {
         if (writeCallback_) {
             writeCallback_();
         }
