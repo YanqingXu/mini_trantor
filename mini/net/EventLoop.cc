@@ -4,77 +4,18 @@
 #include "mini/net/Poller.h"
 #include "mini/net/SocketsOps.h"
 #include "mini/net/TimerQueue.h"
+#include "mini/net/platform/Wakeup.h"
 
 #include "mini/base/Logger.h"
 
 #include <algorithm>
-#include <cerrno>
-#include <cstring>
 #include <stdexcept>
-
-#ifndef _WIN32
-#include <sys/eventfd.h>
-#include <unistd.h>
-#endif
 
 namespace mini::net {
 
 namespace {
 
 thread_local EventLoop* t_loopInThisThread = nullptr;
-
-WakeupFdPair createWakeupFds() {
-#ifdef _WIN32
-    SocketFd fds[2]{kInvalidSocket, kInvalidSocket};
-    sockets::createSocketPairOrDie(fds);
-    return {.readFd = fds[0], .writeFd = fds[1]};
-#else
-    const SocketFd eventfd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-    if (eventfd < 0) {
-        LOG_SYSFATAL << "eventfd: " << std::strerror(errno);
-    }
-    return {.readFd = eventfd, .writeFd = eventfd};
-#endif
-}
-
-void closeWakeupFds(WakeupFdPair fds) {
-    sockets::close(fds.readFd);
-    if (fds.writeFd != fds.readFd) {
-        sockets::close(fds.writeFd);
-    }
-}
-
-ssize_t writeWakeup(SocketFd fd) {
-#ifdef _WIN32
-    const unsigned char one = 1;
-    return sockets::write(fd, &one, sizeof(one));
-#else
-    const uint64_t one = 1;
-    return sockets::write(fd, &one, sizeof(one));
-#endif
-}
-
-bool drainWakeup(SocketFd fd) {
-#ifdef _WIN32
-    bool drained = false;
-    char buffer[64];
-    while (true) {
-        const ssize_t n = sockets::read(fd, buffer, sizeof(buffer));
-        if (n > 0) {
-            drained = true;
-            continue;
-        }
-        if (n < 0 && sockets::isWouldBlock(sockets::lastError())) {
-            return drained;
-        }
-        return drained || n == 0;
-    }
-#else
-    uint64_t one = 0;
-    const ssize_t n = sockets::read(fd, &one, sizeof(one));
-    return n == static_cast<ssize_t>(sizeof(one));
-#endif
-}
 
 }  // namespace
 
@@ -86,7 +27,7 @@ EventLoop::EventLoop()
       threadId_(std::this_thread::get_id()),
       poller_(Poller::newDefaultPoller(this)),
       timerQueue_(std::make_unique<TimerQueue>(this)),
-      wakeupFds_(createWakeupFds()),
+      wakeupFds_(platform::createWakeupFds()),
       wakeupChannel_(std::make_unique<Channel>(this, wakeupFds_.readFd)),
       currentActiveChannel_(nullptr),
       pendingFunctorPeak_(0),
@@ -109,7 +50,7 @@ EventLoop::~EventLoop() {
     }
     wakeupChannel_->disableAll();
     wakeupChannel_->remove();
-    closeWakeupFds(wakeupFds_);
+    platform::closeWakeupFds(wakeupFds_);
     t_loopInThisThread = nullptr;
 }
 
@@ -212,7 +153,7 @@ void EventLoop::cancel(TimerId timerId) {
 
 void EventLoop::wakeup() {
     wakeupCount_.fetch_add(1, std::memory_order_relaxed);
-    const ssize_t written = writeWakeup(wakeupFds_.writeFd);
+    const ssize_t written = platform::writeWakeup(wakeupFds_.writeFd);
     if (written < 0 && !sockets::isWouldBlock(sockets::lastError())) {
         LOG_SYSERR << "EventLoop::wakeup: " << sockets::errorMessage(sockets::lastError());
     }
@@ -245,7 +186,7 @@ void EventLoop::assertInLoopThread() const {
 
 void EventLoop::handleRead(mini::base::Timestamp receiveTime) {
     (void)receiveTime;
-    if (!drainWakeup(wakeupFds_.readFd) && !sockets::isWouldBlock(sockets::lastError())) {
+    if (!platform::drainWakeup(wakeupFds_.readFd) && !sockets::isWouldBlock(sockets::lastError())) {
         LOG_SYSERR << "EventLoop::handleRead: " << sockets::errorMessage(sockets::lastError());
     }
     EventLoopMetricSample sample;

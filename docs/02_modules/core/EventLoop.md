@@ -36,9 +36,9 @@
 - 没有统一的"在哪个线程执行"的保证 → 数据竞争满天飞
 
 EventLoop 把三件事统一到一个循环中：
-1. **I/O 事件轮询**：通过 Poller（epoll）
-2. **定时器触发**：通过 TimerQueue（timerfd）
-3. **跨线程任务投递**：通过 pendingFunctors_ + eventfd wakeup
+1. **I/O 事件轮询**：通过 Poller（Linux epoll / Windows select）
+2. **定时器触发**：通过 TimerQueue 计算 poll timeout
+3. **跨线程任务投递**：通过 pendingFunctors_ + platform wakeup
 
 ## 3. 对外接口（API）
 
@@ -60,10 +60,10 @@ EventLoop 把三件事统一到一个循环中：
 
 | 方法 | 调用者 | 用途 |
 |------|--------|------|
-| `updateChannel(ch)` | Channel | 注册/更新 epoll 监听 |
-| `removeChannel(ch)` | Channel | 移除 epoll 监听 |
+| `updateChannel(ch)` | Channel | 注册/更新平台 poller 监听 |
+| `removeChannel(ch)` | Channel | 移除平台 poller 监听 |
 | `hasChannel(ch)` | Channel | 检查是否已注册 |
-| `wakeup()` | queueInLoop/quit | 通过 eventfd 唤醒阻塞的 poll |
+| `wakeup()` | queueInLoop/quit | 通过平台 wakeup 唤醒阻塞的 poll |
 
 ## 4. 核心成员变量
 
@@ -78,16 +78,16 @@ bool callingPendingFunctors_;           // 正在执行 pending 回调（影响 
 const std::thread::id threadId_;        // 构造时记录，永不改变
 
 // ===== I/O 多路复用 =====
-std::unique_ptr<Poller> poller_;        // EPollPoller 实例（独占所有权）
+std::unique_ptr<Poller> poller_;        // 平台 Poller 实例（独占所有权）
 ChannelList activeChannels_;            // poll 返回的活跃 Channel 列表
 Channel* currentActiveChannel_;         // 当前正在处理的 Channel（调试用）
 
 // ===== 定时器 =====
-std::unique_ptr<TimerQueue> timerQueue_;// 基于 timerfd 的定时器队列（独占所有权）
+std::unique_ptr<TimerQueue> timerQueue_;// 基于 poll timeout 的定时器队列（独占所有权）
 
 // ===== 跨线程 wakeup =====
-int wakeupFd_;                          // eventfd 文件描述符
-std::unique_ptr<Channel> wakeupChannel_;// 监听 eventfd 的 Channel
+platform::WakeupFdPair wakeupFds_;      // eventfd 或 socket pair
+std::unique_ptr<Channel> wakeupChannel_;// 监听 wakeup read 端的 Channel
 
 // ===== 跨线程任务队列 =====
 mutable std::mutex mutex_;              // 保护 pendingFunctors_ 的互斥锁
@@ -104,7 +104,7 @@ Timestamp pollReturnTime_;              // 最近一次 poll 返回的时间
 | `quit_` | 构造 → 析构 | `std::atomic` |
 | `threadId_` | 构造时确定 | `const`，天然安全 |
 | `pendingFunctors_` | 构造 → 析构 | `mutex_` 保护 |
-| `wakeupFd_` | 构造 → 析构 | 仅 loop 线程 close |
+| `wakeupFds_` | 构造 → 析构 | 仅 loop 线程 close |
 | 其余所有变量 | 构造 → 析构 | 仅 loop 线程访问 |
 
 ## 5. 执行流程（最重要）
@@ -115,12 +115,12 @@ Timestamp pollReturnTime_;              // 最近一次 poll 返回的时间
 EventLoop::EventLoop()
   ├─ 检查 thread_local t_loopInThisThread == nullptr（一个线程只能有一个 loop）
   ├─ t_loopInThisThread = this
-  ├─ poller_ = Poller::newDefaultPoller(this)     // 创建 EPollPoller
-  ├─ timerQueue_ = make_unique<TimerQueue>(this)  // 创建 TimerQueue（内部创建 timerfd）
-  ├─ wakeupFd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)
-  ├─ wakeupChannel_ = make_unique<Channel>(this, wakeupFd_)
+  ├─ poller_ = Poller::newDefaultPoller(this)     // 创建平台 Poller
+  ├─ timerQueue_ = make_unique<TimerQueue>(this)  // 创建 TimerQueue
+  ├─ wakeupFds_ = platform::createWakeupFds()
+  ├─ wakeupChannel_ = make_unique<Channel>(this, wakeupFds_.readFd)
   ├─ wakeupChannel_->setReadCallback(handleRead)
-  └─ wakeupChannel_->enableReading()              // 注册到 epoll
+  └─ wakeupChannel_->enableReading()              // 注册到 Poller
 ```
 
 ### 5.2 loop() 主循环
@@ -161,7 +161,7 @@ void EventLoop::loop() {
 ```
 ┌───────────────────── 一次迭代 ─────────────────────┐
 │                                                     │
-│  epoll_wait()      handleEvent()    doPendingFunctors() │
+│  poller_wait()     handleEvent()    doPendingFunctors() │
 │  ┌─────────┐      ┌───────────┐    ┌──────────────┐│
 │  │ 阻塞等待 │ ──► │ 事件分发   │ ──► │ 跨线程回调   ││
 │  │ I/O事件  │      │ read/write │    │ runInLoop    ││
@@ -184,7 +184,7 @@ queueInLoop(cb):
   ├─ pendingFunctors_.push_back(cb)
   ├─ unlock
   └─ if (!isInLoopThread() || callingPendingFunctors_):
-      └─ wakeup()                          // 写 eventfd 唤醒 poll
+      └─ wakeup()                          // 写平台 wakeup 唤醒 poll
 ```
 
 **为什么 `callingPendingFunctors_` 时也要 wakeup？**
@@ -225,7 +225,7 @@ swap 技巧的好处：
 quit():
   ├─ quit_ = true (atomic store)
   └─ if (!isInLoopThread()):
-      └─ wakeup()         // 唤醒可能正在 epoll_wait 的 loop 线程
+      └─ wakeup()         // 唤醒可能正在 poller wait 的 loop 线程
 
 loop() while 循环检测到 quit_ == true:
   └─ 退出 while 循环
@@ -241,7 +241,7 @@ loop() while 循环检测到 quit_ == true:
   ├─ assert(!looping_)                  // 必须先退出 loop()
   ├─ wakeupChannel_->disableAll()
   ├─ wakeupChannel_->remove()
-  ├─ close(wakeupFd_)
+  ├─ platform::closeWakeupFds(wakeupFds_)
   └─ t_loopInThisThread = nullptr
 ```
 
@@ -258,7 +258,7 @@ loop() while 循环检测到 quit_ == true:
     │    │             │            │           │
     │    ▼             ▼            ▼           │
     │  Poller      TimerQueue   wakeupChannel  │
-    │  (epoll)     (timerfd)    (eventfd)      │
+    │  (backend)   (timeout)    (platform)     │
     │                                          │
     └────────────────┬─────────────────────────┘
                      │
@@ -267,7 +267,7 @@ loop() while 循环检测到 quit_ == true:
             ┌────────┼────────┐
             ▼        ▼        ▼
          Channel  Channel  Channel
-         (conn1)  (conn2)  (timer)
+         (conn1)  (conn2)  (wakeup)
 ```
 
 ### 依赖关系
@@ -296,9 +296,11 @@ if (t_loopInThisThread != nullptr) {
 **为什么？**—— 如果一个线程有两个 loop，它们共享 thread_local 状态，
 `isInLoopThread()` 判断会混乱，线程亲和性保证会崩溃。
 
-### 7.2 eventfd 唤醒
+### 7.2 平台 wakeup
 
-**为什么不用 pipe？**
+Linux 后端使用 eventfd，Windows 后端使用 WinSock loopback socket pair。两者都只服务于同一个目标：让跨线程 `queueInLoop()` 能打断正在阻塞的 Poller。
+
+**Linux 为什么不用 pipe？**
 
 | 特性 | eventfd | pipe |
 |------|---------|------|
@@ -306,7 +308,7 @@ if (t_loopInThisThread != nullptr) {
 | 内核开销 | 更轻量 | 内核缓冲区 |
 | 语义 | 计数器（可累计） | 字节流 |
 
-eventfd 更现代、更轻量，Linux 2.6.22+ 可用。
+eventfd 更现代、更轻量，Linux 2.6.22+ 可用；Windows 没有 eventfd，因此使用 socket pair 保持同样的 EventLoop 唤醒语义。
 
 ### 7.3 quit 后排干 pendingFunctors
 

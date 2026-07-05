@@ -5,6 +5,7 @@
 #include "mini/net/EventLoop.h"
 #include "mini/net/EventLoopThread.h"
 #include "mini/net/NetError.h"
+#include "mini/net/SocketsOps.h"
 #include "mini/net/TcpConnection.h"
 
 #include <array>
@@ -13,18 +14,24 @@
 #include <future>
 #include <memory>
 #include <string>
-#include <sys/socket.h>
 #include <thread>
+#ifndef _WIN32
+#include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 using namespace std::chrono_literals;
 
 namespace {
 
-std::array<int, 2> makeSocketPair() {
-    std::array<int, 2> sockets{};
+std::array<mini::net::SocketFd, 2> makeSocketPair() {
+    std::array<mini::net::SocketFd, 2> sockets{};
+#ifdef _WIN32
+    mini::net::sockets::createSocketPairOrDie(sockets.data());
+#else
     const int rc = ::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data());
     assert(rc == 0);
+#endif
     return sockets;
 }
 
@@ -187,7 +194,7 @@ int main() {
 
         std::thread peerCloser([fd = sockets[1]] {
             std::this_thread::sleep_for(50ms);
-            ::close(fd);
+            mini::net::sockets::close(fd);
         });
 
         assert(resultFuture.wait_for(3s) == std::future_status::ready);

@@ -77,14 +77,14 @@ void EventLoop::queueInLoop(Functor cb) {
         pendingFunctors_.push_back(std::move(cb));  // 唯一的锁
     }
     if (!isInLoopThread() || callingPendingFunctors_) {
-        wakeup();  // 通过 eventfd 唤醒目标线程
+        wakeup();  // 通过平台 wakeup 唤醒目标线程
     }
 }
 ```
 
 ### wakeup 机制
 
-每个 EventLoop 拥有一个 `eventfd`，当需要唤醒时：
+每个 EventLoop 拥有一组平台 wakeup 句柄。Linux 使用 `eventfd`，Windows 使用 WinSock loopback socket pair；当需要唤醒时：
 
 ```
 Thread A                            Thread B (EventLoop)
@@ -92,8 +92,8 @@ Thread A                            Thread B (EventLoop)
     ├── queueInLoop(cb) ──┐            │ (blocked in epoll_wait)
     │                     │            │
     │  pendingFunctors_.push(cb)       │
-    │  write(wakeupFd_, 1) ──────────► │ epoll_wait returns
-    │                                   │ handleRead() drains eventfd
+    │  writeWakeup() ────────────────► │ poller returns
+    │                                   │ handleRead() drains wakeup
     │                                   │ doPendingFunctors() → cb()
 ```
 
@@ -101,7 +101,7 @@ Thread A                            Thread B (EventLoop)
 
 | 操作 | 线程安全？ | 原因 |
 |------|-----------|------|
-| `EventLoop::runInLoop()` | ✅ | 跨线程路径通过 mutex + eventfd |
+| `EventLoop::runInLoop()` | ✅ | 跨线程路径通过 mutex + platform wakeup |
 | `EventLoop::queueInLoop()` | ✅ | mutex 保护 pendingFunctors_ |
 | `TcpConnection::send()` | ✅ | 内部自动 runInLoop 转发 |
 | `TcpConnection::shutdown()` | ✅ | 内部自动 runInLoop 转发 |

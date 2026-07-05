@@ -44,7 +44,9 @@ const char* Logger::levelName(LogLevel level) {
 
 const char* Logger::extractFileName(const char* path) {
     const char* slash = std::strrchr(path, '/');
-    return slash ? slash + 1 : path;
+    const char* backslash = std::strrchr(path, '\\');
+    const char* separator = slash > backslash ? slash : backslash;
+    return separator ? separator + 1 : path;
 }
 
 Logger::Logger(const char* file, int line, LogLevel level)
@@ -73,7 +75,11 @@ void Logger::formatHeader() {
     const auto us = duration_cast<microseconds>(now.time_since_epoch()) % 1000000;
 
     struct tm tm{};
+#ifdef _WIN32
+    ::localtime_s(&tm, &tt);
+#else
     ::localtime_r(&tt, &tm);
+#endif
 
     char timeBuf[32];
     const int timeLen = std::snprintf(timeBuf, sizeof(timeBuf),
@@ -133,6 +139,11 @@ Logger& Logger::operator<<(unsigned long val) {
 }
 
 Logger& Logger::operator<<(long long val) {
+    buffer_.append(std::to_string(val));
+    return *this;
+}
+
+Logger& Logger::operator<<(unsigned long long val) {
     buffer_.append(std::to_string(val));
     return *this;
 }

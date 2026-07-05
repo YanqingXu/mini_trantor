@@ -202,6 +202,12 @@ void testAsyncConnectionCloseDoesNotBlockCaller() {
     releaseBlockerPromise.set_value();
     worker.join();
     waitFutureReady(closingFuture);
+
+    std::promise<void> closeDrained;
+    auto closeDrainedFuture = closeDrained.get_future();
+    logicLoop->queueInLoop([&closeDrained] { closeDrained.set_value(); });
+    waitFutureReady(closeDrainedFuture);
+
     assert(session->state() == mini::game::PlayerSession::State::kClosing);
 
     logicLoop->quit();

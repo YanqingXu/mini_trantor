@@ -8,11 +8,13 @@
 stateDiagram-v2
     [*] --> Idle
     Idle --> Armed: first timer inserted
-    Armed --> Dispatching: timerfd readable / handleRead()
+    Armed --> Waiting: EventLoop polls with next timeout
+    Waiting --> Dispatching: poll returns and deadline <= now
     Dispatching --> Armed: repeating timers re-armed or future timers remain
     Dispatching --> Idle: no timers remain
     Idle --> Destroyed: destructor
-    Armed --> Destroyed: disableAll + remove + close(timerfd)
+    Armed --> Destroyed: metadata cleared with EventLoop teardown
+    Waiting --> Destroyed: EventLoop quits before next deadline
 ```
 
 ## 定时器触发时序
@@ -22,18 +24,17 @@ sequenceDiagram
     participant Other as Other Thread
     participant Loop as EventLoop
     participant TQ as TimerQueue
-    participant TFD as timerfd
+    participant Poller as Poller
 
     Other->>Loop: runAfter / runEvery
     Loop->>TQ: addTimerInLoop()
-    TQ->>TFD: timerfd_settime(next expiration)
-    TFD-->>Loop: readable
-    Loop->>TQ: handleRead()
-    TQ->>TFD: read expirations
+    Loop->>TQ: pollTimeoutMs(defaultTimeoutMs)
+    Loop->>Poller: poll(timeoutMs)
+    Poller-->>Loop: active channels or timeout
+    Loop->>TQ: handleExpired(now)
     TQ->>TQ: collect expired timers
     TQ->>TQ: run callbacks on owner loop
     TQ->>TQ: reinsert repeating timers if not canceled
-    TQ->>TFD: reset next expiration
 ```
 
 ## 取消时序
@@ -57,6 +58,7 @@ sequenceDiagram
 ## 当前约束
 
 - `TimerQueue` 归属单个 `EventLoop`，所有内部状态只允许 owner loop 修改。
-- `TimerQueue` 必须先移除 timerfd 对应的 `Channel` 注册，再关闭 timerfd。
+- `TimerQueue` 不拥有平台 fd，也不注册 `Channel`；跨线程唤醒仍由 `EventLoop` wakeup 机制负责。
+- `EventLoop` 必须在每轮 `Poller::poll()` 前调用 `pollTimeoutMs()`，并在 I/O dispatch 后调用 `handleExpired()`。
 - repeating timer 只有在未被取消时才允许重新插回队列。
 - 定时器回调只是“在 owner loop 执行的 functor”，不提供额外线程或隐藏所有权。

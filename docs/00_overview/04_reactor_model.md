@@ -49,24 +49,24 @@ void EventLoop::loop() {
 
 ### 三种事件源
 
-EventLoop 通过三种 fd 驱动不同类型的事件：
+EventLoop 通过平台 poller 驱动 socket 事件和 wakeup 事件，并通过 poll timeout 驱动 TimerQueue：
 
-| fd 类型 | 来源 | 触发场景 |
+| 事件源 | 来源 | 触发场景 |
 |---------|------|---------|
 | **socket fd** | 网络连接（listen/accept/connect） | 数据可读、可写、连接关闭、错误 |
-| **timerfd** | `TimerQueue` | 定时器到期 |
-| **eventfd** | `wakeupFd_` | 跨线程唤醒 |
+| **poll timeout** | `TimerQueue` | 定时器到期 |
+| **platform wakeup** | Linux eventfd / Windows socket pair | 跨线程唤醒 |
 
-三者在 epoll 层面完全一致 —— 都是 fd 上的事件。这就是 Reactor 的优雅之处：**所有事件源统一为 fd + 事件**。
+socket 与 wakeup 在 Poller 层面统一为 Channel 事件；TimerQueue 通过每轮 poll timeout 进入同一个 EventLoop 调度序。
 
 ### 事件分发链
 
 ```
-内核 epoll                   Mini-Trantor
+平台 poller                  Mini-Trantor
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                         EPollPoller::poll()
-epoll_wait() ─────────►   │
-   返回活跃 fd           │ fillActiveChannels()
+                         Poller::poll()
+wait/select/epoll ─────►  │
+   返回活跃 fd/socket     │ fillActiveChannels()
                          │   ├─ event.data.ptr → Channel*
                          │   └─ channel->setRevents(events)
                          ▼
@@ -75,10 +75,10 @@ epoll_wait() ─────────►   │
                          │   channel->handleEvent()
                          ▼
                       Channel::handleEventWithGuard()
-                         ├─ EPOLLIN  → readCallback_(timestamp)
-                         ├─ EPOLLOUT → writeCallback_()
-                         ├─ EPOLLHUP → closeCallback_()
-                         └─ EPOLLERR → errorCallback_()
+                         ├─ ReadEvent  → readCallback_(timestamp)
+                         ├─ WriteEvent → writeCallback_()
+                         ├─ CloseEvent → closeCallback_()
+                         └─ ErrorEvent → errorCallback_()
                          ▼
                       具体处理函数
                          ├─ TcpConnection::handleRead()
@@ -108,16 +108,16 @@ Channel 的职责是：
 
 ### Poller 的角色
 
-Poller 是对 I/O 多路复用的抽象。EPollPoller 是目前唯一的实现。
+Poller 是对 I/O 多路复用的抽象。Linux 使用 EPollPoller，Windows 使用 SelectPoller。
 
 ```cpp
-// EPollPoller 维护 fd → Channel 的映射
+// Poller 维护 fd/socket → Channel 的映射
 channels_: { fd → Channel* }
 
 // 状态机：kNew → kAdded ↔ kDeleted → kNew
-// kNew:     Channel 未注册到 epoll（初始状态）
-// kAdded:   Channel 已注册到 epoll（EPOLL_CTL_ADD）
-// kDeleted: Channel 已从 epoll 删除，但仍在 channels_ 映射中
+// kNew:     Channel 未注册到 backend（初始状态）
+// kAdded:   Channel 已注册到 backend
+// kDeleted: Channel 已从 backend 删除，但仍在 channels_ 映射中
 ```
 
 ## 多 Reactor 模型

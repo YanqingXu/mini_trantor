@@ -11,6 +11,7 @@
 #include <cstring>
 #include <functional>
 #include <string>
+#include <string_view>
 
 namespace mini::base {
 
@@ -21,7 +22,7 @@ public:
         DEBUG,
         INFO,
         WARN,
-        ERROR,
+        kError,
         FATAL,
         NUM_LOG_LEVELS,
     };
@@ -42,6 +43,7 @@ public:
     Logger& operator<<(long val);
     Logger& operator<<(unsigned long val);
     Logger& operator<<(long long val);
+    Logger& operator<<(unsigned long long val);
     Logger& operator<<(double val);
     Logger& operator<<(char c);
 
@@ -87,13 +89,13 @@ Logger::LogLevel logLevel();
     mini::base::Logger(__FILE__, __LINE__, mini::base::Logger::WARN).stream()
 
 #define LOG_ERROR                                                          \
-    mini::base::Logger(__FILE__, __LINE__, mini::base::Logger::ERROR).stream()
+    mini::base::Logger(__FILE__, __LINE__, mini::base::Logger::kError).stream()
 
 #define LOG_FATAL                                                          \
     mini::base::Logger(__FILE__, __LINE__, mini::base::Logger::FATAL).stream()
 
 #define LOG_SYSERR                                                         \
-    mini::base::Logger(__FILE__, __LINE__, mini::base::Logger::ERROR).stream()
+    mini::base::Logger(__FILE__, __LINE__, mini::base::Logger::kError).stream()
 
 #define LOG_SYSFATAL                                                       \
     mini::base::Logger(__FILE__, __LINE__, mini::base::Logger::FATAL).stream()

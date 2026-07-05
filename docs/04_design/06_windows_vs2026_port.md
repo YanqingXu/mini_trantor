@@ -14,6 +14,15 @@ TcpConnection 的线程归属和生命周期规则不变。
 - `EPollPoller` 负责 epoll event 与 Channel event 的双向转换。
 - `SelectPoller` 负责 WinSock `select()` fd_set 与 Channel event 的转换。
 
+## Source Layout
+
+- `mini/net/platform/SocketTypes.h` 定义 `SocketFd`、`socklen_t`、`ssize_t` 等平台 socket 类型。
+- `mini/net/platform/SocketsOps_win.cc` 与 `mini/net/platform/SocketsOps_linux.cc` 分开实现 WinSock / POSIX socket 操作。
+- `mini/net/platform/Wakeup_win.cc` 与 `mini/net/platform/Wakeup_linux.cc` 分开实现 EventLoop wakeup。
+- `mini/net/poller/SelectPoller.*` 与 `mini/net/poller/EPollPoller.*` 分开承载具体 poller 后端。
+- `mini/net/SocketTypes.h`、`mini/net/SelectPoller.h`、`mini/net/EPollPoller.h` 保留为兼容转发头，避免上层 include 大面积迁移。
+- `mini/net/poller/PollerFactory.cc` 集中实现默认后端选择。
+
 ## Wakeup 与 Timer
 
 ```mermaid
@@ -46,17 +55,26 @@ Windows 没有 `eventfd` / `timerfd`。因此：
 ## Build
 
 ```powershell
-cmake --preset windows-vs2026-x64
-cmake --build --preset windows-vs2026-x64
-ctest --preset windows-vs2026-x64
+& "D:\VS2026\2026\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --preset windows-vs2026-x64
+& "D:\VS2026\2026\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --build --preset windows-vs2026-x64
+& "D:\VS2026\2026\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\ctest.exe" --preset windows-vs2026-x64
 ```
 
-如 OpenSSL 由 vcpkg 提供：
+preset 固定 `CMAKE_GENERATOR_INSTANCE=D:/VS2026/2026`，以便同机存在 VS2026 Insiders 或其它 Visual Studio instance 时仍使用目标安装路径。
+
+Windows preset 默认 `MINI_ENABLE_TLS=OFF`，普通 TCP/UDP、HTTP、WebSocket、RPC、KCP 和示例不依赖 OpenSSL。若 OpenSSL 由 vcpkg 提供，可显式开启 TLS：
 
 ```powershell
-cmake --preset windows-vs2026-x64 `
+& "D:\VS2026\2026\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --preset windows-vs2026-x64 `
+  -DMINI_ENABLE_TLS=ON `
   -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 ```
+
+## Verified Snapshot
+
+- Configure: VS2026 bundled CMake `4.2.3-msvc3`, generator `Visual Studio 18 2026`, instance `D:/VS2026/2026`.
+- Build: `mini_trantor.lib`, `echo_server.exe`, `coroutine_echo_server.exe`, `game_server.exe`, platform split sources, and Windows test targets built in Debug.
+- Test: `ctest --preset windows-vs2026-x64`, 27/27 passed.
 
 ## Core Module Change Gate
 
@@ -72,3 +90,4 @@ cmake --preset windows-vs2026-x64 `
    - `tests/contract/tcp_connection/test_tcp_connection.cpp`
    - `tests/contract/tcp_client/test_tcp_client.cpp`
    - `tests/contract/tcp_server/test_tcp_server.cpp`
+   - Windows smoke/contract subset from `tests/CMakeLists.txt`, verified by `ctest --preset windows-vs2026-x64`.

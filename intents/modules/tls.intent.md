@@ -6,6 +6,9 @@ It wraps OpenSSL's `SSL_CTX` and `SSL` objects with reactor-friendly, non-blocki
 handshake and I/O, preserving thread-affinity and lifecycle discipline.
 
 TLS is an optional feature: connections without TLS continue to work unchanged.
+At build time, `MINI_ENABLE_TLS=OFF` removes the OpenSSL dependency; in that
+configuration `TlsContext` factories fail explicitly and plain TCP transport
+remains the supported baseline.
 
 ---
 
@@ -35,6 +38,7 @@ TLS is an optional feature: connections without TLS continue to work unchanged.
 - integrate TLS shutdown with connection close semantics
 - support SNI (Server Name Indication) for client connections
 - preserve all existing non-TLS behavior when TLS is not enabled
+- preserve all existing non-TLS behavior when mini-trantor is built without OpenSSL
 
 ---
 
@@ -78,6 +82,7 @@ TLS is an optional feature: connections without TLS continue to work unchanged.
 
 ## 8. Failure Semantics
 - TlsContext creation failure (bad cert/key path) throws exception
+- if `MINI_ENABLE_TLS=OFF`, TlsContext creation throws an explicit unsupported error
 - TLS handshake failure produces handleError → handleClose path
 - SSL_read errors (non-WANT_READ/WANT_WRITE) trigger error → close path
 - SSL_write errors trigger error → close path
@@ -132,6 +137,7 @@ TLS is an optional feature: connections without TLS continue to work unchanged.
 - TLS handshake failure produces error → close callback
 - certificate verification failure is detectable
 - non-TLS connections are unaffected by TLS infrastructure
+- `MINI_ENABLE_TLS=OFF` build keeps plain ConnectionTransport read/write working
 - coroutine awaitables work transparently over TLS connections
 
 ---
@@ -158,3 +164,5 @@ TLS is an optional feature: connections without TLS continue to work unchanged.
    All SSL operations are owner-loop-thread only.
 5. **Which test file verifies this change?** unit/tls/test_tls_context.cpp,
    contract/tls/test_tls_handshake.cpp, integration/tls/test_tls_echo.cpp
+   For Windows `MINI_ENABLE_TLS=OFF` plain transport coverage is verified by
+   `ctest --preset windows-vs2026-x64`.

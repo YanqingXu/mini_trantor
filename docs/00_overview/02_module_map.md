@@ -6,6 +6,8 @@
 mini/
 ├── base/           ← 基础工具（Timestamp, noncopyable）
 ├── net/            ← Reactor 核心 + 网络层 + 高级组件
+│   ├── platform/   ← Windows/Linux socket 与 wakeup 平台边界
+│   ├── poller/     ← Poller 后端实现与默认后端工厂
 │   ├── udp/        ← UDP datagram 基线与 PMTU signal preview
 │   ├── kcp/        ← KCP-style reliable UDP preview
 │   ├── broadcast/  ← 游戏广播路由与批量发送
@@ -27,13 +29,25 @@ mini/
 |----|------|------|------|
 | `EventLoop` | `mini/net/EventLoop.h/cc` | poll + 事件分发 + 跨线程任务投递 | **心脏** |
 | `Channel` | `mini/net/Channel.h/cc` | fd 事件订阅与回调分发 | 核心 |
-| `Poller` | `mini/net/Poller.h` | I/O 多路复用抽象基类 | 核心 |
-| `EPollPoller` | `mini/net/EPollPoller.h/cc` | Poller 的 epoll 后端实现 | 核心 |
-| `TimerQueue` | `mini/net/TimerQueue.h/cc` | timerfd 驱动的定时任务 | 核心 |
+| `Poller` | `mini/net/Poller.h/cc` | I/O 多路复用抽象基类 | 核心 |
+| `EPollPoller` | `mini/net/poller/EPollPoller.h/cc` | Linux epoll 后端实现 | 核心 |
+| `SelectPoller` | `mini/net/poller/SelectPoller.h/cc` | Windows WinSock select 后端实现 | 核心 |
+| `TimerQueue` | `mini/net/TimerQueue.h/cc` | EventLoop poll timeout 驱动的定时任务 | 核心 |
 
 **依赖关系**：`EventLoop` → `Poller` + `TimerQueue` + `Channel`(wakeup)
 
 **为什么需要这个模块**：Reactor 模式的本质 —— 单线程内用"等待事件-分发处理"循环驱动所有 I/O 操作，无锁、高效。
+
+### 1.1 Platform Runtime —— 平台边界
+
+| 组件 | 文件 | 职责 | 地位 |
+|----|------|------|------|
+| `SocketTypes` | `mini/net/platform/SocketTypes.h` | 平台 socket 句柄与头文件边界 | 支撑 |
+| `SocketsOps` | `mini/net/SocketsOps.h` + `mini/net/platform/SocketsOps_*` | WinSock/POSIX socket 调用薄包装 | 支撑 |
+| `Wakeup` | `mini/net/platform/Wakeup.h` + `Wakeup_*` | EventLoop wakeup fd/socket pair 创建、写入、drain、关闭 | 核心支撑 |
+| `PollerFactory` | `mini/net/poller/PollerFactory.cc` | 根据平台选择默认 Poller 后端 | 支撑 |
+
+旧的 `mini/net/SocketTypes.h`、`mini/net/EPollPoller.h`、`mini/net/SelectPoller.h` 仍作为兼容转发头存在。
 
 ### 2. Thread Model —— 线程扩展
 
@@ -67,7 +81,7 @@ mini/
 |----|------|------|------|
 | `InetAddress` | `mini/net/InetAddress.h/cc` | IPv4 地址 + 端口封装 | 工具 |
 | `Socket` | `mini/net/Socket.h/cc` | fd 级 socket 操作的 RAII 封装 | 工具 |
-| `SocketsOps` | `mini/net/SocketsOps.h/cc` | 底层系统调用的薄包装 | 工具 |
+| `SocketsOps` | `mini/net/SocketsOps.h` + `mini/net/platform/SocketsOps_*` | 底层系统调用的薄包装 | 工具 |
 | `Callbacks` | `mini/net/Callbacks.h` | 统一的回调类型定义 | 工具 |
 | `TimerId` | `mini/net/TimerId.h` | Timer 标识符值对象 | 工具 |
 

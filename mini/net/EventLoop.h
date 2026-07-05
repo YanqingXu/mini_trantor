@@ -6,8 +6,8 @@
 #include "mini/base/MetricsHook.h"
 #include "mini/base/Timestamp.h"
 #include "mini/base/noncopyable.h"
-#include "mini/net/SocketTypes.h"
 #include "mini/net/TimerId.h"
+#include "mini/net/platform/Wakeup.h"
 
 #include <atomic>
 #include <chrono>
@@ -22,11 +22,6 @@ namespace mini::net {
 class Channel;
 class Poller;
 class TimerQueue;
-
-struct WakeupFdPair {
-    SocketFd readFd{kInvalidSocket};
-    SocketFd writeFd{kInvalidSocket};
-};
 
 class EventLoop : private mini::base::noncopyable {
 public:
@@ -77,7 +72,7 @@ private:
     mini::base::Timestamp pollReturnTime_;
     std::unique_ptr<Poller> poller_;
     std::unique_ptr<TimerQueue> timerQueue_;
-    WakeupFdPair wakeupFds_;
+    platform::WakeupFdPair wakeupFds_;
     std::unique_ptr<Channel> wakeupChannel_;
     ChannelList activeChannels_;
     Channel* currentActiveChannel_;

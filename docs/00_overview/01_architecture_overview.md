@@ -41,8 +41,8 @@
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │                      EventLoop                            │  │
 │  │  ┌────────┐  ┌──────────┐  ┌───────────┐  ┌──────────┐ │  │
-│  │  │Poller  │  │TimerQueue│  │wakeupFd   │  │pending   │ │  │
-│  │  │(epoll) │  │(timerfd) │  │(eventfd)  │  │Functors  │ │  │
+│  │  │Poller  │  │TimerQueue│  │wakeup    │  │pending   │ │  │
+│  │  │(backend)│ │(timeout) │  │(platform)│  │Functors  │ │  │
 │  │  └────────┘  └──────────┘  └───────────┘  └──────────┘ │  │
 │  └──────────────────────────────────────────────────────────┘  │
 ├─────────────────────────────────────────────────────────────────┤
@@ -66,8 +66,8 @@
 └─────────────────────────────────────────────────────────────────┘
               │                     │
               ▼                     ▼
-        Linux Kernel           OpenSSL
-        (epoll/timerfd/         (SSL_CTX/
+        Linux / Windows OS     OpenSSL
+        (epoll/select,          (SSL_CTX/
          eventfd/socket)         SSL)
 ```
 
@@ -111,9 +111,9 @@ Upper Game Server (out of core)
 **这是整个框架的心脏。** EventLoop 是单线程事件循环，它驱动一切。
 
 - **EventLoop**：poll + 事件分发 + 跨线程任务回流。所有可变状态只在 owner 线程访问。
-- **Poller / EPollPoller**：I/O 多路复用后端，将内核 epoll 事件映射到 Channel。
+- **Poller / EPollPoller / SelectPoller**：I/O 多路复用后端，将平台事件映射到 Channel。
 - **Channel**：fd 的事件订阅与回调分发实体。不拥有 fd，不拥有 EventLoop。
-- **TimerQueue**：基于 timerfd 的定时任务系统，支持 one-shot 和 repeating timer。
+- **TimerQueue**：基于 EventLoop poll timeout 的定时任务系统，支持 one-shot 和 repeating timer。
 
 ### 3. Thread Layer（线程模型层）
 
@@ -169,7 +169,7 @@ TCP 连接的完整生命周期管理：
 当需要从其他线程操作某个 EventLoop 的对象时，通过 `runInLoop()` / `queueInLoop()` 将任务投递到目标线程：
 
 ```
-Thread A ──► queueInLoop(functor) ──► EventLoop B (wakeup via eventfd) ──► 执行 functor
+Thread A ──► queueInLoop(functor) ──► EventLoop B (platform wakeup) ──► 执行 functor
 ```
 
 ### 3. Ownership 清晰

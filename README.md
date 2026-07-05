@@ -32,13 +32,14 @@ mini-trantor 当前不是：
 - 客户端生态：`HttpClient`、`RpcConnectionPool`、DNS、TLS、IPv6。
 - 游戏网络底座：TCP/UDP transport、KCP preview、PacketFramer、CodecAdapter、SessionManager、LogicLoop、GameServerPipeline、广播与指标 hook。
 - 工程护栏：GitHub Actions、ASan/UBSan、TSan 入口、fuzz 入口、benchmark 标签、install + `find_package` 验证。
-- 平台后端：Linux 使用 `EPollPoller`，Windows 使用 `SelectPoller` 预览后端；核心 EventLoop/TimerQueue/TCP 语义保持一致。
+- 平台后端：Linux 使用 `EPollPoller`，Windows 使用 `SelectPoller` 预览后端；平台差异集中在 `mini/net/platform/` 与 `mini/net/poller/`，核心 EventLoop/TimerQueue/TCP 语义保持一致。
 
 最近本地验证快照：
 
 - ASan/UBSan Debug：`ctest -L "unit|contract"`，75/75 passed。
 - Benchmark：Release 与 ASan 配置下 `ctest -L benchmark` passed。
 - Install verify：Release install 后，临时 consumer `find_package(mini_trantor CONFIG REQUIRED)` + link passed。
+- Windows VS2026 Debug：`cmake --preset windows-vs2026-x64`、`cmake --build --preset windows-vs2026-x64`、`ctest --preset windows-vs2026-x64`，27/27 passed。
 - Fuzz/TSan：CI 已配置 Clang 入口；本机无 Clang，GCC TSan runtime 存在 `unexpected memory mapping` 限制。
 
 详细执行记录见 [plan_and_execute.md](plan_and_execute.md)。
@@ -132,15 +133,18 @@ ctest --test-dir build --output-on-failure
 Windows 构建使用 CMake 的 `Visual Studio 18 2026` generator。项目提供 preset：
 
 ```powershell
-cmake --preset windows-vs2026-x64
-cmake --build --preset windows-vs2026-x64
-ctest --preset windows-vs2026-x64
+& "D:\VS2026\2026\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --preset windows-vs2026-x64
+& "D:\VS2026\2026\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --build --preset windows-vs2026-x64
+& "D:\VS2026\2026\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\ctest.exe" --preset windows-vs2026-x64
 ```
 
-如果 OpenSSL 由 vcpkg 提供，可在配置时加上 toolchain：
+`windows-vs2026-x64` preset 固定 `CMAKE_GENERATOR_INSTANCE=D:/VS2026/2026`，避免同机多个 VS instance 时选错编译器。
+
+Windows preset 默认 `MINI_ENABLE_TLS=OFF`，因此无需 OpenSSL 也能构建普通 TCP/UDP、HTTP、WebSocket、RPC、KCP 与示例。若 OpenSSL 由 vcpkg 提供，可显式开启 TLS：
 
 ```powershell
-cmake --preset windows-vs2026-x64 `
+& "D:\VS2026\2026\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" --preset windows-vs2026-x64 `
+  -DMINI_ENABLE_TLS=ON `
   -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 ```
 
@@ -148,7 +152,9 @@ Windows 当前后端说明：
 
 - `EventLoop` 使用 WinSock loopback socket pair 作为 wakeup 机制。
 - `Poller::newDefaultPoller()` 在 Windows 返回 `SelectPoller`，在 Linux 返回 `EPollPoller`。
+- socket 类型、socket ops、wakeup、poller 后端的实现分别位于 `mini/net/platform/` 与 `mini/net/poller/`；旧头文件路径保留为兼容转发入口。
 - `TimerQueue` 由 `Poller::poll(timeoutMs)` 驱动，不依赖 Linux `timerfd`。
+- TLS 是 build-time optional：`MINI_ENABLE_TLS=OFF` 时 `TlsContext` 工厂显式抛出 unsupported，plain transport 不受影响。
 - Linux-only `SignalWatcher` / raw ICMP PMTU listener 在 Windows 上显式不可用；普通 TCP/UDP、HTTP/WebSocket/RPC/KCP 代码可编译。
 - Windows 测试矩阵先覆盖核心可移植契约子集；Linux 继续构建完整测试矩阵。
 

@@ -1,7 +1,9 @@
 #include "mini/net/TlsContext.h"
 
+#if MINI_ENABLE_TLS
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#endif
 
 #include <stdexcept>
 #include <string>
@@ -12,7 +14,9 @@ namespace {
 
 struct OpenSslInitializer {
     OpenSslInitializer() {
+#if MINI_ENABLE_TLS
         OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS | OPENSSL_INIT_LOAD_CRYPTO_STRINGS, nullptr);
+#endif
     }
 };
 
@@ -21,6 +25,7 @@ void ensureOpenSslInit() {
 }
 
 std::string getOpenSslError() {
+#if MINI_ENABLE_TLS
     unsigned long err = ERR_get_error();
     if (err == 0) {
         return "unknown OpenSSL error";
@@ -28,6 +33,9 @@ std::string getOpenSslError() {
     char buf[256];
     ERR_error_string_n(err, buf, sizeof(buf));
     return buf;
+#else
+    return "mini_trantor was built with MINI_ENABLE_TLS=OFF";
+#endif
 }
 
 }  // namespace
@@ -36,14 +44,17 @@ TlsContext::TlsContext(SSL_CTX* ctx) : ctx_(ctx) {
 }
 
 TlsContext::~TlsContext() {
+#if MINI_ENABLE_TLS
     if (ctx_) {
         SSL_CTX_free(ctx_);
     }
+#endif
 }
 
 std::shared_ptr<TlsContext> TlsContext::newServerContext(
     const std::string& certPath,
     const std::string& keyPath) {
+#if MINI_ENABLE_TLS
     ensureOpenSslInit();
 
     SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
@@ -70,9 +81,15 @@ std::shared_ptr<TlsContext> TlsContext::newServerContext(
     }
 
     return std::shared_ptr<TlsContext>(new TlsContext(ctx));
+#else
+    (void)certPath;
+    (void)keyPath;
+    throw std::runtime_error(getOpenSslError());
+#endif
 }
 
 std::shared_ptr<TlsContext> TlsContext::newClientContext() {
+#if MINI_ENABLE_TLS
     ensureOpenSslInit();
 
     SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
@@ -87,18 +104,32 @@ std::shared_ptr<TlsContext> TlsContext::newClientContext() {
     SSL_CTX_set_default_verify_paths(ctx);
 
     return std::shared_ptr<TlsContext>(new TlsContext(ctx));
+#else
+    throw std::runtime_error(getOpenSslError());
+#endif
 }
 
 void TlsContext::setCaCertPath(const std::string& caFile, const std::string& caPath) {
+#if MINI_ENABLE_TLS
     const char* file = caFile.empty() ? nullptr : caFile.c_str();
     const char* path = caPath.empty() ? nullptr : caPath.c_str();
     if (SSL_CTX_load_verify_locations(ctx_, file, path) != 1) {
         throw std::runtime_error("Failed to load CA certificates: " + getOpenSslError());
     }
+#else
+    (void)caFile;
+    (void)caPath;
+    throw std::runtime_error(getOpenSslError());
+#endif
 }
 
 void TlsContext::setVerifyPeer(bool verify) {
+#if MINI_ENABLE_TLS
     SSL_CTX_set_verify(ctx_, verify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, nullptr);
+#else
+    (void)verify;
+    throw std::runtime_error(getOpenSslError());
+#endif
 }
 
 SSL_CTX* TlsContext::nativeHandle() const noexcept {

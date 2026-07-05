@@ -41,7 +41,7 @@ Poller is not channel owner.
 ## 5. Collaboration
 - EventLoop owns Poller and calls poll/update/remove
 - Channel provides fd and event masks
-- concrete backend implementation (e.g. epoll) performs actual OS interaction
+- concrete backend implementation (e.g. epoll/select under `mini/net/poller/`) performs actual OS interaction
 
 ---
 
@@ -64,9 +64,8 @@ Concrete backend implementations may extend internal helpers but should preserve
 ---
 
 ## 8. Backend Abstraction Intent
-v1 backend target is epoll.
-But Poller abstraction should preserve the possibility of:
-- poll/select style backend for learning
+v1 backend targets are Linux epoll and Windows WinSock select.
+Poller abstraction should preserve the possibility of:
 - kqueue backend
 - io_uring-related future experiment
 without forcing upper layers to change semantic assumptions.

@@ -17,6 +17,7 @@
 #include "mini/coroutine/WhenAll.h"
 #include "mini/coroutine/WhenAny.h"
 #include "mini/net/NetError.h"
+#include "mini/net/SocketsOps.h"
 #include "mini/net/TcpConnection.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/EventLoopThread.h"
@@ -27,9 +28,11 @@
 #include <chrono>
 #include <future>
 #include <string>
-#include <sys/socket.h>
 #include <thread>
+#ifndef _WIN32
+#include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 using namespace std::chrono_literals;
 using mini::coroutine::Task;
@@ -62,10 +65,14 @@ Task<int> recordThread(mini::net::EventLoop* loop, int value,
     co_return value;
 }
 
-std::array<int, 2> makeSocketPair() {
-    std::array<int, 2> sockets{};
+std::array<mini::net::SocketFd, 2> makeSocketPair() {
+    std::array<mini::net::SocketFd, 2> sockets{};
+#ifdef _WIN32
+    mini::net::sockets::createSocketPairOrDie(sockets.data());
+#else
     const int rc = ::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data());
     assert(rc == 0);
+#endif
     return sockets;
 }
 
@@ -258,7 +265,7 @@ int main() {
         assert(result.value == 7);
         assert(loserCancelledFuture.get() == mini::net::NetError::Cancelled);
 
-        ::close(sockets[1]);
+        mini::net::sockets::close(sockets[1]);
     }
 
     return 0;

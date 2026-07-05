@@ -6,13 +6,13 @@
 - 它解决的核心问题不是“功能很多”，而是“结构正确”：线程归属明确、生命周期可推理、回调上下文可预测。
 - 项目把 `intent -> rules -> tests -> implementation` 放在代码之前，代码只是设计意图的实现载体。
 - 当前真正参与构建和运行的核心代码位于 `mini/`，其中 `mini/net/` 是 Reactor/transport 主线，`mini/game/` 是游戏网络接入层，`mini/codec/` 是协议桥接层。
-- v1 foundation 已落地的核心模块包括 `EventLoop`、`Channel`、`Poller/EPollPoller`、`Buffer`、`Acceptor`、`TcpConnection`、`TcpServer`、`UdpSocket`、`UdpServer`、`EventLoopThread`、`EventLoopThreadPool`。
+- v1 foundation 已落地的核心模块包括 `EventLoop`、`Channel`、`Poller/EPollPoller/SelectPoller`、`Buffer`、`Acceptor`、`TcpConnection`、`TcpServer`、`UdpSocket`、`UdpServer`、`EventLoopThread`、`EventLoopThreadPool`。
 - M1-M32 之后的收口定位是 `game-network foundation + transport preview`：KCP/PMTU/raw ICMP/redundant-copy/XOR parity/congestion-window 属于 preview/experimental，不代表生产级协议栈。
 - 协程能力已经有最小可运行形态，但它是“贴着 Reactor 语义扩展”的，不是另起一套调度体系。
 - 阅读这个项目时，最先要抓住的是三个约束：一个线程一个 `EventLoop`、跨线程操作必须回流到 owner loop、销毁前必须解除注册。
 - 与许多“先写代码再补文档”的小项目不同，本项目的 `intents/` 和 `rules/` 不是附属资料，而是理解实现边界的第一入口。
 - 当前项目最像“工业风缩小版 trantor 骨架 + 游戏网络底座预览”，而不是完整商业游戏网关：它更强调模块边界、线程模型和生命周期纪律。
-- 如果只想快速理解主线，先看 `examples/echo_server/main.cpp`，再回读 `EventLoop`、`Channel`、`EPollPoller`、`TcpConnection`、`TcpServer`。
+- 如果只想快速理解主线，先看 `examples/echo_server/main.cpp`，再回读 `EventLoop`、`Channel`、`Poller`、平台后端、`TcpConnection`、`TcpServer`。
 
 ## 1. 框架整体定位
 
@@ -24,7 +24,7 @@
 
 - 提供单线程 Reactor 核心：`EventLoop`
 - 提供 fd 事件绑定抽象：`Channel`
-- 提供 I/O 多路复用抽象与 epoll 后端：`Poller` / `EPollPoller`
+- 提供 I/O 多路复用抽象与平台后端：Linux `EPollPoller` / Windows `SelectPoller`
 - 提供 TCP 连接生命周期管理：`TcpConnection`
 - 提供 TCP 服务端监听、接入与连接分发：`Acceptor` / `TcpServer`
 - 提供 one-loop-per-thread 扩展模型：`EventLoopThread` / `EventLoopThreadPool`
@@ -35,7 +35,7 @@
 - 不负责账号系统、风控审计、AOI、房间状态、服务治理或部署拓扑
 - 不负责生产级 KCP/QUIC、Reed-Solomon FEC、跨进程 PMTU 服务或生产 congestion control
 - 不负责复杂的协程取消树或独立协程调度器
-- 不负责跨平台后端统一，当前实际后端只有 epoll
+- 不把平台差异泄漏到业务层；跨平台后端统一限定在 `mini/net/platform/` 与 `mini/net/poller/` 边界内
 - 不负责隐藏线程语义，反而刻意让线程归属暴露且可推理
 
 ### 1.4 最核心的抽象是什么
@@ -59,7 +59,7 @@
 5. `EventLoop` 分发 `Channel` 回调
 6. 回调进一步驱动 `Acceptor` / `TcpConnection`
 7. 跨线程请求通过 `runInLoop` / `queueInLoop` 回流到 owner loop
-8. `eventfd` 用作 wakeup 中断机制
+8. Linux `eventfd` 或 Windows loopback socket pair 用作 wakeup 中断机制
 
 ### 1.6 这个框架处于什么层级
 
@@ -172,12 +172,12 @@
 ### 3.2 模块二：Reactor 核心调度层
 
 - 模块职责：事件等待、事件分发、跨线程任务回流
-- 组成：`EventLoop`、`Channel`、`Poller`、`EPollPoller`
+- 组成：`EventLoop`、`Channel`、`Poller`、`EPollPoller`、`SelectPoller`
 - 为什么需要：这是整个库的运行时心脏，没有它就没有可解释的 I/O 驱动模型
-- 依赖谁：基础时间戳、epoll/eventfd、少量标准库
+- 依赖谁：基础时间戳、平台 poller/wakeup 抽象、少量标准库
 - 谁依赖它：`Acceptor`、`TcpConnection`、线程池、协程恢复点
 - 暴露什么能力：fd 注册、事件回调、跨线程回流、wake up
-- 隐藏什么复杂性：内核 epoll 细节、活跃事件回填、任务队列唤醒机制
+- 隐藏什么复杂性：内核 poller 细节、活跃事件回填、任务队列唤醒机制
 - 系统地位：绝对核心层
 - 典型入口类：`EventLoop`
 - 关键数据结构：`activeChannels_`、`pendingFunctors_`、`Channel::events_ / revents_`
@@ -188,7 +188,7 @@
 - 模块职责：包装底层 socket、地址、字节缓存和系统调用边界
 - 组成：`Socket`、`SocketsOps`、`InetAddress`、`Buffer`
 - 为什么需要：把内核 API 与上层 Reactor/TCP 生命周期解耦
-- 依赖谁：POSIX socket API
+- 依赖谁：平台 socket API（Linux POSIX / Windows WinSock）
 - 谁依赖它：`Acceptor`、`TcpConnection`
 - 暴露什么能力：创建监听 fd、accept、shutdown、读写缓冲、地址转换
 - 隐藏什么复杂性：`accept4`、`readv`、`setsockopt`、地址转换
@@ -295,7 +295,7 @@
 - 连接状态转移由 `TcpConnection`
 - 新连接接入由 `Acceptor`
 - 连接表维护由 `TcpServer`
-- 跨线程任务靠 `queueInLoop/runInLoop + eventfd wakeup`
+- 跨线程任务靠 `queueInLoop/runInLoop + platform wakeup`
 
 ### 4.5 关闭与销毁流程
 
@@ -330,7 +330,7 @@
 
 - 必须在 owner thread
 - 不能在 `loop()` 仍运行时析构
-- 先移除 wakeup channel，再关闭 eventfd
+- 先移除 wakeup channel，再关闭 wakeup fd/socket pair
 
 这说明该项目非常强调“销毁也是调度语义的一部分”。
 
@@ -389,7 +389,7 @@
 1. 非 owner 线程调用 `EventLoop::runInLoop(fn)`
 2. 因为不在 loop 线程，内部转为 `queueInLoop(fn)`
 3. functor 进入 `pendingFunctors_`
-4. `EventLoop::wakeup()` 往 `eventfd` 写入 1
+4. `EventLoop::wakeup()` 写入平台 wakeup descriptor
 5. 正阻塞在 epoll 的 loop 被唤醒
 6. wakeup fd 可读，`handleRead()` 把计数读走
 7. 当前轮事件分发结束后，`doPendingFunctors()` 执行积压任务
@@ -539,7 +539,7 @@
 核心调度层。
 
 #### 4）它依赖谁
-`Poller`、`Channel`、`Timestamp`、`eventfd`、互斥锁和线程库。
+`Poller`、`Channel`、`Timestamp`、平台 wakeup、互斥锁和线程库。
 
 #### 5）谁依赖它
 几乎所有运行时模块：`Channel`、`Acceptor`、`TcpConnection`、线程池、协程恢复逻辑。
@@ -573,7 +573,7 @@
 核心调度层与上层对象之间的桥接层。
 
 #### 4）它依赖谁
-`EventLoop`、`Timestamp`、epoll 事件常量。
+`EventLoop`、`Timestamp`、backend-neutral 事件常量。
 
 #### 5）谁依赖它
 `EventLoop`、`Acceptor`、`TcpConnection`。
@@ -592,7 +592,7 @@
 它不是 socket 封装，也不是 Poller；它本质上是 fd 事件语义对象。
 
 #### 9）如果我要修改/扩展这个文件，应该注意什么
-注意不要让后端细节继续上浮。当前它直接包含 `<sys/epoll.h>`，已经有一点 backend leak 风险。
+注意不要让后端细节继续上浮；具体事件翻译应留在 `mini/net/poller/`。
 
 ### 文件：`mini/net/Poller.h` / `mini/net/Poller.cc`
 
@@ -609,7 +609,7 @@
 `Channel`、`EventLoop`、标准容器。
 
 #### 5）谁依赖它
-`EventLoop` 和具体后端 `EPollPoller`。
+`EventLoop` 和具体后端 `EPollPoller` / `SelectPoller`。
 
 #### 6）文件中的关键类 / 函数
 - `poll(...)`
@@ -627,7 +627,7 @@
 #### 9）如果我要修改/扩展这个文件，应该注意什么
 新的后端必须保持 `EventLoop` 看到的语义不变，而不是把后端差异继续向上泄漏。
 
-### 文件：`mini/net/EPollPoller.h` / `mini/net/EPollPoller.cc`
+### 文件：`mini/net/poller/EPollPoller.h` / `mini/net/poller/EPollPoller.cc`
 
 #### 1）这个文件的核心职责
 实现基于 epoll 的 `Poller` 后端。
@@ -857,13 +857,13 @@ TCP 接入层 / 胶水层。
 #### 9）如果我要修改/扩展这个文件，应该注意什么
 保持索引语义简单可推理，避免为性能引入过早复杂化。
 
-### 文件：`mini/net/Socket.h` / `mini/net/Socket.cc`、`mini/net/SocketsOps.h` / `mini/net/SocketsOps.cc`
+### 文件：`mini/net/Socket.h` / `mini/net/Socket.cc`、`mini/net/SocketsOps.h` / `mini/net/platform/SocketsOps_*`
 
 #### 1）这个文件的核心职责
 封装最底层 socket 系统调用边界，并用 RAII 管理 fd。
 
 #### 2）为什么这个文件必须存在
-它把 POSIX C 风格 API 与上层 C++ 对象模型隔开，降低上层噪音。
+它把平台 C 风格 socket API 与上层 C++ 对象模型隔开，降低上层噪音。
 
 #### 3）它在系统中的位置
 平台适配层 / 工具层。
@@ -1029,7 +1029,7 @@ socket API、`InetAddress`。
 #### 3）关键成员变量的意义
 - `threadId_`：owner thread 身份
 - `poller_`：I/O 事件来源
-- `wakeupFd_` / `wakeupChannel_`：跨线程唤醒通道
+- `wakeupFds_` / `wakeupChannel_`：跨线程唤醒通道
 - `pendingFunctors_`：跨线程或延迟执行任务队列
 - `activeChannels_`：当前 poll 返回的活跃事件集合
 
@@ -1192,7 +1192,7 @@ loop 选择器，不是任务线程池。
 2. 基础层：`mini/base/`
 3. 平台/工具层：`InetAddress`、`Socket`、`SocketsOps`
 4. 数据结构层：`Buffer`
-5. 运行时核心层：`EventLoop`、`Channel`、`Poller`、`EPollPoller`
+5. 运行时核心层：`EventLoop`、`Channel`、`Poller`、平台 poller 后端
 6. 网络会话层：`Acceptor`、`TcpConnection`、`TcpServer`
 7. 扩展层：`EventLoopThread`、`EventLoopThreadPool`、`Task`
 8. 示例与测试层：`examples/`、`tests/`
@@ -1206,7 +1206,7 @@ loop 选择器，不是任务线程池。
 
 ### 9.3 当前值得注意的依赖特征
 
-- `Channel` 直接依赖 epoll 常量，说明后端细节还没有完全被 `Poller` 层隔离
+- `Channel` 使用 backend-neutral 事件常量，具体后端转换集中在 `mini/net/poller/`
 - `TcpConnection` 同时承载回调接口和协程等待逻辑，属于变化集中区
 - 测试已经按 layer + module 拆分，新增覆盖时应保持构建入口和文档同步
 
@@ -1238,7 +1238,7 @@ loop 选择器，不是任务线程池。
 
 ### 10.1 新增一个网络后端
 
-从 `mini/net/Poller.h` 入手，实现新的具体 `Poller`，再在 `newDefaultPoller()` 切换或配置选择。
+从 `mini/net/Poller.h` 和 `mini/net/poller/` 入手，实现新的具体 `Poller`，再在 `PollerFactory.cc` 中切换或配置选择。
 
 ### 10.2 新增 TimerQueue
 
@@ -1266,7 +1266,7 @@ loop 选择器，不是任务线程池。
 适合插入的位置：
 
 - `EventLoop::loop()`：每轮调度耗时、活跃事件数
-- `EPollPoller::poll()`：poll 返回事件数、异常统计
+- `EPollPoller::poll()` / `SelectPoller::poll()`：poll 返回事件数、异常统计
 - `TcpServer::newConnection/removeConnectionInLoop()`：连接数变化
 - `TcpConnection::handleRead/handleWrite/handleClose/handleError()`：连接级 I/O 与故障指标
 
@@ -1293,7 +1293,7 @@ loop 选择器，不是任务线程池。
 
 - `Acceptor::handleRead()`
 - listen fd 是否已 `enableReading()`
-- `EPollPoller::fillActiveChannels()`
+- 当前平台 poller 的 `fillActiveChannels()`
 
 ### 11.3 消息没回调先看哪里
 
@@ -1361,13 +1361,13 @@ loop 选择器，不是任务线程池。
 1. `mini/net/EventLoop.h/.cc`
 2. `mini/net/Channel.h/.cc`
 3. `mini/net/Poller.h/.cc`
-4. `mini/net/EPollPoller.h/.cc`
+4. `mini/net/poller/EPollPoller.h/.cc` 或 `mini/net/poller/SelectPoller.h/.cc`
 
 ### 第四轮：理解支撑层
 
 1. `mini/net/Buffer.h/.cc`
 2. `mini/net/Socket.h/.cc`
-3. `mini/net/SocketsOps.h/.cc`
+3. `mini/net/SocketsOps.h` 与 `mini/net/platform/SocketsOps_*`
 4. `mini/net/InetAddress.h/.cc`
 
 ### 第五轮：理解扩展能力
@@ -1401,7 +1401,7 @@ loop 选择器，不是任务线程池。
 
 - `TcpConnection` 当前职责较多，是未来最容易膨胀的类
 - v1 阶段边界虽然已经正式化，但后续扩展仍需避免把 `TimerQueue`、复杂 backpressure 或独立协程调度器提前混入当前主线
-- `Channel` 对 epoll 常量的直接依赖意味着后端抽象仍有泄漏
+- 平台后端已经拆到 `mini/net/platform/` 与 `mini/net/poller/`，后续扩展仍需避免后端细节回流到 core
 - 当前错误处理多为 `abort()` / stderr 打印，适合学习但不够生产化
 - `include/` 为空，说明对外 API 组织尚未稳定
 - `TimerQueue` 等 intent 中的规划模块还未落地，未来扩展时需要谨慎保持现有调度顺序

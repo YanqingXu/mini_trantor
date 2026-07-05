@@ -3,31 +3,40 @@
 #include "mini/game/logic/LogicLoop.h"
 #include "mini/net/EventLoopThread.h"
 #include "mini/net/InetAddress.h"
+#include "mini/net/SocketsOps.h"
+#include "mini/net/SocketTypes.h"
 #include "mini/net/TcpServer.h"
 #include "mini/net/TcpServerOptions.h"
 #include "mini/net/framing/PacketFramer.h"
 #include "mini/net/transport/TransportManager.h"
 
-#include <arpa/inet.h>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <future>
 #include <memory>
-#include <netinet/in.h>
 #include <string>
 #include <string_view>
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+#endif
 
 namespace {
 
 using namespace std::chrono_literals;
 
 uint16_t allocateTestPort() {
-    const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
-    assert(fd >= 0);
+    mini::net::sockets::ensureInitialized();
+#ifdef _WIN32
+    const mini::net::SocketFd fd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+#else
+    const mini::net::SocketFd fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
+#endif
+    assert(mini::net::sockets::isValid(fd));
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -38,7 +47,7 @@ uint16_t allocateTestPort() {
     socklen_t len = static_cast<socklen_t>(sizeof(addr));
     assert(::getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len) == 0);
     const auto port = ntohs(addr.sin_port);
-    ::close(fd);
+    mini::net::sockets::close(fd);
     return port;
 }
 
@@ -51,8 +60,13 @@ struct DecodedFrame {
 class FramedClient {
 public:
     explicit FramedClient(uint16_t port) {
+        mini::net::sockets::ensureInitialized();
+#ifdef _WIN32
+        fd_ = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+#else
         fd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
-        assert(fd_ >= 0);
+#endif
+        assert(mini::net::sockets::isValid(fd_));
 
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
@@ -60,24 +74,32 @@ public:
         assert(::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr) == 1);
         assert(::connect(fd_, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) == 0);
 
+#ifdef _WIN32
+        DWORD timeoutMs = 2000;
+        assert(::setsockopt(
+                   fd_,
+                   SOL_SOCKET,
+                   SO_RCVTIMEO,
+                   reinterpret_cast<const char*>(&timeoutMs),
+                   static_cast<socklen_t>(sizeof(timeoutMs))) == 0);
+#else
         timeval timeout{};
         timeout.tv_sec = 2;
         timeout.tv_usec = 0;
         assert(::setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0);
+#endif
     }
 
     ~FramedClient() {
-        if (fd_ >= 0) {
-            ::close(fd_);
+        if (mini::net::sockets::isValid(fd_)) {
+            mini::net::sockets::close(fd_);
         }
     }
 
     void sendFrame(std::uint32_t msgId, std::uint32_t seq, std::string_view payload) {
         const auto frame = framer_.encode(msgId, 0, seq, payload);
-        assert(::send(fd_,
-                      frame.data(),
-                      frame.size(),
-                      MSG_NOSIGNAL) == static_cast<ssize_t>(frame.size()));
+        assert(mini::net::sockets::write(fd_, frame.data(), frame.size()) ==
+               static_cast<ssize_t>(frame.size()));
     }
 
     DecodedFrame readFrame() {
@@ -96,14 +118,14 @@ public:
             assert(state == mini::net::framing::PacketDecodeState::kNeedMore);
 
             char buffer[256]{};
-            const auto n = ::recv(fd_, buffer, sizeof(buffer), 0);
+            const auto n = mini::net::sockets::read(fd_, buffer, sizeof(buffer));
             assert(n > 0);
             input_.append(buffer, static_cast<std::size_t>(n));
         }
     }
 
 private:
-    int fd_{-1};
+    mini::net::SocketFd fd_{mini::net::kInvalidSocket};
     mini::net::framing::PacketFramer framer_;
     std::string input_;
 };

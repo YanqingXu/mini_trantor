@@ -14,6 +14,11 @@ include(Sanitizers)
 option(MINI_ENABLE_ASAN_UBSAN "Enable AddressSanitizer and UndefinedBehaviorSanitizer for Debug guarded builds" OFF)
 option(MINI_ENABLE_TSAN "Enable ThreadSanitizer for Debug guarded builds" OFF)
 option(MINI_ENABLE_FUZZ "Build libFuzzer protocol parser targets" OFF)
+if(WIN32)
+    option(MINI_ENABLE_TLS "Build OpenSSL/TLS integration" OFF)
+else()
+    option(MINI_ENABLE_TLS "Build OpenSSL/TLS integration" ON)
+endif()
 
 if(MINI_ENABLE_TSAN AND MINI_ENABLE_FUZZ)
     message(FATAL_ERROR "MINI_ENABLE_TSAN cannot be combined with MINI_ENABLE_FUZZ.")
@@ -24,17 +29,19 @@ if(MINI_ENABLE_FUZZ AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(Threads REQUIRED)
-find_package(OpenSSL REQUIRED)
+if(MINI_ENABLE_TLS)
+    find_package(OpenSSL REQUIRED)
+endif()
 
 set(MINI_TRANTOR_SOURCES
     mini/base/Logger.cc
     mini/base/MetricsExporter.cc
     mini/net/InetAddress.cc
     mini/net/Buffer.cc
-    mini/net/SocketsOps.cc
     mini/net/Socket.cc
     mini/net/Channel.cc
     mini/net/Poller.cc
+    mini/net/poller/PollerFactory.cc
     mini/net/EventLoop.cc
     mini/net/TimerQueue.cc
     mini/net/Acceptor.cc
@@ -90,9 +97,17 @@ set(MINI_TRANTOR_SOURCES
 )
 
 if(WIN32)
-    list(APPEND MINI_TRANTOR_SOURCES mini/net/SelectPoller.cc)
+    list(APPEND MINI_TRANTOR_SOURCES
+        mini/net/platform/SocketsOps_win.cc
+        mini/net/platform/Wakeup_win.cc
+        mini/net/poller/SelectPoller.cc
+    )
 else()
-    list(APPEND MINI_TRANTOR_SOURCES mini/net/EPollPoller.cc)
+    list(APPEND MINI_TRANTOR_SOURCES
+        mini/net/platform/SocketsOps_linux.cc
+        mini/net/platform/Wakeup_linux.cc
+        mini/net/poller/EPollPoller.cc
+    )
 endif()
 
 add_library(mini_trantor ${MINI_TRANTOR_SOURCES})
@@ -106,7 +121,14 @@ target_include_directories(
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_compile_features(mini_trantor PUBLIC cxx_std_23)
-target_link_libraries(mini_trantor PUBLIC Threads::Threads OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(mini_trantor PUBLIC Threads::Threads)
+target_compile_definitions(mini_trantor PUBLIC MINI_ENABLE_TLS=$<BOOL:${MINI_ENABLE_TLS}>)
+if(MSVC)
+    target_compile_options(mini_trantor PUBLIC /utf-8)
+endif()
+if(MINI_ENABLE_TLS)
+    target_link_libraries(mini_trantor PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+endif()
 if(WIN32)
     target_compile_definitions(mini_trantor PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
     target_link_libraries(mini_trantor PUBLIC ws2_32)

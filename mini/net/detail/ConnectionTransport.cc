@@ -9,11 +9,26 @@
 
 #include <cerrno>
 #include <limits>
+#include <utility>
 
+#if MINI_ENABLE_TLS
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#endif
 
 namespace mini::net::detail {
+
+namespace {
+
+int unsupportedTransportError() noexcept {
+#ifdef _WIN32
+    return WSAEOPNOTSUPP;
+#else
+    return ENOTSUP;
+#endif
+}
+
+}  // namespace
 
 ConnectionTransport::~ConnectionTransport() {
     resetTls();
@@ -24,6 +39,7 @@ bool ConnectionTransport::enableTls(
     std::shared_ptr<TlsContext> ctx,
     bool isServer,
     std::string_view hostname) {
+#if MINI_ENABLE_TLS
     resetTls();
     tlsContext_ = std::move(ctx);
     ssl_ = SSL_new(tlsContext_->nativeHandle());
@@ -49,6 +65,14 @@ bool ConnectionTransport::enableTls(
     }
     tlsState_ = kTlsHandshaking;
     return true;
+#else
+    (void)fd;
+    (void)ctx;
+    (void)isServer;
+    (void)hostname;
+    LOG_ERROR << "ConnectionTransport::enableTls: mini_trantor was built with MINI_ENABLE_TLS=OFF";
+    return false;
+#endif
 }
 
 bool ConnectionTransport::handshakePending() const noexcept {
@@ -60,6 +84,7 @@ bool ConnectionTransport::isTlsEstablished() const noexcept {
 }
 
 ConnectionTransport::HandshakeResult ConnectionTransport::advanceHandshake(Channel& channel) {
+#if MINI_ENABLE_TLS
     if (!ssl_ || tlsState_ != kTlsHandshaking) {
         return {.completed = true};
     }
@@ -86,6 +111,10 @@ ConnectionTransport::HandshakeResult ConnectionTransport::advanceHandshake(Chann
 
     LOG_ERROR << "ConnectionTransport TLS handshake failed: SSL error " << err;
     return {.failed = true, .savedErrno = errno};
+#else
+    (void)channel;
+    return {.completed = true};
+#endif
 }
 
 ConnectionTransport::ReadResult ConnectionTransport::readInto(Buffer& inputBuffer, Channel& channel) {
@@ -141,24 +170,29 @@ ConnectionTransport::WriteResult ConnectionTransport::writeFromBuffer(Buffer& ou
 }
 
 void ConnectionTransport::shutdownWrite(Socket& socket) {
+#if MINI_ENABLE_TLS
     if (ssl_ && tlsState_ == kTlsEstablished) {
         tlsState_ = kTlsShuttingDown;
         ERR_clear_error();
         SSL_shutdown(ssl_);
     }
+#endif
     socket.shutdownWrite();
 }
 
 void ConnectionTransport::resetTls() noexcept {
+#if MINI_ENABLE_TLS
     if (ssl_) {
         SSL_free(ssl_);
         ssl_ = nullptr;
     }
+#endif
     tlsContext_.reset();
     tlsState_ = kTlsNone;
 }
 
 ConnectionTransport::ReadResult ConnectionTransport::sslReadIntoBuffer(Buffer& inputBuffer, Channel& channel) {
+#if MINI_ENABLE_TLS
     ssize_t totalRead = 0;
     char buf[16384];
 
@@ -196,9 +230,15 @@ ConnectionTransport::ReadResult ConnectionTransport::sslReadIntoBuffer(Buffer& i
         return {.status = Status::kOk, .bytes = static_cast<std::size_t>(totalRead)};
     }
     return {.status = Status::kWouldBlock};
+#else
+    (void)inputBuffer;
+    (void)channel;
+    return {.status = Status::kError, .savedErrno = unsupportedTransportError()};
+#endif
 }
 
 ConnectionTransport::WriteResult ConnectionTransport::sslWriteRaw(std::string_view data, Channel& channel) {
+#if MINI_ENABLE_TLS
     ERR_clear_error();
     const int n = SSL_write(ssl_, data.data(), static_cast<int>(data.size()));
     if (n > 0) {
@@ -214,9 +254,15 @@ ConnectionTransport::WriteResult ConnectionTransport::sslWriteRaw(std::string_vi
         return {.status = Status::kWouldBlock};
     }
     return {.status = Status::kError, .savedErrno = errno};
+#else
+    (void)data;
+    (void)channel;
+    return {.status = Status::kError, .savedErrno = unsupportedTransportError()};
+#endif
 }
 
 ConnectionTransport::WriteResult ConnectionTransport::sslWriteFromBuffer(Buffer& outputBuffer, Channel& channel) {
+#if MINI_ENABLE_TLS
     std::size_t totalWritten = 0;
 
     while (outputBuffer.readableBytes() > 0) {
@@ -250,6 +296,11 @@ ConnectionTransport::WriteResult ConnectionTransport::sslWriteFromBuffer(Buffer&
         return {.status = Status::kOk, .bytes = totalWritten};
     }
     return {.status = Status::kWouldBlock};
+#else
+    (void)outputBuffer;
+    (void)channel;
+    return {.status = Status::kError, .savedErrno = unsupportedTransportError()};
+#endif
 }
 
 }  // namespace mini::net::detail
