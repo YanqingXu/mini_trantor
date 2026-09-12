@@ -1,5 +1,9 @@
 # Module Intent: TcpConnection
 
+> S1-02c: token cancellation posts through LoopHandle and locks weak connection /
+> wait-state references only inside the owner-loop callback. A cancelling thread
+> must not become the final strong owner of a loop-bound TcpConnection.
+
 ## 1. Intent
 TcpConnection models one TCP connection bound to one EventLoop.
 It remains the lifecycle center of a connection: it owns the per-connection

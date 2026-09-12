@@ -22,6 +22,7 @@ namespace mini::coroutine {
 struct SleepState {
     enum class Phase { Unarmed, Pending, Expired, Cancelled, Abandoned };
     mini::net::EventLoop* loop{nullptr};
+    mini::net::LoopHandle postingHandle;
     detail::ResumeHandle handle{};
     mini::net::TimerId timerId{};
     Phase phase{Phase::Unarmed};
@@ -38,6 +39,7 @@ public:
             throw std::invalid_argument("asyncSleep requires an EventLoop");
         }
         state_->loop = loop;
+        state_->postingHandle = loop->handle();
     }
 
     SleepAwaitable(const SleepAwaitable&) = delete;
@@ -87,7 +89,7 @@ public:
                 state->registration.emplace(token.registerCallback(
                     [weak = std::weak_ptr<SleepState>(state)] {
                         if (auto waiting = weak.lock()) {
-                            waiting->loop->queueInLoop([waiting] {
+                            (void)waiting->postingHandle.queue([waiting] {
                                 complete(waiting, SleepState::Phase::Cancelled);
                             });
                         }
@@ -111,7 +113,7 @@ public:
     void cancel() {
         auto state = state_;
         if (state) {
-            state->loop->queueInLoop([state] { complete(state, SleepState::Phase::Cancelled); });
+            (void)state->postingHandle.queue([state] { complete(state, SleepState::Phase::Cancelled); });
         }
     }
 

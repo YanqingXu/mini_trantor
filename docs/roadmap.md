@@ -50,6 +50,9 @@ S1-02b 建立 LoopHandle 的入队/关闭互斥，DNS worker 和取消回调不�
 本轮 ASan 67/67、Linux Release 64/64、Windows Release 27/27，TSan 59/64；
 新增 coroutine_idle_timeout 的 TcpServer 控制块报告进入同一分诊账本，不能因 DNS
 合同通过而关闭其余阻塞项。
+S1-02c 补齐 ResolveAwaitable 的单次等待/析构取消，并将 sleep/TCP 的迟到通知迁移到
+安全投递边界；TCP 强引用只在 owner-loop 获取。当前转入线程启停与统一关闭，
+完整 S1 门槛仍需剩余 TSan 报告和 TLS 身份验证等工作共同满足。
 
 | 顺序 | 任务 | 必须守住的合同 | 退出证据 |
 | --- | --- | --- | --- |

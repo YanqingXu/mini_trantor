@@ -4,8 +4,8 @@
 > S1-02b replaces late raw-loop access with rejecting LoopHandle posts.
 > See [the audit](../../docs/audit_2026-09-12.md). IPv4/IPv6 resolution is already
 > implemented; resolver ecosystem work is frozen pending these contracts.
-> S1-01d: ResolveAwaitable borrows a guarded Task resume handle. This prevents
-> late frame resumption but does not close request cancellation or loop shutdown.
+> S1-02c: ResolveAwaitable borrows a guarded Task resume handle and owns its request
+> cancellation source. Owners still clean up frames before stopping their loop.
 
 ## S1-02a implementation contract
 - Copy request input before publishing cancellation/completion callbacks.
@@ -16,10 +16,10 @@
 - Cancellation callbacks capture weak operation state, avoiding registration cycles.
 - A token cancelled before resolve begins delivers Cancelled even on a cache hit.
 - ResolveAwaitable keeps a local resolver reference across publication, because
-  synchronous completion may destroy the awaitable during resolve().
+  completion on another loop may occur during resolve().
 - test_dns_lifetime covers cache re-entry, pre-cancelled cache hits, concurrent
-  registration/cancellation and destroyed Task frames. The loop must still outlive
-  pending operations until the subsequent shutdown contract is implemented.
+  registration/cancellation and destroyed Task frames. S1-02b below defines the
+  target shutdown contract; caller-owned frames still require owner-loop cleanup.
 
 ## S1-02b shutdown contract
 - Null callbackLoop and empty callback arguments fail with invalid_argument before
@@ -36,6 +36,21 @@
 - Task/frame owners still perform owner-loop cleanup before destroying a loop.
   A posting handle does not own a loop, resume an abandoned detached task, or
   substitute for application-level cancellation and join.
+
+## S1-02c ResolveAwaitable ownership contract
+- ResolveAwaitable is move-only and may be awaited once. A second wait fails with
+  logic_error without replacing the first request's continuation.
+- Its state is Unarmed -> Pending -> Completed or Abandoned. Completion moves the
+  resume handle out before resuming; owner-loop destruction marks Abandoned and
+  clears that handle before requesting cancellation of the DNS operation.
+- A private lifetime CancellationSource is linked with the explicit/inherited
+  token. Task destruction requests cancellation without changing the caller's token.
+- Cancellation is cooperative: getaddrinfo already in progress cannot be aborted;
+  resolver destruction still joins workers and may block until OS calls return.
+- The resolver and loop must be non-null at construction. Pending awaitable
+  destruction is owner-only; unarmed moved-from objects have no cleanup obligation.
+- test_resolve_awaitable_lifetime covers repeated waits, moves, invalid arguments,
+  parent/frame abandonment, and inherited cancellation.
 
 ## 1. Intent
 DnsResolver provides asynchronous domain name resolution integrated with
@@ -128,11 +143,9 @@ ever blocking an EventLoop thread.
 ---
 
 ## 9. Extension Points
-- pluggable resolution backend (e.g., c-ares for true async DNS)
-- DNS-over-HTTPS / DNS-over-TLS
-- IPv6 support (AF_INET6)
-- per-hostname TTL based on DNS record TTL
-- negative caching (cache failures for a short period)
+- IPv4/IPv6 resolution is already implemented, not a future milestone.
+- Backend substitution requires measured OS-resolver limits and a separate intent.
+  Resolver protocols and ecosystem expansion remain frozen under the current roadmap.
 
 ---
 

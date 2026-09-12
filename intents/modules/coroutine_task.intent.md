@@ -2,7 +2,8 @@
 
 > S1 progress: sleep and TCP waiters implement owner-loop unregistration.
 > Start/detach/adoption ownership edges and guarded combinator parent resumption
-> are covered. DNS operation unregistration and shutdown remain open;
+> are covered. Owner-loop DNS abandonment and late cancellation posting are
+> implemented; thread/server shutdown and exception policies remain open;
 > see [the execution record](../../docs/s1_coroutine_lifecycle.md). No claim is
 > made that arbitrary destruction concurrent with coroutine execution is safe.
 

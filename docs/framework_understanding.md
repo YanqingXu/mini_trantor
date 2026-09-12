@@ -295,7 +295,7 @@ SleepAwaitable 在 timer 回调恢复，网络 awaiter 通过 queueInLoop 恢复
 | `coroutine/CancellationToken.h` | source/token/registration 与取消 callback | awaitable/Task/combinator 使用 | 取消通知不等于 target 已停止；回调锁与注销重入需要验证 |
 | `coroutine/ResumeHandle.h` | 借用 frame 的恢复权限与执行锁 | Task 在释放前失效；内建 awaitable 保留 metadata | 同一 Task/组合器树串行恢复，I/O 仍属于各自 EventLoop；不拥有 frame，也不许可异线程注销网络等待 |
 | `coroutine/SleepAwaitable.h` | timer 到期/取消恢复 | Task 调 asyncSleep | S1 析构注销并标为 Abandoned；state 不拥有 frame，挂起析构要求 owner-loop |
-| `coroutine/ResolveAwaitable.h` | 解析结果转换为 await | 依赖 DNS + EventLoop | 同步 cache hit 和跨线程完成都影响 suspend 发布顺序 |
+| `coroutine/ResolveAwaitable.h` | 解析结果转换为一次 await | 依赖 DNS + EventLoop | move-only；owner 析构标 Abandoned 并取消私有请求；caller token 只单向传播，完成统一排队 |
 | `coroutine/WhenAll.h` | 等待子 task 集合完成 | 用包装 Task/共享状态收集结果 | 所有结果完成后恢复父，父/子 frame 生命周期与异常传播需审计 |
 | `coroutine/WhenAny.h` | 选择先完成子 task 并请求取消其余 | Timeout 复用；原子 winner 标记 | 取消败者不等于已 join；parent.resume 不自动创建固定 owner 语义 |
 | `coroutine/Timeout.h` | 操作与定时竞争并映射 TimedOut | 依赖 WhenAny/Sleep/NetError | 继承两者的生命周期限制，不能作为全局安全屏障 |

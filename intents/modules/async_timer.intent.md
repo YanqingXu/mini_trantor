@@ -4,14 +4,14 @@
 SleepAwaitable is a coroutine awaitable that suspends the current coroutine
 for a specified duration, then resumes it on the owner EventLoop thread.
 It is built on top of the existing TimerQueue infrastructure via
-`EventLoop::runAfter`, and lives in `mini/coroutine/` as a bridge utility —
+`EventLoop::runAt`, and lives in `mini/coroutine/` as a bridge utility —
 not a scheduler.
 
 ---
 
 ## 2. Responsibilities
 - suspend the calling coroutine for a given duration
-- register a one-shot timer via EventLoop::runAfter
+- register a one-shot timer via EventLoop::runAt, using a deadline captured before publication
 - resume the coroutine on the owner loop thread when the timer fires
 - support cancellation that safely resumes the coroutine (no handle leak)
 
@@ -39,12 +39,14 @@ not a scheduler.
   publication await_suspend does not access its frame or promise again.
 - SleepAwaitable is move-only. Destroying a pending network awaitable, including
   destruction through Task or a parent Task, must happen on its owner loop.
-  EventLoop outlives the awaitable and any in-flight cross-thread cancel request.
+  EventLoop outlives the active awaitable. S1-02c cancellation notifications use a
+  LoopHandle so an already-extracted token callback can finish after owner cleanup
+  and loop destruction without dereferencing the old loop.
 - SleepAwaitable is a transient stack object; it does not outlive the
   co_await expression
 - await_ready() always returns false: a timer must be registered to expire
 - resume always happens on the owner EventLoop thread
-  (guaranteed by EventLoop::runAfter callback semantics)
+  (guaranteed by EventLoop timer callback semantics)
 - the coroutine handle is resumed exactly once on all paths:
   either by timer expiry or by explicit cancellation
 - after cancel, the handle is resumed through queueInLoop on the owner loop thread
@@ -54,9 +56,9 @@ not a scheduler.
 ---
 
 ## 5. Collaboration
-- uses EventLoop::runAfter to register the timer
+- uses EventLoop::runAt to register the timer
 - uses EventLoop::cancel to cancel a pending timer
-- uses EventLoop::queueInLoop to safely resume the handle after cancel
+- uses LoopHandle::queue for cross-thread cancellation notification
 - composes with Task<T> via co_await inside any Task coroutine
 - composes alongside TcpConnection awaitables in the same coroutine body
 
@@ -65,11 +67,12 @@ not a scheduler.
 ## 6. Threading Rules
 - asyncSleep must be called from a coroutine running on the target
   EventLoop's owner thread (or the await_suspend will marshal correctly
-  via runAfter which handles cross-thread)
+  via its single runInLoop arming action)
 - timer callback (which resumes the coroutine) executes on the owner
   loop thread — this is guaranteed by TimerQueue
-- cancel may be called cross-thread; it uses EventLoop::cancel which
-  marshals via runInLoop internally
+- cancel may be called cross-thread while the awaitable is kept alive; it queues
+  owner completion through LoopHandle. Use CancellationSource for cancellation
+  concurrent with awaitable destruction.
 
 ---
 

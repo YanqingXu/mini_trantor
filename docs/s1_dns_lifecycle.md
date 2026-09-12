@@ -45,8 +45,9 @@ ResolveAwaitable 在发布前持有局部 resolver 引用，防止同步完成�
 
 ## 尚未关闭
 
-S1-02a 时 callbackLoop 仍是裸借用指针；下文 S1-02b 处理迟到投递。ResolveAwaitable
-提前销毁时的请求取消，以及其他网络 awaitable 的迟到取消通知仍需继续覆盖。
+S1-02a 时 callbackLoop 仍是裸借用指针；下文 S1-02b 处理迟到投递，S1-02c 处理
+ResolveAwaitable 析构取消及网络 awaitable 的迟到通知。线程启停、统一关闭和异常策略
+仍在 S1 后续工作中。
 本次不把 resolver 的 worker join 误当作 loop 中用户 callback 已经完成的屏障。
 
 ## 验证
@@ -108,3 +109,44 @@ S1-02b 验证：ASan/UBSan + TLS 全量 67/67、Linux Release 64/64、Windows Re
 coroutine_idle_timeout。最后一个是新记录的测试入口：堆栈经过 TcpServer.cc:103 的
 lifetimeToken reset 与 TcpServer.cc:388 close callback 的 weak 控制块释放，加入已有
 TcpServer 生命周期/标准库插桩分诊；归因尚未完成。普通 tcp_server 本轮未复现，仍不关闭。
+
+## 请求所有权与迟到取消（S1-02c）
+
+新增 test_resolve_awaitable_lifetime 在修改前断言失败：第二个 Task 等待同一
+ResolveAwaitable 会覆盖第一个 continuation。现在 awaitable 为 move-only，第二次等待
+在发布前抛 logic_error；空 resolver/loop 也在构造时拒绝。
+
+```mermaid
+stateDiagram-v2
+    [*] --> Unarmed
+    Unarmed --> Pending: 连接 caller token，发布一个 DNS 请求
+    Pending --> Completed: 结果/取消到达，移出 handle 后恢复
+    Pending --> Abandoned: owner 析构，清空 handle 并请求取消
+    Completed --> [*]: 释放已消费状态
+    Abandoned --> [*]: 迟到 callback 不恢复
+```
+
+每个 ResolveState 拥有独立 CancellationSource，caller token 的注册回调只向它转发
+取消。awaitable 析构先置 Abandoned、清空 handle、注销转发，再取消自己的请求。
+因此不会反向取消调用方的 source，也不隐式接管 frame。已进入 getaddrinfo 的操作
+不能被强制中断；resolver 的 worker join 仍可能等待 OS 返回。
+
+Sleep 的 token 通知和显式 cancel 改用 LoopHandle。新的 200 次“取消与 owner 清理
+同时开始”回归在旧实现触发 LeakSanitizer：迟到通知向已经清理的队列写入，泄漏 functor
+和 SleepState。修复后，关闭目标拒绝通知；诊断状态并不拥有 loop。
+
+TCP 的取消通知只捕获 weak connection/state 和 LoopHandle，在排队到 owner 后才
+取得强引用。取消线程不再可能成为 TcpConnection 的最后一个强所有者。新增 200 次
+socket/Task/loop 清理交错合同；该旧版 TCP 压力用例本轮未复现 sanitizer 失败，因此
+此项依据是所有权路径审查与新合同，不能冒称另一个已经复现的 UAF。
+
+Gate：所有 Pending awaitable 的析构与注销仍在 owner-loop；callback 恢复可以重入
+用户代码，必须先完成状态转换并移出 handle。Task/Awaiter 持有 frame，操作状态与
+安全投递句柄不持有 frame/loop。跨线程取消仅投递元数据，TCP 强引用在 owner 获取。
+验证入口为 test_resolve_awaitable_lifetime、test_cancel_during_teardown，以及已有
+sleep/TCP/DNS/whenAny/timeout 合同。自定义裸 handle awaitable 和未清理的 detached
+任务仍需要调用方的生命周期协议。
+
+S1-02c 验证：ASan/UBSan + TLS 全量 69/69；Linux Release 66/66；Windows Release
+29/29。完整 Clang/libc++ TSan 61/66，剩余失败入口与上一轮相同；新的 resolve/取消清理
+合同均通过。没有删除测试或设置 suppressions。S1 的线程启停、异常与 TLS 阻塞项继续开放。

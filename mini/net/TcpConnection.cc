@@ -596,14 +596,18 @@ void TcpConnection::armWaiter(
                 if (token) {
                     state->registration.emplace(token.registerCallback(
                         [weakConnection = std::weak_ptr<TcpConnection>(self),
-                         weakState = std::weak_ptr<AwaitCancellationState>(state)] {
-                            auto connection = weakConnection.lock();
-                            auto waiting = weakState.lock();
-                            if (connection && waiting) {
-                                connection->impl_->loop->queueInLoop([connection, waiting] {
+                         weakState = std::weak_ptr<AwaitCancellationState>(state),
+                         posting = self->impl_->loop->handle()] {
+                            // Strong ownership is acquired only by the owner-loop
+                            // callback. A cancelling thread never releases the last
+                            // TcpConnection reference after its loop has gone away.
+                            (void)posting.queue([weakConnection, weakState] {
+                                auto connection = weakConnection.lock();
+                                auto waiting = weakState.lock();
+                                if (connection && waiting) {
                                     connection->impl_->awaiters->cancelWaiter(waiting);
-                                });
-                            }
+                                }
+                            });
                         }));
                 }
                 switch (kind) {

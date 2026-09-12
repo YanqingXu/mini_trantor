@@ -13,7 +13,10 @@
 
 #include <coroutine>
 #include <memory>
+#include <optional>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace mini::coroutine {
@@ -21,10 +24,13 @@ namespace mini::coroutine {
 /// Shared state between the resolve callback and the awaiting coroutine.
 /// Ensures the coroutine handle is resumed exactly once.
 struct ResolveState {
+    enum class Phase { Unarmed, Pending, Completed, Abandoned };
     mini::net::EventLoop* loop{nullptr};
     detail::ResumeHandle handle{};
     mini::net::DnsResolver::ResolveResult result = std::unexpected(mini::net::NetError::ResolveFailed);
-    bool resumed{false};
+    Phase phase{Phase::Unarmed};
+    CancellationSource lifetimeCancellation;
+    std::optional<CancellationRegistration> tokenLink;
 };
 
 class ResolveAwaitable {
@@ -38,8 +44,17 @@ public:
           hostname_(std::move(hostname)),
           port_(port),
           token_(std::move(token)) {
+        if (!resolver_ || !loop) {
+            throw std::invalid_argument("asyncResolve requires a resolver and EventLoop");
+        }
         state_->loop = loop;
     }
+
+    ResolveAwaitable(const ResolveAwaitable&) = delete;
+    ResolveAwaitable& operator=(const ResolveAwaitable&) = delete;
+    ResolveAwaitable(ResolveAwaitable&&) noexcept = default;
+    ResolveAwaitable& operator=(ResolveAwaitable&&) = delete;
+    ~ResolveAwaitable() { abandon(); }
 
     bool await_ready() const noexcept {
         return false;
@@ -47,7 +62,9 @@ public:
 
     template <typename Promise>
     void await_suspend(std::coroutine_handle<Promise> handle) {
-        state_->handle = detail::borrowResume(handle);
+        if (!state_ || state_->phase != ResolveState::Phase::Unarmed) {
+            throw std::logic_error("ResolveAwaitable can only be awaited once");
+        }
         auto state = state_;
         auto token = token_;
         if (!token) {
@@ -55,25 +72,47 @@ public:
                 token = handle.promise().cancellationToken();
             }
         }
-        auto resolver = resolver_; // synchronous completion may destroy this awaitable
+        if (token) {
+            state->tokenLink.emplace(token.registerCallback([source = state->lifetimeCancellation] {
+                source.cancel();
+            }));
+        }
+        state->handle = detail::borrowResume(handle);
+        state->phase = ResolveState::Phase::Pending;
+        auto operationToken = state->lifetimeCancellation.token();
+        auto resolver = resolver_; // publication can complete on another loop
         resolver->resolve(hostname_, port_, state->loop,
             [state](mini::net::DnsResolver::ResolveResult addrs) mutable {
                 // Delivered on owner loop thread by DnsResolver.
-                if (!state->resumed) {
-                    state->resumed = true;
+                if (state->phase == ResolveState::Phase::Pending) {
+                    state->phase = ResolveState::Phase::Completed;
                     state->result = std::move(addrs);
-                    state->handle.resume();
+                    state->tokenLink.reset();
+                    auto resume = std::exchange(state->handle, {});
+                    resume.resume();
                 }
             },
-            std::move(token));
+            std::move(operationToken));
     }
 
     /// Returns the explicit result produced by DnsResolver.
     mini::net::Expected<std::vector<mini::net::InetAddress>> await_resume() {
+        if (!state_ || state_->phase != ResolveState::Phase::Completed) {
+            throw std::logic_error("resolve result requested before completion");
+        }
         return std::move(state_->result);
     }
 
 private:
+    void abandon() noexcept {
+        if (!state_ || state_->phase != ResolveState::Phase::Pending) { return; }
+        state_->loop->assertInLoopThread();
+        state_->phase = ResolveState::Phase::Abandoned;
+        state_->handle = {};
+        state_->tokenLink.reset();
+        state_->lifetimeCancellation.cancel();
+    }
+
     std::shared_ptr<mini::net::DnsResolver> resolver_;
     std::shared_ptr<ResolveState> state_;
     std::string hostname_;
