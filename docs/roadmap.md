@@ -109,8 +109,9 @@ S1-04c 已补齐 DNS 顺序候选、不可用 family 回退、连接轮次隔离
 dispatch 的退出违约。见 [DNS/Connector 记录](s1_dns_candidates.md)。最终本地
 ASan/UBSan 75/75、Release 72/72、插桩 libc++ TSan 72/72、Windows 34/34，
 共享库关键合同及安装消费 4/4；四个重点入口在 TSan 下各重复 20 次通过。
-下一项实施一般回调异常与清理规则，再进入 TLS 身份验证；远端 CI 单独确认，
-S1 整体继续保持进行中。
+`0ea897c` 的[远端 CI](https://github.com/YanqingXu/mini_trantor/actions/runs/34685547831)
+已核对为 8 个 job 全部成功。下一项实施一般回调异常与清理规则，再进入 TLS 身份验证；
+S1 整体继续保持进行中。暂停位置、未实施方案及环境恢复见[会话交接](HANDOFF.md)。
 
 | 顺序 | 任务 | 必须守住的合同 | 退出证据 |
 | --- | --- | --- | --- |

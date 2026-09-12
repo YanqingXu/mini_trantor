@@ -144,7 +144,13 @@ BUILD_SHARED_LIBS=ON 下新增 DNS/Connector/socket 合同及安装消费 4/4；
 TSan 下 DNS candidates、Connector reentry、真实 hostname echo 和保留背压策略
 四个入口各重复 20 次，合计 80 次均通过，记录在
 `build_audit_s1_dns_candidates_repeat_final.log`。没有排除保留测试或使用 suppression。
-上述为本地证据；本提交的远端 CI 需在推送后单独核对，不能用本地通过替代。
+上述为本地证据。交接时已独立核对 `0ea897c` 的
+[远端 CI](https://github.com/YanqingXu/mini_trantor/actions/runs/34685547831)：
+8 个 job 全部成功，包括 Linux Debug/Release、Clang、ASan/TLS、TSan、
+Windows Debug/Release 与 framing fuzz。
+
+用户随后要求清理根目录临时产物，上述 `build_audit_*` 日志和构建目录已从工作区移除。
+这些路径仅记录历史证据位置；重新验证统一使用 `.tmp/`，详见[交接与环境恢复](HANDOFF.md)。
 
 本项不关闭一般 Reactor 回调异常传播、全部 callback owner 自销毁或 TLS 身份验证。
 特别是 TLS 创建失败不得降为明文，与名称/证书链验证一起进入下一项实施；S1 之后

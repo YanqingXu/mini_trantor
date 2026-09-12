@@ -84,6 +84,7 @@ target_link_libraries(my_app PRIVATE mini_trantor::mini_trantor)
 
 ## 工程证据与阅读入口
 
+- [未完成目标交接：当前状态、下一步与环境恢复](docs/HANDOFF.md)
 - [深度审计、已修复项、未解决风险及实测记录](docs/audit_2026-09-12.md)
 - [唯一当前研发路线](docs/roadmap.md)
 - [完整框架理解文档：模块、文件、调用链、生命周期、排错入口](docs/framework_understanding.md)

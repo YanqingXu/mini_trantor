@@ -33,20 +33,23 @@ tag `llvmorg-18.1.3`，并验证提交 `c13b7485b87909fcf739f62cfa382b55407433c0
 入口和独立 prefix，参见 [libc++ 构建文档](https://libcxx.llvm.org/VendorDocumentation.html)。
 
 ```bash
-bash tests/toolchain/build_tsan_runtime.sh
-prefix="$(cat build_tsan_runtime/build/runtime-prefix.txt)"
-cmake -S . -B build_tsan -DCMAKE_CXX_COMPILER=clang++-18 \
+mkdir -p .tmp/compiler .tmp/logs
+export TMPDIR="$PWD/.tmp/compiler"
+bash tests/toolchain/build_tsan_runtime.sh "$PWD/.tmp/tsan-runtime"
+prefix="$(cat .tmp/tsan-runtime/build/runtime-prefix.txt)"
+cmake -S . -B .tmp/build/tsan -DCMAKE_CXX_COMPILER=clang++-18 \
   -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
   -DMINI_ENABLE_TLS=OFF -DMINI_ENABLE_TSAN=ON \
   "-DCMAKE_CXX_FLAGS=-fsanitize=thread -stdlib=libc++ -fexperimental-library -nostdinc++ -isystem $prefix/include/c++/v1 -L$prefix/lib -Wl,-rpath,$prefix/lib"
-cmake --build build_tsan --parallel 4
-ctest --test-dir build_tsan --output-on-failure --timeout 120
-ctest --test-dir build_tsan --output-on-failure --timeout 120 --repeat until-fail:10 \
+cmake --build .tmp/build/tsan --parallel 4
+ctest --test-dir .tmp/build/tsan --output-on-failure --timeout 120
+ctest --test-dir .tmp/build/tsan --output-on-failure --timeout 120 --repeat until-fail:10 \
   -R 'contract.dns.test_dns_lifetime|contract.coroutine.test_cancel_during_teardown|contract.tcp_server.test_close_during_destruction|integration.tcp_server.test_tcp_server$|integration.tcp_server.test_tcp_server_threaded|integration.coroutine.test_coroutine_idle_timeout'
 ```
 
-脚本默认全部写入被忽略的 `build_tsan_runtime/`，不替换系统库。第一个参数可以
-改变工作根目录；已存在的源码、构建和安装目录分别可通过 `MINI_LLVM_SOURCE_DIR`、
+脚本仍有历史默认路径 `build_tsan_runtime/`；本地执行必须如上显式传入 `.tmp/` 下的
+工作根目录，遵守主目录临时产物约束，不使用无参数调用。脚本不替换系统库。
+已存在的源码、构建和安装目录分别可通过 `MINI_LLVM_SOURCE_DIR`、
 `MINI_TSAN_RUNTIME_BUILD`、`MINI_TSAN_RUNTIME_PREFIX` 复用。已有源码必须保持
 固定提交且无 tracked 修改。运行库可重复配置和增量构建；安装 prefix 不应在后续
 项目构建或运行时移动，因为它记录在 RPATH 中。
@@ -64,5 +67,6 @@ ctest --test-dir build_tsan --output-on-failure --timeout 120 --repeat until-fai
 ## 证据边界
 
 本地验证不等于远端 CI 已通过；远端结论需检查具体 run。TSan 当前验证普通 TCP
-配置，TLS 由 ASan/UBSan 的启用配置覆盖。系统未插桩库的旧日志保留供对照；
+配置，TLS 由 ASan/UBSan 的启用配置覆盖。系统未插桩库的历史对照结论记录在本文；
+旧本地日志与运行库构建目录已按用户要求清理，恢复步骤见[会话交接](HANDOFF.md)。
 任何新的实例字段竞争、应用数据竞争或插桩配置下报告都必须单独调查。

@@ -1,5 +1,16 @@
 # AGENTS.md
 
+## Session Handoff
+- At the start of a new session, read [docs/HANDOFF.md](docs/HANDOFF.md) for the
+  unfinished goal, last verified state, next task, and local environment recovery.
+- Recheck the current user request, goal status, Git state, and CI before continuing.
+  A handoff records paused work; it does not itself resume that work.
+- Treat proposed interfaces and tests in the handoff as unimplemented unless the
+  current repository proves otherwise. Keep `docs/roadmap.md` as the stage authority.
+- Update the handoff after completing a bounded task or changing the next step.
+
+---
+
 ## Project Identity
 mini-trantor is a small but industrial-style C++ reactor network library inspired by trantor.
 It is designed for learning, evolution, and AI-assisted development.
