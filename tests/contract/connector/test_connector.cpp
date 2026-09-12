@@ -4,7 +4,7 @@
 // 1. Which loop/thread owns this module? — owner EventLoop thread.
 // 2. Who owns it and who releases it? — TcpClient owns via shared_ptr.
 // 3. Which callbacks may re-enter? — newConnectionCallback may call stop().
-// 4. Cross-thread? — start()/stop() marshal via runInLoop.
+// 4. Cross-thread? — callers marshal start()/stop()/restart() via runInLoop.
 // 5. Test file? — This file.
 
 #include "mini/net/Connector.h"
@@ -18,12 +18,31 @@
 #include <chrono>
 #include <future>
 #include <memory>
+#include <stdexcept>
 #include <thread>
 #include <unistd.h>
 
 using namespace std::chrono_literals;
 
 int main() {
+    // Owner-only entry points reject before touching mutable connection state.
+    {
+        mini::net::EventLoop loop;
+        auto connector = std::make_shared<mini::net::Connector>(
+            &loop, mini::net::InetAddress("127.0.0.1", 1));
+        std::thread caller([&] {
+            for (auto operation : {&mini::net::Connector::start,
+                                   &mini::net::Connector::stop,
+                                   &mini::net::Connector::restart}) {
+                bool rejected = false;
+                try { ((*connector).*operation)(); }
+                catch (const std::runtime_error&) { rejected = true; }
+                assert(rejected);
+            }
+        });
+        caller.join();
+        assert(connector->state() == mini::net::Connector::kDisconnected);
+    }
     // Contract 1: Successful connect delivers fd through callback on owner loop
     {
         mini::net::EventLoopThread loopThread;
@@ -54,7 +73,7 @@ int main() {
             connectedFd.set_value(sockfd);
         });
 
-        connector->start();
+        loop->runInLoop([connector] { connector->start(); });
 
         auto status = connectedFdFuture.wait_for(2s);
         assert(status == std::future_status::ready);
@@ -71,9 +90,8 @@ int main() {
         ::close(fd);
         ::close(listenFd);
 
-        connector->stop();
-        loop->runAfter(50ms, [loop] { loop->quit(); });
-        std::this_thread::sleep_for(200ms);
+        loop->queueInLoop([connector] { connector->stop(); });
+        loopThread.stop();
     }
 
     // Contract 2: Connect to refused port triggers retry (verify state returns to kDisconnected)
@@ -90,22 +108,21 @@ int main() {
         auto retryFuture = retryObserved.get_future();
         bool retryFired = false;
 
-        // After a brief wait, check that connector is in kDisconnected (retrying)
-        loop->runAfter(200ms, [&] {
-            // After failed connect + retry delay, state should be kDisconnected or kConnecting
-            if (!retryFired) {
+        // Observe an actual retry transition, not elapsed wall-clock time.
+        connector->setConnectorEventCallback([&](const auto&, mini::net::ConnectorEvent event) {
+            if (event == mini::net::ConnectorEvent::RetryScheduled && !retryFired) {
+                assert(connector->state() == mini::net::Connector::kDisconnected);
                 retryFired = true;
                 retryObserved.set_value();
             }
         });
 
-        connector->start();
+        loop->runInLoop([connector] { connector->start(); });
 
-        assert(retryFuture.wait_for(2s) == std::future_status::ready);
-        connector->stop();
-
-        loop->runAfter(100ms, [loop] { loop->quit(); });
-        std::this_thread::sleep_for(300ms);
+        const auto retryStatus = retryFuture.wait_for(2s);
+        assert(retryStatus == std::future_status::ready);
+        loop->queueInLoop([connector] { connector->stop(); });
+        loopThread.stop();
     }
 
     // Contract 3: stop() during pending connect cleans up Channel
@@ -114,23 +131,22 @@ int main() {
         mini::net::EventLoop* loop = loopThread.startLoop();
 
         auto connector = std::make_shared<mini::net::Connector>(
-            loop, mini::net::InetAddress("192.0.2.1", 19303));  // RFC 5737 TEST-NET, will hang in EINPROGRESS
+            loop, mini::net::InetAddress("192.0.2.1", 19303));  // TEST-NET; route may fail immediately
         connector->setRetryDelay(5s, 5s);  // long delay so retry won't fire
-
-        connector->start();
-        std::this_thread::sleep_for(50ms);
 
         std::promise<void> stopped;
         auto stoppedFuture = stopped.get_future();
         loop->runInLoop([&] {
+            connector->start();
+            // No readiness event can interleave before this explicit stop.
             connector->stop();
+            assert(connector->state() == mini::net::Connector::kDisconnected);
             stopped.set_value();
         });
 
-        assert(stoppedFuture.wait_for(2s) == std::future_status::ready);
-        // No crash, no fd leak — state should be kDisconnected
-        loop->runAfter(50ms, [loop] { loop->quit(); });
-        std::this_thread::sleep_for(200ms);
+        const auto stopStatus = stoppedFuture.wait_for(2s);
+        assert(stopStatus == std::future_status::ready);
+        loopThread.stop(); // also drains deferred Channel destruction
     }
 
     // Contract 4: Destruction in kDisconnected with pending retry timer is safe
@@ -138,19 +154,24 @@ int main() {
         mini::net::EventLoopThread loopThread;
         mini::net::EventLoop* loop = loopThread.startLoop();
 
-        {
-            auto connector = std::make_shared<mini::net::Connector>(
-                loop, mini::net::InetAddress("127.0.0.1", 19304));
-            connector->setRetryDelay(50ms, 200ms);
-            connector->start();
-            std::this_thread::sleep_for(150ms);
-            // Connector tries, fails, schedules retry. Now we drop the shared_ptr.
+        auto connector = std::make_shared<mini::net::Connector>(
+            loop, mini::net::InetAddress("127.0.0.1", 19304));
+        std::weak_ptr<mini::net::Connector> lifetime = connector;
+        connector->setRetryDelay(5s, 5s);
+        std::promise<void> retryScheduled;
+        auto retryFuture = retryScheduled.get_future();
+        connector->setConnectorEventCallback([&](const auto&, mini::net::ConnectorEvent event) {
+            if (event == mini::net::ConnectorEvent::RetryScheduled) { retryScheduled.set_value(); }
+        });
+        loop->runInLoop([connector] { connector->start(); });
+        const auto retryStatus = retryFuture.wait_for(2s);
+        assert(retryStatus == std::future_status::ready);
+        loop->queueInLoop([connector = std::move(connector)]() mutable {
             connector->stop();
-        }
-
-        loop->runAfter(100ms, [loop] { loop->quit(); });
-        std::this_thread::sleep_for(300ms);
-        // must not crash
+            connector.reset();
+        });
+        loopThread.stop();
+        assert(lifetime.expired());
     }
 
     return 0;

@@ -54,17 +54,20 @@ int main() {
         int count = 0;
         mini::net::TimerId repeating;
 
-        repeating = loop->runEvery(10ms, [loop, &count, &firedCount, &repeating] {
-            ++count;
-            if (count == 3) {
-                loop->cancel(repeating);
-            }
-            if (count == 3) {
-                loop->runAfter(30ms, [loop, &firedCount, &count] {
-                    firedCount.set_value(count);
-                    loop->quit();
-                });
-            }
+        // Publish the self-cancel id on its owner before any timer callback runs.
+        // A caller-side assignment after cross-thread runEvery is not synchronized
+        // with the callback, however generous the nominal timer interval is.
+        loop->queueInLoop([loop, &count, &firedCount, &repeating] {
+            repeating = loop->runEvery(10ms, [loop, &count, &firedCount, &repeating] {
+                ++count;
+                if (count == 3) {
+                    loop->cancel(repeating);
+                    loop->runAfter(30ms, [loop, &firedCount, &count] {
+                        firedCount.set_value(count);
+                        loop->quit();
+                    });
+                }
+            });
         });
 
         assert(firedCountFuture.wait_for(1s) == std::future_status::ready);

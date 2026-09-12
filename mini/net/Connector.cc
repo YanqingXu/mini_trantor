@@ -58,11 +58,13 @@ Connector::StateE Connector::state() const noexcept {
 }
 
 void Connector::start() {
+    loop_->assertInLoopThread();
     connect_ = true;
     loop_->runInLoop([self = shared_from_this()] { self->startInLoop(); });
 }
 
 void Connector::stop() {
+    loop_->assertInLoopThread();
     connect_ = false;
     loop_->runInLoop([self = shared_from_this()] { self->stopInLoop(); });
 }

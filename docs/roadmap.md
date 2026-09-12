@@ -59,6 +59,9 @@ S1-03 已落实线程启动结果、提前退出保留、部分线程池回滚�
 新增 DNS 控制块报告与独立 shared/weak 最小复现进入标准库插桩分诊，详见
 [线程实施记录](s1_thread_lifecycle.md)与 [DNS 追加记录](s1_dns_lifecycle.md)。
 下一步依次完成关闭重入/异常策略、剩余 TSan 分诊和 TLS 对端身份合同。
+S1-03b 已关闭 Connector 错误线程入口和测试 TimerId 发布的两项同步违约；
+ASan 70/70、Linux Release 67/67、Windows 30/30。系统 libc++ TSan 为 65/67，
+本轮仅报告两个 TcpServer 控制块入口；其余历史控制块入口继续保留，正准备插桩标准库对照。
 
 | 顺序 | 任务 | 必须守住的合同 | 退出证据 |
 | --- | --- | --- | --- |

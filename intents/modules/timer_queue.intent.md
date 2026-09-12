@@ -48,6 +48,9 @@ thread-affinity and lifecycle discipline.
 - addTimerInLoop / cancelInLoop are owner-thread-only operations
 - public timer APIs on EventLoop may be called cross-thread, but must marshal into the owner loop
 - timer callbacks execute in the owner loop thread only
+- A caller-owned TimerId captured by reference needs its own publication protocol.
+  Cross-thread runEvery returning an id does not synchronize a later caller-side
+  assignment with the callback; self-canceling timer ids can be assigned on owner.
 - timeout calculation and expired timer dispatch happen in the owner loop thread only
 
 ---

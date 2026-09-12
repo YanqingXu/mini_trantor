@@ -86,3 +86,40 @@ sequenceDiagram
 
 日志前缀为 `build_audit_s1_thread_final_{asan,release,windows,tsan}.log`。
 下一项处理关闭重入/异常策略，并继续追踪控制块报告；S1 整体尚未退出。
+
+## S1-03b：owner 入口与测试发布协议
+
+Connector 的 intent/header 已要求 start/stop/restart 在 owner loop 调用，但旧 start/stop
+在检查前写 connect_，而原合同测试直接跨线程调用。新增错误线程回归在旧代码断言失败；
+现在入口先检查线程，测试通过 runInLoop/queueInLoop 调用，重试以 RetryScheduled
+事件确认，停止以 join 确认 deferred Channel 清理。没有通过删掉失败路径解决报告。
+
+TimerQueue 的报告来自测试自己的 repeating TimerId：主线程在 runEvery 返回后赋值，
+worker 回调按引用读取，没有同步。现在注册与赋值在同一个 owner functor 完成；
+timer API 仍支持跨线程调用，其返回值不自动同步用户后续写入的变量。
+
+```mermaid
+sequenceDiagram
+    participant Caller as External caller
+    participant Loop as Owner EventLoop
+    participant Connector
+    Caller->>Loop: queue start/stop
+    Loop->>Connector: check owner before connect_ mutation
+    Connector-->>Loop: readiness / retry / cleanup
+    Caller->>Loop: queue timer registration
+    Loop->>Loop: register and assign self-cancel TimerId
+    Loop->>Loop: later timer callback reads id and cancels
+```
+
+Gate：Connector/TimerQueue 可变状态由各自 owner loop 管理；Connector 由 TcpClient
+或测试的 shared_ptr 持有，连接中的 fd/Channel 由 Connector 释放，TimerQueue 属于
+EventLoop。连接事件仍可重入 stop，Deferred Channel reset 留在 owner 队列。
+外部线程必须先投递 Connector 控制；timer 公共 API 继续投递容器操作，但测试捕获的
+id 由 owner 发布。验证文件是 `tests/contract/connector/test_connector.cpp` 和
+`tests/contract/timer_queue/test_timer_queue.cpp`。
+
+验证：两项定向 ASan 与 TSan 均为 2/2；全量 ASan/UBSan + TLS 70/70、Linux Release
+67/67、Windows Release 30/30。完整系统 libc++ TSan 仍为 65/67，但失败入口现在是
+tcp_server_threaded 和 coroutine_idle_timeout 的控制块报告；Connector 和 TimerQueue
+原报告已由入口约束及测试同步修复。历史普通 TcpServer 与 DNS 控制块报告仍保持开放。
+日志为 `build_audit_s1_owner_sync_{full_asan,full_tsan,release,windows}.log`。

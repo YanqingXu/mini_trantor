@@ -49,6 +49,8 @@ and delivers the connected fd upward through a narrow callback boundary.
 
 ## 6. Threading Rules
 - start() / stop() / restart() are owner-loop-thread-only operations
+- Entry checks must precede connect_ or state mutation; an off-owner call fails
+  before changing connector state. Tests must marshal these calls explicitly.
 - TcpClient marshals cross-thread calls through runInLoop before invoking
   Connector methods
 - handleWrite / handleError (Channel callbacks) run on the owner loop thread
