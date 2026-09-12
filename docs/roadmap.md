@@ -68,6 +68,15 @@ Release 68/68、Windows 31/31；插桩标准库下 TSan 首轮 68/68，但重复
 TcpServer 实例字段的真实竞争。下一项处理 worker 关闭通知与 base-loop 析构的边界，
 不能用首轮通过或标准库误报归因代替此修复。
 
+S1-04b 已将 TcpServer 关闭通知限定为 base LoopHandle 上的连接名消息，移除
+worker 对 server 成员的读取和排队通知的强连接保活；析构先分离 map 再回调、
+join worker。见[关闭记录](s1_server_close.md)。本地 ASan 72/72、Release 69/69、
+插桩 libc++ TSan 69/69、Windows 32/32，五个历史/新增入口各重复 20 次通过。
+永久 [TSan 运行库脚本与正负对照](tsan_toolchain.md) 已进入 CI，无测试排除或 suppression。
+远端上一提交另暴露 DNS 首地址 IPv4 假设和 hostname echo 失败；下一项先核实
+双栈候选顺序与 TcpClient 回退，再继续一般回调重入/异常及 TLS 身份验证。
+S1、S2、S3 的整体退出要求保持不变。
+
 | 顺序 | 任务 | 必须守住的合同 | 退出证据 |
 | --- | --- | --- | --- |
 | 1 | 协程挂起帧注销 | Task 提前销毁后，timer/I/O/queued resume/cancel 不访问失效 handle；先定义谁能销毁、在哪个 loop 销毁 | `tests/contract/coroutine/test_task_lifetime.cpp`；sleep/read/write/close、完成队列交错的 ASan 回归 |

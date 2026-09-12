@@ -100,16 +100,25 @@ TcpServer::TcpServer(EventLoop* loop, const InetAddress& listenAddr, std::string
 
 TcpServer::~TcpServer() {
     loop_->assertInLoopThread();
+    stopped_ = true;
+    draining_ = false;
     lifetimeToken_.reset();
     acceptor_->setNewConnectionCallback({});
+    if (acceptor_->listening()) { acceptor_->stop(); }
+    if (drainTimerId_.valid()) { loop_->cancel(drainTimerId_); }
 
-    for (auto& [name, connection] : connections_) {
-        auto conn = connection;
-        conn->getLoop()->runInLoop([conn] {
-            conn->setCloseCallback({});
-            conn->connectDestroyed();
+    // Synchronous base-loop disconnect callbacks may re-enter stop/count. Expose
+    // an empty map before dispatch and transfer each reference to its owner.
+    auto connections = std::move(connections_);
+    connections_.clear();
+    for (auto& [name, connection] : connections) {
+        auto* owner = connection->getLoop();
+        owner->runInLoop([connection = std::move(connection)] {
+            connection->setCloseCallback({});
+            connection->connectDestroyed();
         });
     }
+    threadPool_->stop();
 }
 
 void TcpServer::setThreadNum(int numThreads) {
@@ -295,8 +304,10 @@ void TcpServer::onDrainTimeout() {
 void TcpServer::forceCloseAllConnections() {
     auto conns = std::move(connections_);
     connections_.clear();
+    auto eventCallback = connectionEventCallback_;
     for (auto& [name, connection] : conns) {
-        connection->getLoop()->runInLoop([connection, eventCallback = connectionEventCallback_] {
+        auto* owner = connection->getLoop();
+        owner->runInLoop([connection = std::move(connection), eventCallback] {
             connection->setCloseCallback({});
             if (eventCallback && connection->connected()) {
                 eventCallback(connection, ConnectionEvent::ForceClosed);
@@ -387,15 +398,16 @@ void TcpServer::newConnection(SocketFd sockfd, const InetAddress& peerAddr) {
         connection->setTlsEventCallback(tlsEventCb);
     }
 
-    // Guard delayed close callbacks so worker-loop teardown never dereferences a dead TcpServer.
-    connection->setCloseCallback([this, lifetime, idleState](const TcpConnectionPtr& conn) {
-        if (!lifetime.lock()) {
-            return;
-        }
+    // Worker callbacks carry only immutable routing data. A lifetime check on
+    // the worker cannot protect server members from concurrent base destruction.
+    connection->setCloseCallback([this, lifetime, idleState, connName, posting = loop_->handle()](const TcpConnectionPtr&) {
         if (idleState != nullptr) {
             cancelIdleTimer(idleState);
         }
-        removeConnection(conn);
+        (void)posting.queue([this, lifetime, connName] {
+            if (!lifetime.lock()) { return; }
+            removeConnectionInLoop(connName);
+        });
     });
 
     if (tlsContext_) {
@@ -415,28 +427,14 @@ void TcpServer::newConnection(SocketFd sockfd, const InetAddress& peerAddr) {
     // The check happens in removeConnectionInLoop when the last connection is removed.
 }
 
-void TcpServer::removeConnection(const TcpConnectionPtr& connection) {
-    std::weak_ptr<void> lifetime = lifetimeToken_;
-    loop_->runInLoop([this, lifetime, connection] {
-        if (!lifetime.lock()) {
-            return;
-        }
-        removeConnectionInLoop(connection);
-    });
-}
-
-void TcpServer::removeConnectionInLoop(const TcpConnectionPtr& connection) {
+void TcpServer::removeConnectionInLoop(const std::string& name) {
     loop_->assertInLoopThread();
-    const auto erased = connections_.erase(connection->name());
+    auto entry = connections_.extract(name);
+    if (entry.empty()) { return; }
 
-    if (erased == 0) {
-        return;
-    }
-
+    auto connection = std::move(entry.mapped());
     auto* connectionLoop = connection->getLoop();
-    if (connectionLoop) {
-        connectionLoop->runInLoop([connection] { connection->connectDestroyed(); });
-    }
+    connectionLoop->runInLoop([connection = std::move(connection)] { connection->connectDestroyed(); });
 
     // In drain mode: if all connections closed, finish shutdown.
     if (draining_ && connections_.empty()) {

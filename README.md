@@ -44,6 +44,10 @@ Clang 检查使用 libc++ 18，需安装 libc++/libc++abi 开发包并配置
 `-DCMAKE_CXX_COMPILER=clang++ "-DCMAKE_CXX_FLAGS=-stdlib=libc++ -fexperimental-library"`；
 后一个选项用于该版 libc++ 的 jthread 实现。GCC/MSVC 不需要这些选项。
 
+TSan 使用[隔离构建并插桩的 C++ 运行库](docs/tsan_toolchain.md)，先检查合法
+shared/weak 释放与故意数据竞争两个独立对照，再运行全部保留测试。
+系统未插桩 libc++ 的控制块报告需要对照归因，不能直接作为项目缺陷或通过证据。
+
 Windows（Visual Studio 2026）：
 
 ```powershell

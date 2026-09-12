@@ -14,7 +14,7 @@
 7. TimerQueue 通过 poll timeout 驱动，无独立 timer 线程，也不再依赖 timerfd。
 8. Task 管 coroutine frame，awaitable 负责把网络等待接回 EventLoop；两者不能相互替代。
 9. DNS 有阻塞解析 worker；它与 Reactor 的回流边界需要特别审计。
-10. 协程、DNS 投递与线程启停已有 S1 修复；TcpServer 关闭、TLS 身份校验及共享控制块 TSan 分诊仍未关闭。
+10. 协程、DNS 投递、线程启停与 TcpServer 关闭投递已有 S1 修复；共享控制块已建立插桩运行库对照。一般回调重入/异常、DNS 双栈候选和 TLS 身份验证仍需完成。
 11. `mini/net/detail/ConnectionTransport` 是 TCP/TLS 内部 I/O 策略；已移除的通用
     `mini/net/transport/` 则是另一套上层抽象，两者不能混淆。
 
@@ -216,9 +216,9 @@ SleepAwaitable 在 timer 回调恢复，网络 awaiter 通过 queueInLoop 恢复
 4. **依赖**：Acceptor、ThreadPool、Connection、timer、可选 TlsContext。
 5. **调用方**：应用入口和回调 echo；当前没有业务 pipeline 依赖。
 6. **关键方法**：start、newConnection、removeConnectionInLoop、stop、stop(Duration)、forceCloseAllConnections。
-7. **阅读抓手**：从 connection map 看 base/io loop 间交接，再看 lifetimeToken 与回调捕获。
+7. **阅读抓手**：从 connection map 看 base/io loop 间交接；worker close 只携带预先复制的 LoopHandle、weak lifetime 和连接名，base 检查存活后再查 map。
 8. **易误解处**：stop(Duration) 主要是等待已有连接自行结束，到时强关；不是自动完成业务 drain 握手。
-9. **修改约束**：不得重新塞入 session/AOI/broadcast；关闭 hook 的观察和调用在连接 owner loop。
+9. **修改约束**：不得重新塞入 session/AOI/broadcast；析构先分离 map 再回调，将账本强引用移交 owner 清理并 join worker。通知本身不拥有连接，见[关闭实施记录](s1_server_close.md)。
 
 ### `mini/net/TimerQueue.h/.cc` / `TimerId.h`
 
@@ -301,6 +301,8 @@ SleepAwaitable 在 timer 回调恢复，网络 awaiter 通过 queueInLoop 恢复
 | `coroutine/Timeout.h` | 操作与定时竞争并映射 TimedOut | 依赖 WhenAny/Sleep/NetError | 继承两者的生命周期限制，不能作为全局安全屏障 |
 | `examples/echo_server/main.cpp` | 最小 callback 入口 | 组装 loop/server/message callback | 先读它建立主链路，再下钻资源释放 |
 | `examples/coroutine_echo_server/main.cpp` | 展示 asyncRead/Write 顺序代码 | detach 一个连接处理 Task | detach 不是托管服务范围，示例不证明提前销毁安全 |
+| `tests/toolchain/build_tsan_runtime.sh` | 固定 LLVM 源码、隔离构建插桩运行库并验证实际链接 | Linux TSan CI 与本地审计 | 正负对照必须同时符合预期；不替换系统库、不排除项目测试 |
+| `tests/toolchain/shared_weak_probe.cpp` | 无项目依赖的控制块释放对照和故意竞争负对照 | 运行库验证脚本 | 区分工具归因与项目实例字段竞争；一次通过不能关闭历史间歇失败 |
 
 ## 8. 关键类对象关系
 

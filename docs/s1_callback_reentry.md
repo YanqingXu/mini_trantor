@@ -61,3 +61,7 @@ reset 不是等待屏障：cancel 已取走的 callback 可以在 reset 返回�
 TcpServer.cc:103 reset lifetimeToken_，worker 的 removeConnection 在 :419 读取同一
 shared_ptr 对象。它不同于系统未插桩 weak release 的控制块 delete 报告，S1 仍开放。
 证据在 `build_audit_s1_control_block_repeat.log`；下一项移除 worker 对 server 成员的访问。
+
+后续 S1-04b 已将通知改为仅携带连接名并经 base LoopHandle 投递，修复和新增析构
+重入合同见[server 关闭记录](s1_server_close.md)。本节的 68/68 保留为发现问题时的
+历史快照，不代表当前 S1 的完整退出证据。

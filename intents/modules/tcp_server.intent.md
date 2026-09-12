@@ -28,6 +28,13 @@ It is the lifecycle boundary between listening infrastructure and per-connection
 ## 4. Core Invariants
 - base loop owns connection map mutation
 - close/remove path must not dereference a destroyed TcpServer
+- Worker close callbacks capture the base LoopHandle, an independent weak lifetime
+  token and connection name at installation. They never read any server member.
+  The queued base callback checks lifetime before accessing the connection map.
+- Removal notifications do not own connections. Bookkeeping transfers its strong
+  reference into the owner-loop cleanup callback before releasing the map entry.
+- Destruction marks shutdown and detaches the connection map before invoking any
+  connection callback, then joins workers while server members are still alive.
 - connection creation and removal remain explicit and loop-safe
 - idle-timeout policy must not bypass connection owner-loop close semantics
 - backpressure configuration must not mutate worker-loop Channel state directly from base loop code
@@ -65,6 +72,10 @@ It is the lifecycle boundary between listening infrastructure and per-connection
 - idle timeout closes quiet connections without skipping the normal removal path
 - backpressure policy installed by TcpServer pauses and later resumes per-connection reads without breaking ownership rules
 - destruction invalidates delayed removal callbacks safely
+- a delayed base-loop removal notification cannot retain a connection after server
+  destruction and worker join; late posts to a closed base loop are harmless
+- a disconnected callback may request stop on its base loop, including during
+  destruction; shutdown cannot invalidate the map currently being traversed
 - stop() stops Acceptor, force-closes all connections, stops thread pool; idempotent
 
 ---

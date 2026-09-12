@@ -15,7 +15,6 @@ jobs:
           - {name: gcc-release, compiler: g++, mode: Release, tls: 'OFF', asan: 'OFF', tsan: 'OFF'}
           - {name: gcc-asan-tls, compiler: g++, mode: Debug, tls: 'ON', asan: 'ON', tsan: 'OFF'}
           - {name: clang-debug, compiler: clang++, cxxflags: '-stdlib=libc++ -fexperimental-library', mode: Debug, tls: 'OFF', asan: 'OFF', tsan: 'OFF'}
-          - {name: clang-tsan, compiler: clang++, cxxflags: '-stdlib=libc++ -fexperimental-library', mode: Debug, tls: 'OFF', asan: 'OFF', tsan: 'ON'}
     name: ${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +34,41 @@ jobs:
         run: cmake --build build --parallel 4
       - name: All retained contracts, integration and package consumption
         run: ctest --test-dir build --output-on-failure --timeout 120
+
+  linux-tsan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned compiler and runtime build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build clang-18 g++
+      - name: Build and verify isolated instrumented C++ runtimes
+        run: bash tests/toolchain/build_tsan_runtime.sh
+      - name: Configure against verified runtimes
+        run: |
+          prefix="$(cat build_tsan_runtime/build/runtime-prefix.txt)"
+          cmake -S . -B build -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
+            -DMINI_ENABLE_TLS=OFF -DMINI_ENABLE_TSAN=ON \
+            "-DCMAKE_CXX_FLAGS=-fsanitize=thread -stdlib=libc++ -fexperimental-library -nostdinc++ -isystem $prefix/include/c++/v1 -L$prefix/lib -Wl,-rpath,$prefix/lib"
+      - name: Build
+        run: cmake --build build --parallel 4
+      - name: All retained contracts, integration and package consumption
+        run: ctest --test-dir build --output-on-failure --timeout 120
+      - name: Repeat historical race entries
+        run: >-
+          ctest --test-dir build --output-on-failure --timeout 120 --repeat until-fail:10
+          -R 'contract.dns.test_dns_lifetime|contract.coroutine.test_cancel_during_teardown|contract.tcp_server.test_close_during_destruction|integration.tcp_server.test_tcp_server$|integration.tcp_server.test_tcp_server_threaded|integration.coroutine.test_coroutine_idle_timeout'
+      - name: Preserve runtime diagnostics and test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsan-diagnostics
+          path: |
+            build_tsan_runtime/build/runtime-links.log
+            build_tsan_runtime/build/negative-control.log
+            build/Testing/Temporary/
 
   windows-preview:
     runs-on: windows-latest

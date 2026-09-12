@@ -77,8 +77,7 @@ public:
 
 private:
     void newConnection(SocketFd sockfd, const InetAddress& peerAddr);
-    void removeConnection(const TcpConnectionPtr& connection);
-    void removeConnectionInLoop(const TcpConnectionPtr& connection);
+    void removeConnectionInLoop(const std::string& name);
     void forceCloseAllConnections();
     void onDrainTimeout();
 

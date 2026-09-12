@@ -170,3 +170,15 @@ LLVM 18 的 weak release 位于单独编译的
 [memory.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/libcxx/src/memory.cpp)，
 下一步需重建插桩后的 libc++/libc++abi 并对比最小程序及全部项目测试。
 不得通过 suppression、排除测试或给共享指针套无业务含义的锁关闭报告。
+
+后续已构建并验证固定 LLVM 18.1.3 的插桩 libc++/libc++abi/libunwind：合法的
+独立对照通过，故意数据竞争仍报告并退出 66。永久脚本、实际链接检查及 CI 入口
+见[TSan 运行库记录](tsan_toolchain.md)。这关闭了该独立控制块模式的工具归因，
+同时保留项目实例字段竞争的独立修复义务。
+
+另一个远端环境问题进入待修复项：[0b0f209 的 CI](https://github.com/YanqingXu/mini_trantor/actions/runs/34679975418)
+所有 Linux 普通/ASan 配置都在 DNS unit 的首地址 IPv4 断言及 hostname echo
+集成测试失败，Windows 子集不覆盖这两项。源码中 resolver 使用 AF_UNSPEC 并保留
+系统顺序，而 unit/协程示例测试要求首地址为 127.0.0.1，TcpClient 也只尝试首地址。
+这强烈指向 IPv6 优先环境的顺序与候选回退问题；远端当时没有打印完整地址列表，
+下一项应补可控的地址候选证据并修复，不修改 runner 的 IPv6 设置来让测试通过。

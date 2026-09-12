@@ -1,11 +1,11 @@
-# Module Intent: Graceful Shutdown and Signal Integration (v5-beta)
+# Module Intent: Graceful Shutdown and Signal Integration
 
 ## 1. Intent
 
 Formalize four shutdown paths as library-level contracts:
 - **process shutdown**: SIGINT/SIGTERM triggers coordinated teardown
 - **server shutdown**: TcpServer::stop() orchestrates accept stop → connection drain → loop exit
-- **client shutdown**: TcpClient::disconnect()/stop() already exist; no structural change needed
+- **client shutdown**: TcpClient::disconnect()/stop() remain separate lifecycle entry points
 - **worker loop shutdown**: EventLoopThreadPool::stop() quits and joins all worker loops
 
 The goal is to make "how a service stops" an explicit, ordered, testable contract
@@ -23,7 +23,10 @@ rather than relying on destructor side effects or ad-hoc application code.
   3. quit worker loops (EventLoopThreadPool::stop)
   4. quit base loop (EventLoop::quit)
 - drain policy: TcpServer::stop() immediately force-closes all connections.
-  A future drain-aware API (wait for in-flight requests) is deferred to v5-delta.
+  stop(Duration) stops accepting and waits for peer/application closure, then
+  force-closes any remaining connections at the deadline. It does not define an
+  application request-drain protocol. The current repeated stop guard also means
+  stop() during an existing timed drain does not accelerate that drain.
 
 ---
 
@@ -32,9 +35,9 @@ rather than relying on destructor side effects or ad-hoc application code.
 - does not create hidden global runtime
 - does not mutate loop-owned state off-thread
 - does not rely on destructor accidents for cleanup
-- does not implement drain-with-timeout policy (deferred)
+- does not implement application request draining or protocol-specific handshakes
 - does not handle SIGUSR1/SIGUSR2 or custom signal wiring
-- does not change TcpClient shutdown (already sufficient)
+- does not establish TcpClient correctness merely from server shutdown tests
 
 ---
 
@@ -42,7 +45,11 @@ rather than relying on destructor side effects or ad-hoc application code.
 
 - accept stop precedes final loop teardown
 - connection shutdown ordering is explicit (map mutation on base loop, destruction on IO loop)
-- pending callbacks do not outlive safe owners (lifetimeToken guards)
+- server close notifications capture independent weak lifetime state and a base
+  LoopHandle at installation; they check lifetime only after reaching the base
+  loop and never retain connections or read server members on a worker
+- server destruction publishes stopped/empty bookkeeping before disconnect
+  callbacks, cancels its drain timer and joins workers before member teardown
 - worker loop exit remains coordinated (quit → drain functors → join)
 - SignalWatcher delivers signal events through normal Channel callback on owner loop
 - SIGPIPE is ignored process-wide; write errors are detected via errno/SSL_error
@@ -86,6 +93,7 @@ rather than relying on destructor side effects or ad-hoc application code.
 Suggested files:
 - `tests/contract/signal/test_signal_handling.cpp`
 - `tests/integration/tcp_server/test_graceful_shutdown.cpp`
+- `tests/contract/tcp_server/test_close_during_destruction.cpp`
 
 ---
 
