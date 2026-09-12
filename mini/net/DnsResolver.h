@@ -1,7 +1,7 @@
 #pragma once
 
 // DnsResolver 提供异步域名解析，使用工作线程池执行阻塞 getaddrinfo，
-// 通过 EventLoop::runInLoop 将结果投递回请求方线程。
+// 通过非 owning LoopHandle 将结果排队回请求方线程；关闭目标拒绝迟到投递。
 // 支持可选的 TTL 缓存。不阻塞任何 EventLoop 线程。
 // v5-gamma: 支持双栈解析 (AF_UNSPEC)，缓存使用 sockaddr_storage。
 
@@ -41,8 +41,10 @@ public:
     ~DnsResolver();
 
     /// Resolve hostname asynchronously.
-    /// Callback is delivered on callbackLoop's thread with either resolved
-    /// addresses or an explicit ResolveFailed error.
+    /// Callback is always queued on callbackLoop's thread, including cache hits.
+    /// A closed target abandons delivery; callback captures may then be released
+    /// on a worker/cancellation thread. The loop must be alive when called.
+    /// A null loop or empty callback throws invalid_argument.
     void resolve(const std::string& hostname, uint16_t port,
                  EventLoop* callbackLoop, ResolveCallback cb,
                  mini::coroutine::CancellationToken token = {});

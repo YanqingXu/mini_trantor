@@ -1,7 +1,7 @@
 # Module Intent: DnsResolver
 
 > S1-02a fixes cache-hit re-entry and cancellation registration publication.
-> callbackLoop is still borrowed without an enforced shutdown barrier.
+> S1-02b replaces late raw-loop access with rejecting LoopHandle posts.
 > See [the audit](../../docs/audit_2026-09-12.md). IPv4/IPv6 resolution is already
 > implemented; resolver ecosystem work is frozen pending these contracts.
 > S1-01d: ResolveAwaitable borrows a guarded Task resume handle. This prevents
@@ -21,11 +21,27 @@
   registration/cancellation and destroyed Task frames. The loop must still outlive
   pending operations until the subsequent shutdown contract is implemented.
 
+## S1-02b shutdown contract
+- Null callbackLoop and empty callback arguments fail with invalid_argument before
+  registering or queueing a request.
+- resolve snapshots callbackLoop->handle() before any callback publication; the
+  raw loop must be valid for that initial snapshot only.
+- Worker and cancellation completions always use LoopHandle::queue, including
+  cache hits. No resolve callback executes inline after this change.
+- A closed target rejects late delivery. The request then unregisters cancellation
+  and releases its callback without executing it on an arbitrary thread.
+- Callback execution is owner-loop-only; callback capture destruction can occur
+  on the thread abandoning the final request reference. Captured resources must
+  have compatible ownership, or callers must drain requests before closing loops.
+- Task/frame owners still perform owner-loop cleanup before destroying a loop.
+  A posting handle does not own a loop, resume an abandoned detached task, or
+  substitute for application-level cancellation and join.
+
 ## 1. Intent
 DnsResolver provides asynchronous domain name resolution integrated with
 EventLoop scheduling semantics. It runs blocking `getaddrinfo` calls on a
 dedicated worker thread pool and delivers results back to the requesting
-EventLoop thread via `runInLoop`. It supports optional caching with TTL.
+EventLoop thread via `LoopHandle::queue`. It supports optional caching with TTL.
 
 DnsResolver is a standalone utility, not part of the Reactor core. It
 bridges the gap between hostname strings and `InetAddress` values without
@@ -55,19 +71,20 @@ ever blocking an EventLoop thread.
 
 ## 4. Core Invariants
 - DNS resolution never blocks an EventLoop thread
-- the resolve callback is delivered on the requesting EventLoop thread
-  (guaranteed by `runInLoop`)
+- the resolve callback is queued on the requesting EventLoop thread, including
+  cache hits; a target closed before delivery abandons the callback
 - resolution failure is explicit, not encoded as an empty result vector
 - cache entries expire after TTL; stale entries are never returned
 - the worker thread pool is properly joined on DnsResolver destruction
 - DnsResolver is thread-safe: `resolve()` may be called from any thread
-- each resolve request is processed exactly once
+- each resolve request reaches at most one callback completion; an abandoned
+  closed target executes no callback
 - cache is keyed by hostname only; port is applied at lookup time
 
 ---
 
 ## 5. Collaboration
-- uses `EventLoop::runInLoop` to deliver results on the requesting thread
+- uses `LoopHandle::queue` to deliver results on the requesting thread
 - produces `InetAddress` values consumable by `Connector` and `TcpClient`
 - `TcpClient` uses DnsResolver for hostname-based connect
 - `ResolveAwaitable` wraps the async resolve for coroutine composition
@@ -78,7 +95,7 @@ ever blocking an EventLoop thread.
 ## 6. Threading Rules
 - `resolve()` is thread-safe: callable from any thread (including EventLoop threads)
 - worker threads perform blocking `getaddrinfo`; they never touch EventLoop state
-- result delivery happens exclusively on the target EventLoop thread via `runInLoop`
+- result delivery happens exclusively on the target EventLoop thread via queued posting
 - cache access is protected by a mutex (read/write from any thread)
 - request queue is protected by a mutex + condition variable
 - DnsResolver destruction joins all worker threads (must not be called
@@ -89,7 +106,8 @@ ever blocking an EventLoop thread.
 ## 7. Ownership Rules
 - DnsResolver owns its worker thread pool
 - DnsResolver owns its cache
-- DnsResolver borrows EventLoop pointers from callers (does not own them)
+- DnsResolver snapshots a LoopHandle from the live EventLoop at request entry;
+  worker/cancellation state never retains a raw pointer to the EventLoop
 - the global shared instance is reference-counted via `shared_ptr`
 - `ResolveAwaitable` holds a `shared_ptr<DnsResolver>` to keep it alive
   during the resolve operation
@@ -99,9 +117,9 @@ ever blocking an EventLoop thread.
 ## 8. Failure Semantics
 - unresolvable hostname: callback receives explicit `ResolveFailed`, no crash or hang
 - `getaddrinfo` error: logged to stderr, callback receives explicit `ResolveFailed`
-- EventLoop destroyed before callback delivery: same as any pending
-  `runInLoop` — undefined if loop is gone; caller must ensure loop outlives
-  pending resolve
+- EventLoop closed before delivery: late posts reject and the request abandons
+  its callback. Capture destruction may occur on the abandoning thread; callers
+  must separately arrange owner-loop cleanup for network resources and frames.
 - DnsResolver destroyed while requests are pending: workers drain the request
   queue and are joined; callbacks already queued on a loop remain pending there.
   Joining workers does not prove that those callbacks have executed.

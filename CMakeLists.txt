@@ -49,6 +49,7 @@ set(MINI_TRANTOR_SOURCES
     mini/net/Poller.cc
     mini/net/poller/PollerFactory.cc
     mini/net/EventLoop.cc
+    mini/net/LoopHandle.cc
     mini/net/TimerQueue.cc
     mini/net/Acceptor.cc
     mini/net/Connector.cc

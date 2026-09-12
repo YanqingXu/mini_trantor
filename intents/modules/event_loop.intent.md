@@ -31,6 +31,10 @@ EventLoop is the heart of reactor execution in mini-trantor.
 ---
 
 ## 4. Core Invariants
+- S1-02b: LoopHandle borrows a loop through shared posting metadata. Posting holds
+  its mutex through enqueue/wakeup; destruction invalidates it before resource release.
+- The final drain-empty check closes LoopHandle atomically with respect to posts.
+  Raw-pointer callers still need their existing lifetime/producer shutdown contract.
 - one EventLoop binds to exactly one thread
 - loop() runs only on owner thread
 - Poller is used only by owner thread
@@ -75,6 +79,7 @@ Typical API direction:
 - quit()
 - runInLoop(Functor)
 - queueInLoop(Functor)
+- handle(): snapshot a non-owning LoopHandle while this loop is alive
 - runAt(Timestamp, Functor)
 - runAfter(Duration, Functor)
 - runEvery(Duration, Functor)
@@ -135,6 +140,8 @@ These extensions must preserve EventLoop as the single-thread scheduling core.
 ---
 
 ## 12. Test Contracts
+- test_loop_handle: queued execution, nested quit drain, closed/default rejection,
+  concurrent producer vs owner destruction, and rejection callback cleanup re-entry
 - same-thread runInLoop executes immediately
 - cross-thread queueInLoop executes on loop thread
 - cross-thread queueInLoop wakes blocked poll

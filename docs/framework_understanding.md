@@ -288,7 +288,8 @@ SleepAwaitable 在 timer 回调恢复，网络 awaiter 通过 queueInLoop 恢复
 | `net/detail/ConnectionBackpressureController.h/.cc` | 高低水位驱动暂停/恢复读 | Connection 依据 outputBuffer 更新 | 限读不等于输出内存硬上限，也不管理业务优先级 |
 | `net/detail/ConnectionTransport.h/.cc` | plain/TLS handshake、read/write/shutdown | Connection 在 owner loop 调用 | WANT_READ/WRITE 与 channel interest；不含业务 transport manager |
 | `net/TlsContext.h/.cc` | SSL_CTX RAII 与 CA/verify 配置 | TLS ConnectionTransport 创建 SSL | 默认客户端验证目前未启用，SNI 不等于 hostname 校验；待修复 |
-| `net/DnsResolver.h/.cc`、`DnsResolverOptions.h` | worker getaddrinfo、缓存和结果回流 | TcpClient/ResolveAwaitable 使用 resolve | S1-02a 将 cache callback 移至锁外并串行化 registration；裸 callbackLoop 寿命仍待关闭协议 |
+| `net/LoopHandle.h/.cc` | 非 owning 的安全入队入口 | EventLoop::handle 返回；DNS worker/cancel 使用 queue | 入队与 loop 释放共用 posting mutex；关闭后拒绝；不拥有 loop 或等待帧 |
+| `net/DnsResolver.h/.cc`、`DnsResolverOptions.h` | worker getaddrinfo、缓存和结果回流 | TcpClient/ResolveAwaitable 使用 resolve | callback 统一经 LoopHandle 排队；closed target 放弃回调；registration 独立互斥，捕获资源的释放线程需相容 |
 | `net/SignalWatcher.h/.cc` | Linux signalfd 接入 Channel | 应用主动配置 | 线程信号屏蔽顺序重要；Windows 不提供等价实现 |
 | `net/framing/FrameType.h`、`PacketFramer.h/.cc` | 有界 header/payload 解码，区分未完整/非法/超限 | 应用工具与 fuzz 使用 | Packet.payload 是借用 view；无游戏身份、顺序调度或可靠传输保证 |
 | `coroutine/CancellationToken.h` | source/token/registration 与取消 callback | awaitable/Task/combinator 使用 | 取消通知不等于 target 已停止；回调锁与注销重入需要验证 |

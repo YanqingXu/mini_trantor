@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <type_traits>
 
 namespace mini::net {
 
@@ -33,6 +34,7 @@ EventLoop::EventLoop()
       eventHandling_(false),
       callingPendingFunctors_(false),
       threadId_(checkedOwnerThread()),
+      postingHandle_(this),
       poller_(Poller::newDefaultPoller(this)),
       timerQueue_(std::make_unique<TimerQueue>(this)),
       wakeupFds_(platform::createWakeupFds()),
@@ -51,6 +53,11 @@ EventLoop::~EventLoop() {
     }
     if (looping_) {
         LOG_FATAL << "EventLoop destroyed while loop() is still running";
+    }
+    {
+        auto posting = postingHandle_.state_;
+        std::lock_guard lock(posting->mutex);
+        posting->loop = nullptr;
     }
     wakeupChannel_->disableAll();
     wakeupChannel_->remove();
@@ -85,8 +92,11 @@ void EventLoop::loop() {
     while (true) {
         bool hasPending = false;
         {
+            auto posting = postingHandle_.state_;
+            std::lock_guard postingLock(posting->mutex);
             std::lock_guard lock(mutex_);
             hasPending = !pendingFunctors_.empty();
+            if (!hasPending) { posting->loop = nullptr; }
         }
         if (!hasPending) {
             break;
@@ -117,10 +127,17 @@ void EventLoop::runInLoop(Functor cb) {
 }
 
 void EventLoop::queueInLoop(Functor cb) {
-    const auto enqueuedAt = mini::base::now();
+    PendingFunctor pending{std::move(cb), mini::base::now()};
+    queuePrepared(std::move(pending));
+}
+
+void EventLoop::queuePrepared(PendingFunctor&& pending) {
+    // A failed vector allocation leaves the caller's functor intact. Its captures
+    // are released after queue/posting locks, including for LoopHandle callers.
+    static_assert(std::is_nothrow_move_constructible_v<PendingFunctor>);
     {
         std::lock_guard lock(mutex_);
-        pendingFunctors_.push_back(PendingFunctor{std::move(cb), enqueuedAt});
+        pendingFunctors_.push_back(std::move(pending));
         const auto pendingSize = pendingFunctors_.size();
         auto observedPeak = pendingFunctorPeak_.load(std::memory_order_relaxed);
         while (pendingSize > observedPeak &&

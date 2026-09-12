@@ -12,8 +12,8 @@
 
 namespace mini::net {
 
-struct DnsResolver::ResolveOperationState {
-    EventLoop* callbackLoop{nullptr};
+struct DnsResolver::ResolveOperationState : std::enable_shared_from_this<ResolveOperationState> {
+    LoopHandle callbackHandle;
     ResolveCallback callback;
     std::atomic<bool> completed{false};
     std::mutex registrationMutex;
@@ -26,18 +26,34 @@ struct DnsResolver::ResolveOperationState {
         }
     }
 
-    void deliver(ResolveResult result) {
+    ResolveCallback takeCallback() {
         std::optional<mini::coroutine::CancellationRegistration> finishedRegistration;
+        ResolveCallback finishedCallback;
         {
             std::lock_guard lock(registrationMutex);
             if (completed.exchange(true, std::memory_order_acq_rel)) {
-                return;
+                return {};
             }
             finishedRegistration.swap(registration);
+            finishedCallback = std::move(callback);
         }
         finishedRegistration.reset();
-        auto finishedCallback = std::move(callback);
-        finishedCallback(std::move(result));
+        return finishedCallback;
+    }
+
+    void deliver(ResolveResult result) {
+        if (auto finishedCallback = takeCallback()) { finishedCallback(std::move(result)); }
+    }
+
+    void post(ResolveResult result) {
+        if (completed.load(std::memory_order_acquire)) { return; }
+        if (!callbackHandle.queue([operation = shared_from_this(), result = std::move(result)]() mutable {
+                operation->deliver(std::move(result));
+            })) {
+            // A closed loop cannot execute a callback. Drop captures and unregister
+            // cancellation outside the request mutex; never invoke the callback here.
+            auto abandonedCallback = takeCallback();
+        }
     }
 };
 
@@ -68,25 +84,24 @@ DnsResolver::~DnsResolver() {
 void DnsResolver::resolve(const std::string& hostname, uint16_t port,
                           EventLoop* callbackLoop, ResolveCallback cb,
                           mini::coroutine::CancellationToken token) {
+    if (!callbackLoop || !cb) {
+        throw std::invalid_argument("DnsResolver::resolve requires a loop and callback");
+    }
     // Cancellation can complete on another loop as soon as it is registered.
     // No request input may remain borrowed from an awaiting frame after that point.
     const std::string requestedHostname = hostname;
     auto operation = std::make_shared<ResolveOperationState>();
-    operation->callbackLoop = callbackLoop;
+    operation->callbackHandle = callbackLoop->handle();
     operation->callback = std::move(cb);
 
     if (token.isCancellationRequested()) {
-        callbackLoop->queueInLoop([operation] {
-            operation->deliver(std::unexpected(NetError::Cancelled));
-        });
+        operation->post(std::unexpected(NetError::Cancelled));
         return;
     }
     if (token) {
         operation->installRegistration(token.registerCallback([weak = std::weak_ptr(operation)] {
             if (auto active = weak.lock()) {
-                active->callbackLoop->queueInLoop([active] {
-                    active->deliver(std::unexpected(NetError::Cancelled));
-                });
+                active->post(std::unexpected(NetError::Cancelled));
             }
         }));
         if (operation->completed.load(std::memory_order_acquire)) {
@@ -119,9 +134,7 @@ void DnsResolver::resolve(const std::string& hostname, uint16_t port,
         }
     }
     if (cached) {
-        callbackLoop->runInLoop([operation, result = std::move(*cached)]() mutable {
-            operation->deliver(std::move(result));
-        });
+        operation->post(std::move(*cached));
         return;
     }
 
@@ -226,10 +239,7 @@ void DnsResolver::workerThread() {
         }
 
         // Deliver result on the requesting EventLoop thread.
-        req.operation->callbackLoop->runInLoop(
-            [operation = req.operation, result = std::move(result)]() mutable {
-                operation->deliver(std::move(result));
-            });
+        req.operation->post(std::move(result));
     }
 }
 

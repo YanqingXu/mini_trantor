@@ -51,7 +51,8 @@ SleepAwaitable 改为 move-only，`state()` 仅提供只读诊断视图；读取
 ## 验证与剩余工作
 
 当前实现覆盖 sleep 与 TCP read/write/close 的注册和已排队恢复。Task 启动语义见
-S1-01c，组合器父 frame 保护见 S1-01d；DNS 操作注销和 loop 关闭仍待实施。
+S1-01c，组合器父 frame 保护见 S1-01d；DNS 操作注销仍待实施，loop 的安全投递见
+[DNS 执行记录](s1_dns_lifecycle.md)。
 P0-01/P1-04 在上述范围完成前保持开放；完整测试与 sanitizer 结果在执行后登记。
 
 S1-01a 验证：Linux GCC ASan/UBSan + TLS 全量 62/62；Windows Release 22/22；

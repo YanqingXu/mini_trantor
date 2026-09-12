@@ -44,6 +44,12 @@ TcpServer 报告继续保持开放，不能以一次通过关闭。接下来处�
 S1-02a 已修复 DNS cache hit 的锁内回调、预先取消被 cache hit 覆盖，以及 registration
 安装/注销竞争；[DNS 执行记录](s1_dns_lifecycle.md)保存回归证据。安全投递和 loop 关闭
 仍在后续范围，DNS 整体生命周期尚未关闭。
+S1-02b 建立 LoopHandle 的入队/关闭互斥，DNS worker 和取消回调不再保存裸 loop
+指针，cache hit 统一排队。下一步补齐 ResolveAwaitable 的析构取消与其他 awaitable
+迟到通知，随后进入线程启停状态机。
+本轮 ASan 67/67、Linux Release 64/64、Windows Release 27/27，TSan 59/64；
+新增 coroutine_idle_timeout 的 TcpServer 控制块报告进入同一分诊账本，不能因 DNS
+合同通过而关闭其余阻塞项。
 
 | 顺序 | 任务 | 必须守住的合同 | 退出证据 |
 | --- | --- | --- | --- |

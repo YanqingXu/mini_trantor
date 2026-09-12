@@ -7,6 +7,7 @@
 #include "mini/base/Timestamp.h"
 #include "mini/base/noncopyable.h"
 #include "mini/net/TimerId.h"
+#include "mini/net/LoopHandle.h"
 #include "mini/net/platform/Wakeup.h"
 
 #include <atomic>
@@ -38,6 +39,8 @@ public:
 
     void runInLoop(Functor cb);
     void queueInLoop(Functor cb);
+    /// Snapshot while this loop is alive; the handle does not extend its lifetime.
+    LoopHandle handle() const noexcept { return postingHandle_; }
     void setEventLoopMetricCallback(EventLoopMetricCallback cb);
     TimerId runAt(mini::base::Timestamp time, Functor cb);
     TimerId runAfter(TimerDuration delay, Functor cb);
@@ -60,6 +63,7 @@ private:
 
     void handleRead(mini::base::Timestamp receiveTime);
     void doPendingFunctors();
+    void queuePrepared(PendingFunctor&& pending);
     void emitEventLoopMetric(EventLoopMetricSample sample);
 
     using ChannelList = std::vector<Channel*>;
@@ -69,6 +73,7 @@ private:
     bool eventHandling_;
     bool callingPendingFunctors_;
     const std::thread::id threadId_;
+    LoopHandle postingHandle_;
     mini::base::Timestamp pollReturnTime_;
     std::unique_ptr<Poller> poller_;
     std::unique_ptr<TimerQueue> timerQueue_;
@@ -81,6 +86,7 @@ private:
     std::atomic<std::uint64_t> wakeupCount_;
     mutable std::mutex mutex_;
     std::vector<PendingFunctor> pendingFunctors_;
+    friend class LoopHandle;
 };
 
 }  // namespace mini::net

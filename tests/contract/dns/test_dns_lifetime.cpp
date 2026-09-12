@@ -11,8 +11,10 @@
 #include <future>
 #include <latch>
 #include <memory>
+#include <stdexcept>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 using mini::net::DnsResolver;
 using mini::net::EventLoop;
@@ -37,9 +39,21 @@ void cacheCallbackMayClearAndResolveAgain() {
                 loop.quit();
             });
         });
+        assert(callbacks == 1); // even cache hits are queued, never inline
     });
     loop.loop();
     assert(callbacks == 3);
+}
+
+void invalidTargetsAreRejected() {
+    DnsResolver resolver(1);
+    EventLoop loop;
+    bool nullLoop = false, emptyCallback = false;
+    try { resolver.resolve("localhost", 80, nullptr, [](auto) {}); }
+    catch (const std::invalid_argument&) { nullLoop = true; }
+    try { resolver.resolve("localhost", 80, &loop, {}); }
+    catch (const std::invalid_argument&) { emptyCallback = true; }
+    assert(nullLoop && emptyCallback);
 }
 
 mini::coroutine::Task<void> resolving(std::shared_ptr<DnsResolver> resolver,
@@ -138,6 +152,32 @@ void concurrentCancellationAndRegistration() {
     worker.join();
     for (const auto& count : callbacks) { assert(count == 1); }
 }
+
+void loopMayCloseBeforeWorkersAndCancellationFinish() {
+    auto resolver = std::make_shared<DnsResolver>(1);
+    std::vector<std::weak_ptr<int>> callbackLifetimes;
+    int resumed = 0, destroyed = 0;
+    constexpr int batches = 40;
+    for (int batch = 0; batch < batches; ++batch) {
+        std::array<mini::coroutine::CancellationSource, 16> sources;
+        {
+            EventLoop loop;
+            for (auto& source : sources) {
+                auto lifetime = std::make_shared<int>(batch);
+                callbackLifetimes.emplace_back(lifetime);
+                resolver->resolve("localhost", 80, &loop,
+                    [lifetime](auto) { assert(false); }, source.token());
+            }
+            // Frames are released on their owner before the loop goes away.
+            auto task = resolving(resolver, &loop, &resumed, &destroyed);
+            task.start();
+        } // never-run loop discards queued callbacks; later posts must reject
+        for (auto& source : sources) { source.cancel(); }
+    }
+    resolver.reset(); // joins all workers after every target loop was destroyed
+    assert(resumed == 0 && destroyed == batches);
+    for (auto& observed : callbackLifetimes) { assert(observed.expired()); }
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -146,4 +186,6 @@ int main(int argc, char** argv) {
     if (mode == "frame" || mode == "all") { destroyedResolveDoesNotResume(); }
     if (mode == "cancel" || mode == "all") { preCancelledCacheHitReportsCancellation(); }
     if (mode == "race" || mode == "all") { concurrentCancellationAndRegistration(); }
+    if (mode == "closed" || mode == "all") { loopMayCloseBeforeWorkersAndCancellationFinish(); }
+    if (mode == "invalid" || mode == "all") { invalidTargetsAreRejected(); }
 }

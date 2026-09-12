@@ -37,6 +37,7 @@ add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_task_start_contract.cpp coro lifecycle)
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_combinator_lifetime.cpp coro lifecycle threading)
 add_mini_test(contract dns ${CMAKE_CURRENT_SOURCE_DIR}/contract/dns/test_dns_lifetime.cpp lifecycle threading)
+add_mini_test(contract event_loop ${CMAKE_CURRENT_SOURCE_DIR}/contract/event_loop/test_loop_handle.cpp lifecycle threading)
 
 add_test(NAME contract.build.install_consumer
     COMMAND ${CMAKE_COMMAND}
