@@ -34,6 +34,7 @@ add_mini_test(contract tcp_server ${CMAKE_CURRENT_SOURCE_DIR}/contract/tcp_serve
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_task_lifetime.cpp coro lifecycle)
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_suspend_publication.cpp coro lifecycle threading)
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_tcp_awaitable_lifetime.cpp coro lifecycle threading)
+add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_task_start_contract.cpp coro lifecycle)
 
 add_test(NAME contract.build.install_consumer
     COMMAND ${CMAKE_COMMAND}

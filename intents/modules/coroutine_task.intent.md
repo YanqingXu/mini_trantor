@@ -1,9 +1,10 @@
 # Module Intent: coroutine::Task
 
-> S1 gap: Task owns its frame, but timer/I/O waiters do not unregister when a
-> suspended frame is destroyed. See P0-01/P1-04 in
-> [the audit](../../docs/audit_2026-09-12.md). Passing existing tests does not
-> establish arbitrary suspended destruction or cross-thread resume safety.
+> S1 progress: sleep and TCP waiters implement owner-loop unregistration.
+> Start/detach/adoption ownership edges are covered. Combinator parent destruction
+> and DNS remain open;
+> see [the execution record](../../docs/s1_coroutine_lifecycle.md). No claim is
+> made that arbitrary destruction concurrent with coroutine execution is safe.
 
 ## 1. Intent
 Task is the minimal composable coroutine result object for mini-trantor.
@@ -36,6 +37,13 @@ Task is a bridge, not a scheduler.
 ---
 
 ## 4. Core Invariants
+- S1-01c: start only leaves initial_suspend. Calling start again on a pending
+  Task is a logic error; readiness/cancellation resumes belong to the awaitable.
+- detach on an already-started Task transfers ownership without an extra resume;
+  detach on a completed Task destroys its frame without resuming final_suspend.
+- Awaiting an already-started Task attaches the continuation without restarting it.
+  Empty-task await reports logic_error, rather than dereferencing a null handle.
+- Task::Awaiter is move-only because it owns the transferred frame.
 - a Task is lazy: the coroutine body does not begin until `start()`, `detach()`,
   or `co_await` is invoked
 - ownership of the coroutine frame is unambiguous at all times:
@@ -103,6 +111,8 @@ Task is a bridge, not a scheduler.
 ---
 
 ## 10. Test Contracts
+- `tests/contract/coroutine/test_task_start_contract.cpp`: repeated start,
+  detach before/after completion, adopting an already-started child and empty await.
 - lazy start: coroutine body does not execute until start() is called
 - detach: coroutine runs to completion and frame is destroyed automatically
 - co_await composition: parent Task resumes after child Task completes

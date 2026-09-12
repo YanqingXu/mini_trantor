@@ -67,6 +67,14 @@ public:
         continuation_ = continuation;
     }
 
+    bool try_start() noexcept {
+        if (startState_ == StartState::Started) {
+            return false;
+        }
+        startState_ = StartState::Started;
+        return true;
+    }
+
     void rethrow_if_exception() {
         if (exception_) {
             std::rethrow_exception(exception_);
@@ -82,6 +90,8 @@ public:
     }
 
 private:
+    enum class StartState { Lazy, Started };
+    StartState startState_{StartState::Lazy};
     std::exception_ptr exception_;
     std::coroutine_handle<> continuation_{};
     bool detached_{false};
@@ -186,6 +196,9 @@ public:
 
     void start() {
         if (coroutine_ && !coroutine_.done()) {
+            if (!coroutine_.promise().try_start()) {
+                throw std::logic_error("cannot start an already-started Task");
+            }
             coroutine_.resume();
         }
     }
@@ -195,8 +208,14 @@ public:
             return;
         }
         auto coroutine = std::exchange(coroutine_, {});
+        if (coroutine.done()) {
+            coroutine.destroy();
+            return;
+        }
         coroutine.promise().set_detached(true);
-        coroutine.resume();
+        if (coroutine.promise().try_start()) {
+            coroutine.resume();
+        }
     }
 
     decltype(auto) result() & {
@@ -226,16 +245,26 @@ public:
     struct Awaiter {
         handle_type coroutine_;
 
+        explicit Awaiter(handle_type coroutine) noexcept : coroutine_(coroutine) {}
+        Awaiter(const Awaiter&) = delete;
+        Awaiter& operator=(const Awaiter&) = delete;
+        Awaiter(Awaiter&& other) noexcept : coroutine_(std::exchange(other.coroutine_, {})) {}
+        Awaiter& operator=(Awaiter&&) = delete;
+
         bool await_ready() const noexcept {
             return !coroutine_ || coroutine_.done();
         }
 
         std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) noexcept {
             coroutine_.promise().set_continuation(continuation);
-            return coroutine_;
+            return coroutine_.promise().try_start() ? std::coroutine_handle<>(coroutine_)
+                                                   : std::noop_coroutine();
         }
 
         decltype(auto) await_resume() {
+            if (!coroutine_) {
+                throw std::logic_error("cannot await an empty Task");
+            }
             if constexpr (std::is_void_v<T>) {
                 coroutine_.promise().value();
                 return;

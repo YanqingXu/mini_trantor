@@ -51,7 +51,7 @@ SleepAwaitable 改为 move-only，`state()` 仅提供只读诊断视图；读取
 ## 验证与剩余工作
 
 当前实现覆盖 sleep 与 TCP read/write/close 的注册和已排队恢复。ResolveAwaitable、
-组合器父 frame 提前销毁，以及 Task 重复启动仍需逐项建立相同强度的合同。
+组合器父 frame 提前销毁仍需逐项建立相同强度的合同；Task 启动语义见下文 S1-01c。
 P0-01/P1-04 在上述范围完成前保持开放；完整测试与 sanitizer 结果在执行后登记。
 
 S1-01a 验证：Linux GCC ASan/UBSan + TLS 全量 62/62；Windows Release 22/22；
@@ -107,3 +107,33 @@ read/write/close 完成恢复可能重入用户代码，因此先取出 handle�
 完整 Clang/libc++ TSan 为 54/60，新增 TCP 合同通过；剩余 6 项均为审计已记录的
 thread_pool_stop、connector、timer_queue、dns_contract 及两个 TcpServer 集成用例。
 原 sleep_awaitable/cancellation_contract 失败本轮保持通过，不新增排除或 suppressions。
+
+## Task 初始启动和所有权转移（S1-01c）
+
+新回归先证明：重复 start 会越过尚未完成的 sleep，提前执行后续协程代码。
+Task promise 现在记录 Lazy/Started，start 只离开 initial_suspend；挂起时再次 start 抛
+logic_error。对已完成 Task 的 start 保持无操作。
+
+```mermaid
+stateDiagram-v2
+    [*] --> Lazy
+    Lazy --> Started: start / detach / co_await
+    Started --> Started: 重复 start 被拒绝
+    Started --> Completed: 等待完成后恢复
+    Completed --> Released: Task / Awaiter 析构，或 detach
+    Started --> Detached: detach 只转移所有权，不恢复
+    Detached --> Released: final_suspend 自释放
+```
+
+detach 已启动的 Task 时只转移所有权；detach 已完成的 Task 直接释放，不能 resume
+final_suspend。co_await 已启动子 Task 只连接 continuation，等待其现有操作完成。
+Task::Awaiter 显式 move-only；空 Task 的 await_resume 抛出 logic_error。
+
+Gate：Task 仍无 EventLoop 所有权或调度器；frame 始终由 Task、Awaiter 或显式 detached
+状态中的一个拥有。已有 continuation/final_suspend 可重入父协程；本次没有新增跨线程
+入口，Task 对象的访问与所有权转移仍要求外部同步及网络等待的 owner-loop 约束。
+`test_task_start_contract.cpp` 验证重复启动、两种 detach、已启动子 Task、空 await 和
+Awaiter 移动后 frame 参数恰好释放一次。
+
+验证：GCC ASan/UBSan + TLS 全量 64/64；Linux Release 61/61；Windows Release 24/24。
+本轮不宣称组合器和 DNS 的 frame 生命周期已经解决。

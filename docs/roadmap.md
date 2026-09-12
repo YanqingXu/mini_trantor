@@ -35,6 +35,8 @@ S1-01a（sleep）已实现并通过 Linux ASan/UBSan 62/62、Windows Release 22/
 定向 TSan 4/4；状态图、所有权合同和剩余范围见[协程实施记录](s1_coroutine_lifecycle.md)。
 S1-01b（TCP 等待注销与发布）通过 ASan 全量 63/63、Windows Release 23/23；
 完整 TSan 为 54/60，剩余 6 项已记录。Task 启动、组合器与 DNS 的 frame 生命周期仍待处理。
+S1-01c（Task 启动与所有权转移）已通过 ASan 64/64、Linux Release 61/61、Windows Release 24/24。
+继续处理组合器父 frame 和 DNS，S1 整体保持进行中。
 
 | 顺序 | 任务 | 必须守住的合同 | 退出证据 |
 | --- | --- | --- | --- |
