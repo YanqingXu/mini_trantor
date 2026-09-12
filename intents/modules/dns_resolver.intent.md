@@ -1,11 +1,25 @@
 # Module Intent: DnsResolver
 
-> S1 gap: cache-hit callbacks currently execute under cacheMutex and can deadlock
-> on re-entry; callbackLoop is borrowed without an enforced shutdown barrier.
+> S1-02a fixes cache-hit re-entry and cancellation registration publication.
+> callbackLoop is still borrowed without an enforced shutdown barrier.
 > See [the audit](../../docs/audit_2026-09-12.md). IPv4/IPv6 resolution is already
 > implemented; resolver ecosystem work is frozen pending these contracts.
 > S1-01d: ResolveAwaitable borrows a guarded Task resume handle. This prevents
 > late frame resumption but does not close request cancellation or loop shutdown.
+
+## S1-02a implementation contract
+- Copy request input before publishing cancellation/completion callbacks.
+- Cache lookup copies the result under cacheMutex; user callbacks run only after
+  unlocking. Cache TTL changes use the same mutex as cache reads/writes.
+- A request mutex serializes registration installation against terminal delivery.
+  Registration reset and the user callback run outside that mutex.
+- Cancellation callbacks capture weak operation state, avoiding registration cycles.
+- A token cancelled before resolve begins delivers Cancelled even on a cache hit.
+- ResolveAwaitable keeps a local resolver reference across publication, because
+  synchronous completion may destroy the awaitable during resolve().
+- test_dns_lifetime covers cache re-entry, pre-cancelled cache hits, concurrent
+  registration/cancellation and destroyed Task frames. The loop must still outlive
+  pending operations until the subsequent shutdown contract is implemented.
 
 ## 1. Intent
 DnsResolver provides asynchronous domain name resolution integrated with
@@ -30,7 +44,7 @@ ever blocking an EventLoop thread.
 ---
 
 ## 3. Non-Responsibilities
-- does not own or reference any EventLoop
+- does not own any EventLoop (the callback loop is borrowed)
 - does not implement DNS protocol directly (delegates to OS `getaddrinfo`)
 - does not perform connection establishment (that is Connector's job)
 - does not implement retry or fallback logic for resolution failures
@@ -88,9 +102,9 @@ ever blocking an EventLoop thread.
 - EventLoop destroyed before callback delivery: same as any pending
   `runInLoop` — undefined if loop is gone; caller must ensure loop outlives
   pending resolve
-- DnsResolver destroyed while requests are pending: worker threads finish
-  current request, remaining queued requests are dropped
-  (callbacks will not fire)
+- DnsResolver destroyed while requests are pending: workers drain the request
+  queue and are joined; callbacks already queued on a loop remain pending there.
+  Joining workers does not prove that those callbacks have executed.
 - cache miss does not block; request is queued for worker thread
 
 ---

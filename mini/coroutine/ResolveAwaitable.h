@@ -55,7 +55,8 @@ public:
                 token = handle.promise().cancellationToken();
             }
         }
-        resolver_->resolve(hostname_, port_, state_->loop,
+        auto resolver = resolver_; // synchronous completion may destroy this awaitable
+        resolver->resolve(hostname_, port_, state->loop,
             [state](mini::net::DnsResolver::ResolveResult addrs) mutable {
                 // Delivered on owner loop thread by DnsResolver.
                 if (!state->resumed) {

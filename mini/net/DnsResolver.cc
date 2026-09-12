@@ -16,14 +16,28 @@ struct DnsResolver::ResolveOperationState {
     EventLoop* callbackLoop{nullptr};
     ResolveCallback callback;
     std::atomic<bool> completed{false};
+    std::mutex registrationMutex;
     std::optional<mini::coroutine::CancellationRegistration> registration;
 
-    void deliver(ResolveResult result) {
-        if (completed.exchange(true, std::memory_order_acq_rel)) {
-            return;
+    void installRegistration(mini::coroutine::CancellationRegistration value) {
+        std::lock_guard lock(registrationMutex);
+        if (!completed.load(std::memory_order_acquire)) {
+            registration.emplace(std::move(value));
         }
-        registration.reset();
-        callback(std::move(result));
+    }
+
+    void deliver(ResolveResult result) {
+        std::optional<mini::coroutine::CancellationRegistration> finishedRegistration;
+        {
+            std::lock_guard lock(registrationMutex);
+            if (completed.exchange(true, std::memory_order_acq_rel)) {
+                return;
+            }
+            finishedRegistration.swap(registration);
+        }
+        finishedRegistration.reset();
+        auto finishedCallback = std::move(callback);
+        finishedCallback(std::move(result));
     }
 };
 
@@ -54,15 +68,26 @@ DnsResolver::~DnsResolver() {
 void DnsResolver::resolve(const std::string& hostname, uint16_t port,
                           EventLoop* callbackLoop, ResolveCallback cb,
                           mini::coroutine::CancellationToken token) {
+    // Cancellation can complete on another loop as soon as it is registered.
+    // No request input may remain borrowed from an awaiting frame after that point.
+    const std::string requestedHostname = hostname;
     auto operation = std::make_shared<ResolveOperationState>();
     operation->callbackLoop = callbackLoop;
     operation->callback = std::move(cb);
 
+    if (token.isCancellationRequested()) {
+        callbackLoop->queueInLoop([operation] {
+            operation->deliver(std::unexpected(NetError::Cancelled));
+        });
+        return;
+    }
     if (token) {
-        operation->registration.emplace(token.registerCallback([operation] {
-            operation->callbackLoop->queueInLoop([operation] {
-                operation->deliver(std::unexpected(NetError::Cancelled));
-            });
+        operation->installRegistration(token.registerCallback([weak = std::weak_ptr(operation)] {
+            if (auto active = weak.lock()) {
+                active->callbackLoop->queueInLoop([active] {
+                    active->deliver(std::unexpected(NetError::Cancelled));
+                });
+            }
         }));
         if (operation->completed.load(std::memory_order_acquire)) {
             return;
@@ -70,12 +95,13 @@ void DnsResolver::resolve(const std::string& hostname, uint16_t port,
     }
 
     // Check cache first.
+    std::optional<ResolveResult> cached;
     if (cacheEnabled_.load(std::memory_order_acquire)) {
         std::lock_guard<std::mutex> lock(cacheMutex_);
-        auto it = cache_.find(hostname);
+        auto it = cache_.find(requestedHostname);
         if (it != cache_.end() &&
             it->second.expiry > std::chrono::steady_clock::now()) {
-            // Cache hit — apply requested port and deliver immediately.
+            // Copy a cache hit under the lock; deliver only after unlocking.
             std::vector<InetAddress> addresses;
             addresses.reserve(it->second.addresses.size());
             for (const auto& sa : it->second.addresses) {
@@ -89,23 +115,26 @@ void DnsResolver::resolve(const std::string& hostname, uint16_t port,
                 }
                 addresses.emplace_back(storage);
             }
-            callbackLoop->runInLoop(
-                [operation, result = ResolveResult(std::move(addresses))]() mutable {
-                    operation->deliver(std::move(result));
-                });
-            return;
+            cached.emplace(std::move(addresses));
         }
+    }
+    if (cached) {
+        callbackLoop->runInLoop([operation, result = std::move(*cached)]() mutable {
+            operation->deliver(std::move(result));
+        });
+        return;
     }
 
     // Queue for async resolution on worker thread.
     {
         std::lock_guard<std::mutex> lock(queueMutex_);
-        requestQueue_.push({hostname, port, std::move(operation)});
+        requestQueue_.push({requestedHostname, port, std::move(operation)});
     }
     queueCv_.notify_one();
 }
 
 void DnsResolver::enableCache(std::chrono::seconds ttl) {
+    std::lock_guard lock(cacheMutex_);
     cacheTtl_ = ttl;
     cacheEnabled_.store(true, std::memory_order_release);
 }

@@ -41,6 +41,9 @@ S1-01d（组合器父 frame、同步完成与恢复权限）通过 ASan/UBSan 65
 Linux Release 62/62、Windows Release 25/25；完整 TSan 本轮 57/62。
 新的协程合同全部通过，5 个失败入口均在已有 6 项账本中；本轮未复现的 threaded
 TcpServer 报告继续保持开放，不能以一次通过关闭。接下来处理 DNS 生命周期。
+S1-02a 已修复 DNS cache hit 的锁内回调、预先取消被 cache hit 覆盖，以及 registration
+安装/注销竞争；[DNS 执行记录](s1_dns_lifecycle.md)保存回归证据。安全投递和 loop 关闭
+仍在后续范围，DNS 整体生命周期尚未关闭。
 
 | 顺序 | 任务 | 必须守住的合同 | 退出证据 |
 | --- | --- | --- | --- |

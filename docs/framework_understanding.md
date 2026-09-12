@@ -14,7 +14,7 @@
 7. TimerQueue 通过 poll timeout 驱动，无独立 timer 线程，也不再依赖 timerfd。
 8. Task 管 coroutine frame，awaitable 负责把网络等待接回 EventLoop；两者不能相互替代。
 9. DNS 有阻塞解析 worker；它与 Reactor 的回流边界需要特别审计。
-10. 基础能力已有测试，但 coroutine frame 注销、DNS 重入和 TLS 身份校验仍有真实风险。
+10. 基础能力已有测试，但 DNS 关闭、线程启停和 TLS 身份校验仍有未关闭风险；协程与 DNS 锁边界修复见 S1 执行记录。
 11. `mini/net/detail/ConnectionTransport` 是 TCP/TLS 内部 I/O 策略；已移除的通用
     `mini/net/transport/` 则是另一套上层抽象，两者不能混淆。
 
@@ -288,7 +288,7 @@ SleepAwaitable 在 timer 回调恢复，网络 awaiter 通过 queueInLoop 恢复
 | `net/detail/ConnectionBackpressureController.h/.cc` | 高低水位驱动暂停/恢复读 | Connection 依据 outputBuffer 更新 | 限读不等于输出内存硬上限，也不管理业务优先级 |
 | `net/detail/ConnectionTransport.h/.cc` | plain/TLS handshake、read/write/shutdown | Connection 在 owner loop 调用 | WANT_READ/WRITE 与 channel interest；不含业务 transport manager |
 | `net/TlsContext.h/.cc` | SSL_CTX RAII 与 CA/verify 配置 | TLS ConnectionTransport 创建 SSL | 默认客户端验证目前未启用，SNI 不等于 hostname 校验；待修复 |
-| `net/DnsResolver.h/.cc`、`DnsResolverOptions.h` | worker getaddrinfo、缓存和结果回流 | TcpClient/ResolveAwaitable 使用 resolve | cache hit 可同步回调；锁内回调已复现死锁；裸 callbackLoop 需存活 |
+| `net/DnsResolver.h/.cc`、`DnsResolverOptions.h` | worker getaddrinfo、缓存和结果回流 | TcpClient/ResolveAwaitable 使用 resolve | S1-02a 将 cache callback 移至锁外并串行化 registration；裸 callbackLoop 寿命仍待关闭协议 |
 | `net/SignalWatcher.h/.cc` | Linux signalfd 接入 Channel | 应用主动配置 | 线程信号屏蔽顺序重要；Windows 不提供等价实现 |
 | `net/framing/FrameType.h`、`PacketFramer.h/.cc` | 有界 header/payload 解码，区分未完整/非法/超限 | 应用工具与 fuzz 使用 | Packet.payload 是借用 view；无游戏身份、顺序调度或可靠传输保证 |
 | `coroutine/CancellationToken.h` | source/token/registration 与取消 callback | awaitable/Task/combinator 使用 | 取消通知不等于 target 已停止；回调锁与注销重入需要验证 |
@@ -357,7 +357,7 @@ MetricsHook 可前向声明 net 对象，但禁止再声明 game 业务类型。
 | 发一部分后停住 | outputBuffer、isWriting、handleWrite | TLS WANT_READ/WRITE、背压是否只暂停读 |
 | 停服卡住 | base loop 是否在 join worker，worker 是否等待 base | callback 重入、DNS 阻塞解析、init-quit 发布竞争 |
 | close 后崩溃 | remove-before-destroy、活动批次借用、延迟捕获 | waiter queued handle、外部 Connection 超过 loop 生命周期 |
-| DNS cache 命中后卡死 | 是否在 cacheMutex 内同步回调 | 回调重入 clearCache/resolve（已复现） |
+| DNS cache 命中后卡死 | 确认包含 S1-02a 的锁外回调修复 | test_dns_lifetime 覆盖 clearCache/resolve 重入 |
 | 协程 UAF/double resume | Task 析构与 timer/registry handle | await_suspend 发布后继续访问 this、取消注册的 owner 线程 |
 | TLS 连错目标也成功 | 是否显式启用 verifyPeer、是否有 hostname 校验 | 测试不能只看 self-signed echo |
 | Release 测试异常快/卡住 | 是否有 NDEBUG、assert 是否包含 setup | CMake test target 的 /UNDEBUG 或 -UNDEBUG |
