@@ -58,6 +58,11 @@ Task is a bridge, not a scheduler.
 ---
 
 ## 6. Threading Rules
+- Destruction must not race coroutine execution. A suspended network Task is
+  destroyed on its active awaitable's owner loop; off-thread callers request
+  cancellation and arrange owner-loop cleanup instead of directly destroying it.
+- A completion promise set inside a coroutine does not prove final suspension.
+  Transfer back to another thread only after an owner-loop completion barrier.
 - Task itself is thread-agnostic: it has no internal synchronization
 - the caller of `start()` or `detach()` determines the initial execution thread
 - when a Task is used with TcpConnection awaitables, the awaitable's

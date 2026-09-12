@@ -28,6 +28,18 @@ not a scheduler.
 ---
 
 ## 4. Core Invariants
+- S1 contract: destruction of a suspended awaitable unregisters its timer and
+  cancellation registration without resuming the destroyed frame. Already
+  queued callbacks observe an explicit Abandoned state and do nothing.
+- State transitions are Unarmed -> Pending -> Expired / Cancelled / Abandoned.
+  Completion takes the handle out of the state before invoking user coroutine code.
+- A token cancelled before arming wins even for a zero-duration sleep. Timer and
+  cancellation racing after arming may each win, but never produce two resumes.
+- All timer/registration setup is published as one owner-loop operation; after
+  publication await_suspend does not access its frame or promise again.
+- SleepAwaitable is move-only. Destroying a pending network awaitable, including
+  destruction through Task or a parent Task, must happen on its owner loop.
+  EventLoop outlives the awaitable and any in-flight cross-thread cancel request.
 - SleepAwaitable is a transient stack object; it does not outlive the
   co_await expression
 - await_ready() always returns false: a timer must be registered to expire
@@ -35,7 +47,7 @@ not a scheduler.
   (guaranteed by EventLoop::runAfter callback semantics)
 - the coroutine handle is resumed exactly once on all paths:
   either by timer expiry or by explicit cancellation
-- after cancel, the handle is resumed immediately on the owner loop thread
+- after cancel, the handle is resumed through queueInLoop on the owner loop thread
   with an explicit `Cancelled` result
 - TimerQueue ownership and lifecycle rules are not changed
 
@@ -90,6 +102,11 @@ not a scheduler.
 ---
 
 ## 10. Test Contracts
+- `tests/contract/coroutine/test_task_lifetime.cpp`: pending destruction, queued
+  cancellation followed by destruction, move assignment, nested Task destruction,
+  and detached completion; no stale resume and frame locals released exactly once.
+- `tests/contract/coroutine/test_suspend_publication.cpp`: pre-cancellation and
+  repeated off-thread start/cancel with zero-duration timers and owner-loop completion.
 - await_ready returns false unconditionally
 - asyncSleep resumes coroutine after specified duration on owner loop thread
 - asyncSleep composes with co_await in a Task coroutine

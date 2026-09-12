@@ -60,37 +60,25 @@ int main() {
 
         std::promise<bool> result;
         auto resultFuture = result.get_future();
-        std::shared_ptr<mini::coroutine::SleepState> sleepState;
+        mini::coroutine::CancellationSource cancellation;
+        std::promise<void> armed;
+        auto armedFuture = armed.get_future();
 
         auto task = std::make_shared<mini::coroutine::Task<void>>(
             [](mini::net::EventLoop* loop,
                std::promise<bool>* result,
-               std::shared_ptr<mini::coroutine::SleepState>* outState) -> mini::coroutine::Task<void> {
-            auto awaitable = mini::coroutine::asyncSleep(loop, 10s);  // very long sleep
-            *outState = awaitable.state();
-            auto completed = co_await awaitable;
+               mini::coroutine::CancellationToken token) -> mini::coroutine::Task<void> {
+            auto completed = co_await mini::coroutine::asyncSleep(loop, 10s, std::move(token));
             loop->quit();
             result->set_value(!completed && completed.error() == mini::net::NetError::Cancelled);
-        }(loop, &result, &sleepState));
+        }(loop, &result, cancellation.token()));
 
-        loop->runInLoop([task] { task->detach(); });
-
-        // Wait for the coroutine to suspend on the sleep
-        std::this_thread::sleep_for(100ms);
-        assert(sleepState);
-        assert(!sleepState->resumed);
-
-        // Cancel the sleep
-        mini::coroutine::SleepAwaitable cancelHelper(loop, 0ms);
-        // Directly use the state's cancel mechanism
-        loop->runInLoop([state = sleepState, loop] {
-            if (!state->resumed) {
-                state->resumed = true;
-                state->cancelled = true;
-                loop->cancel(state->timerId);
-                state->handle.resume();
-            }
+        loop->runInLoop([task, &armed] {
+            task->detach();
+            armed.set_value();
         });
+        assert(armedFuture.wait_for(2s) == std::future_status::ready);
+        cancellation.cancel(); // exercise the public cross-thread cancellation path
 
         assert(resultFuture.wait_for(2s) == std::future_status::ready);
         assert(resultFuture.get() == true);  // cancelled explicitly

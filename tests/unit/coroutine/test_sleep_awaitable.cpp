@@ -35,8 +35,7 @@ int main() {
     {
         mini::net::EventLoop loop;
         auto awaitable = mini::coroutine::asyncSleep(&loop, 50ms);
-        assert(!awaitable.state()->resumed);
-        assert(!awaitable.state()->cancelled);
+        assert(awaitable.state()->phase == mini::coroutine::SleepState::Phase::Unarmed);
     }
 
     return 0;

@@ -28,6 +28,12 @@
 
 ## S1：正确性阻塞项，暂停新增功能
 
+执行记录：S1-01 已开始。先以 `test_task_lifetime.cpp` 固化 sleep 等待时的提前销毁、
+排队取消、移动赋值和父子 Task 析构合同；随后扩展 TCP read/write/close、组合器及发布顺序。
+本记录不是 S1 完成声明，其余阶段继续按本路线执行。
+S1-01a（sleep）已实现并通过 Linux ASan/UBSan 62/62、Windows Release 22/22、
+定向 TSan 4/4；状态图、所有权合同和剩余范围见[协程实施记录](s1_coroutine_lifecycle.md)。
+
 | 顺序 | 任务 | 必须守住的合同 | 退出证据 |
 | --- | --- | --- | --- |
 | 1 | 协程挂起帧注销 | Task 提前销毁后，timer/I/O/queued resume/cancel 不访问失效 handle；先定义谁能销毁、在哪个 loop 销毁 | `tests/contract/coroutine/test_task_lifetime.cpp`；sleep/read/write/close、完成队列交错的 ASan 回归 |

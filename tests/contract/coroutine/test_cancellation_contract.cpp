@@ -55,9 +55,10 @@ int main() {
         auto resumedOnFuture = resumedOn.get_future();
 
         auto task = tokenBoundSleep(loop, 10s, &result, &resumedOn, source.token());
-        loop->runInLoop([&task] { task.start(); });
-
-        std::this_thread::sleep_for(50ms);
+        std::promise<void> armed;
+        auto armedFuture = armed.get_future();
+        loop->runInLoop([&task, &armed] { task.start(); armed.set_value(); });
+        assert(armedFuture.wait_for(2s) == std::future_status::ready);
         std::thread canceller([source] { source.cancel(); });
 
         assert(resultFuture.wait_for(2s) == std::future_status::ready);
@@ -67,7 +68,17 @@ int main() {
         assert(sleepResult.error() == mini::net::NetError::Cancelled);
         assert(resumedOnFuture.get() != callerThread);
 
-        loop->runInLoop([loop] { loop->quit(); });
+        // A promise set inside the body is not final suspension: reclaim on owner loop.
+        std::promise<void> reclaimed;
+        auto reclaimedFuture = reclaimed.get_future();
+        loop->queueInLoop([&task, &reclaimed, loop] {
+            assert(task.done());
+            task.result();
+            task = {};
+            reclaimed.set_value();
+            loop->quit();
+        });
+        assert(reclaimedFuture.wait_for(2s) == std::future_status::ready);
         canceller.join();
     }
 
