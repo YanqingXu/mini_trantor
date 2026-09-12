@@ -19,6 +19,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace mini::net {
 
@@ -33,6 +34,7 @@ public:
 
     /// Hostname-based constructor. DNS resolution happens asynchronously
     /// when connect() is called, using the provided (or global) DnsResolver.
+    /// Candidates are tried in resolver order, once each, until success or exhaustion.
     TcpClient(EventLoop* loop, std::string hostname, uint16_t port,
               std::string name, std::shared_ptr<DnsResolver> resolver = nullptr);
 
@@ -78,14 +80,17 @@ public:
     void setTlsEventCallback(TlsEventCallback cb);
 
 private:
+    enum class ConnectPhase { Idle, Resolving, Connecting, Connected };
     void connectInLoop();
     void disconnectInLoop();
     void stopInLoop();
     void newConnection(SocketFd sockfd);
     void removeConnection(const TcpConnectionPtr& conn);
-    void initConnector(const InetAddress& serverAddr);
     void initConnector(const InetAddress& serverAddr, const ConnectorOptions& options);
     void resolveAndConnect();
+    void startNextCandidate();
+    void handleConnectorEvent(const InetAddress& address, ConnectorEvent event,
+                              std::uint64_t generation, std::weak_ptr<Connector> attempt);
 
     EventLoop* loop_;
     std::string name_;
@@ -112,10 +117,12 @@ private:
     std::string hostname_;
     uint16_t port_{0};
     std::shared_ptr<DnsResolver> resolver_;
-    std::shared_ptr<bool> resolveGuard_;  // scope guard for pending DNS callback
-
-    // Options (for hostname-based re-resolve with options)
-    std::optional<ConnectorOptions> connectorOptions_;
+    std::optional<InetAddress> fixedAddress_;
+    ConnectorOptions connectorOptions_;
+    ConnectPhase connectPhase_{ConnectPhase::Idle};
+    std::uint64_t connectGeneration_{0};
+    std::vector<InetAddress> candidates_;
+    std::size_t nextCandidate_{0};
 };
 
 }  // namespace mini::net

@@ -95,6 +95,9 @@ ever blocking an EventLoop thread.
 - each resolve request reaches at most one callback completion; an abandoned
   closed target executes no callback
 - cache is keyed by hostname only; port is applied at lookup time
+- Supported IPv4/IPv6 candidates keep OS resolver order, including cache hits.
+  No IPv4-first order is promised. Cache port substitution applies to every
+  candidate without changing address family, address bytes or IPv6 scope.
 
 ---
 
@@ -150,7 +153,8 @@ ever blocking an EventLoop thread.
 ---
 
 ## 10. Test Contracts
-- resolve "localhost" returns non-empty result with 127.0.0.1
+- resolve "localhost" returns supported loopback candidates without a family-order
+  assumption; IPv4 and IPv6 literals separately verify each family
 - resolve invalid hostname returns explicit error
 - callback is delivered on the specified EventLoop thread
 - cache hit returns result without blocking on worker thread

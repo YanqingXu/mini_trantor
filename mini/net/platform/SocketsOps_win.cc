@@ -45,13 +45,27 @@ void ensureInitialized() {
     (void)runtime;
 }
 
-SocketFd createNonblockingOrDie(sa_family_t family) {
+SocketFd createNonblocking(sa_family_t family) {
     ensureInitialized();
     const SocketFd sockfd = ::socket(family, SOCK_STREAM, IPPROTO_TCP);
     if (!isValid(sockfd)) {
-        die("socket");
+        return kInvalidSocket;
     }
-    setNonBlockingOrDie(sockfd);
+    u_long on = 1;
+    if (::ioctlsocket(sockfd, FIONBIO, &on) == SOCKET_ERROR) {
+        const int setupError = lastError();
+        ::closesocket(sockfd);
+        setLastError(setupError);
+        return kInvalidSocket;
+    }
+    return sockfd;
+}
+
+SocketFd createNonblockingOrDie(sa_family_t family) {
+    const SocketFd sockfd = createNonblocking(family);
+    if (!isValid(sockfd)) {
+        die("non-blocking TCP socket");
+    }
     return sockfd;
 }
 

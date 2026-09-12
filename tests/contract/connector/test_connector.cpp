@@ -100,8 +100,10 @@ int main() {
         mini::net::EventLoop* loop = loopThread.startLoop();
 
         // Use a port that nothing listens on
+        mini::net::ConnectorOptions options;
+        options.enableRetry = true;
         auto connector = std::make_shared<mini::net::Connector>(
-            loop, mini::net::InetAddress("127.0.0.1", 19302));
+            loop, mini::net::InetAddress("127.0.0.1", 19302), options);
         connector->setRetryDelay(50ms, 200ms);
 
         std::promise<void> retryObserved;
@@ -130,18 +132,23 @@ int main() {
         mini::net::EventLoopThread loopThread;
         mini::net::EventLoop* loop = loopThread.startLoop();
 
+        mini::net::ConnectorOptions options;
+        options.enableRetry = true;
         auto connector = std::make_shared<mini::net::Connector>(
-            loop, mini::net::InetAddress("192.0.2.1", 19303));  // TEST-NET; route may fail immediately
+            loop, mini::net::InetAddress("192.0.2.1", 19303), options); // route may fail immediately
         connector->setRetryDelay(5s, 5s);  // long delay so retry won't fire
 
         std::promise<void> stopped;
         auto stoppedFuture = stopped.get_future();
         loop->runInLoop([&] {
             connector->start();
-            // No readiness event can interleave before this explicit stop.
-            connector->stop();
-            assert(connector->state() == mini::net::Connector::kDisconnected);
-            stopped.set_value();
+            // Start and stop run in one pending-functor batch, before readiness
+            // can interleave; start itself is now always queued.
+            loop->queueInLoop([&] {
+                connector->stop();
+                assert(connector->state() == mini::net::Connector::kDisconnected);
+                stopped.set_value();
+            });
         });
 
         const auto stopStatus = stoppedFuture.wait_for(2s);
@@ -154,8 +161,10 @@ int main() {
         mini::net::EventLoopThread loopThread;
         mini::net::EventLoop* loop = loopThread.startLoop();
 
+        mini::net::ConnectorOptions options;
+        options.enableRetry = true;
         auto connector = std::make_shared<mini::net::Connector>(
-            loop, mini::net::InetAddress("127.0.0.1", 19304));
+            loop, mini::net::InetAddress("127.0.0.1", 19304), options);
         std::weak_ptr<mini::net::Connector> lifetime = connector;
         connector->setRetryDelay(5s, 5s);
         std::promise<void> retryScheduled;

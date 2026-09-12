@@ -23,7 +23,7 @@ struct ConnectorOptions {
     Duration connectTimeout = Duration::zero();
 
     /// 是否在连接失败后自动重试。默认 false。
-    /// 注意：TcpClient 的 enableRetry() 也会控制此行为。
+    /// TcpClient::enableRetry() 单独控制已建立连接断开后的重新连接。
     bool enableRetry = false;
 
     /// 验证选项合法性。不合法时抛 std::invalid_argument。

@@ -74,7 +74,7 @@ stateDiagram-v2
 `tests/contract/tcp_server/test_close_during_destruction.cpp` 在 Linux/Windows 都运行：
 延迟通知不保活、100 次 base 先退出与 worker 关闭交错、两个零 worker 连接在析构
 disconnect 回调内重入 stop/count。同步用队列和 promise，不依赖 sleep 对齐竞态；
-定时器只负责失败超时。已有连接事件次数、停服次序、drain 和集成测试继续保留。
+定时器只负责失败超时。已有连接事件次数、停服次序和集成测试继续保留。
 
 1. **线程归属**：TcpServer 的成员、map、lifetime token 实例只由 base 访问；
    连接状态、idle timer、Channel 清理由 connection owner 访问。
@@ -109,3 +109,52 @@ DNS lifetime、新增 server 析构合同、普通/线程 server 集成、corout
 
 S1 整体仍进行中：一般回调自替换/异常传播、服务器完整启停状态机和 TLS 对端
 身份验证尚未完成；S2 TCP 上限和 S3 负载/发布证据仍按路线顺序推进。
+
+## 保留背压测试的退出屏障
+
+后续 DNS/Connector 修复的最终 ASan 矩阵曾为 74/75：新增合同通过，保留的
+`tests/integration/tcp_server/test_tcp_server_backpressure_policy.cpp` 在 `sawClose`
+断言失败，原日志保存为 `build_audit_s1_dns_candidates_asan_pre_shutdown_test_fix.log`。这次失败是测试
+提前停止 base dispatch 的时序违约，不能归因于 DNS，也不能通过放宽 EOF 期限掩盖。
+
+旧测试在 worker 的 Disconnected 回调中直接 `loop.quit()`。该回调发生在
+TcpServer 关闭通知之前；base 可能先结束最终 drain 并关闭 LoopHandle，随后到达的
+连接名消息被拒绝。server map 此时仍拥有连接，socket 要等 server 清理才释放，
+但 main 正在 `client.join()` 等客户端读取 EOF，server 析构尚未发生。
+Disconnected 表示连接状态转换，不能代替 base 移除、owner 清理和对端 EOF 的屏障。
+
+在旧 fixture 的独立副本中，用 promise 让 worker 的 Disconnected 回调等待 base
+退出后才返回，固定这条交错。base 先确认 LoopHandle 拒绝新投递且 map 仍为 1，
+再放行 worker；三轮均在原 EOF 断言失败，Linux exit 134。
+副本与日志保存在 `build_audit_connector_reentry/backpressure_exit_red.cpp` 和
+`backpressure_exit_red_{1,2,3}.log`，没有修改生产实现来制造或绕过失败。
+
+正式测试现在保持 base dispatch，客户端在原有 2 秒 EOF 期限内看到 EOF/reset
+后才经 LoopHandle 投递退出消息。base 检查 map 已归零再 quit；main join client、
+调用 server.stop() join worker 后，确认 disconnected future 已就绪并检查连接通知
+恰好两次。网络 EOF 本身不作为读取 worker 计数的 C++ 内存同步依据。
+原有读暂停、恢复、排空和 EOF 断言全部保留；另设 10 秒整体 watchdog，避免最终
+完成消息失联后 loop 永久等待，没有增加各阶段的验收期限。
+
+修改后的定向 ASan/UBSan 验证连续通过 20/20，输出保存在
+`build_audit_connector_reentry/backpressure_exit_green_{1..20}.log`；运行脚本使用
+仓库内的 `build_audit_tmp` 作为 TMPDIR。后续最终源码的完整矩阵与 TSan 20 次重复
+亦通过，结果统一记录在 [S1 DNS/Connector 验证](s1_dns_candidates.md#验证与剩余工作)。
+
+```mermaid
+sequenceDiagram
+    participant Worker
+    participant Base
+    participant Client
+    Worker->>Worker: Disconnected
+    Worker->>Base: queue connection name
+    Base->>Worker: extract map entry and transfer cleanup ownership
+    Worker->>Worker: remove Channel and release socket
+    Worker-->>Client: EOF/reset
+    Client->>Base: queue completion
+    Base->>Base: assert map empty, quit, join client, stop/join worker
+    Base->>Base: check exactly two connection notifications
+```
+
+完整 drain-timeout 合同尚属 S2 待办；保留测试清单不能推导 `stop(Duration)`
+已经完成行为验收。本节修复的是已存在背压集成测试的退出次序。

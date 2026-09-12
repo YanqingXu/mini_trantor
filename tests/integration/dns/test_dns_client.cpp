@@ -18,6 +18,7 @@
 #include "mini/net/TcpServer.h"
 
 #include <arpa/inet.h>
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cstdio>
@@ -75,7 +76,6 @@ int main() {
         auto server = std::make_unique<mini::net::TcpServer>(
             loop, mini::net::InetAddress(port, true), "dns_echo_srv");
         loop->runInLoop([&] { startEchoServer(loop, *server); });
-        std::this_thread::sleep_for(50ms);
 
         // Create TcpClient with hostname "localhost" instead of InetAddress.
         auto client = std::make_unique<mini::net::TcpClient>(
@@ -134,10 +134,15 @@ int main() {
                 resolver, &loop, "localhost", port);
             assert(addrs);
             assert(!addrs->empty());
-            assert((*addrs)[0].toIp() == "127.0.0.1");
+            // This example explicitly binds an IPv4 server. Resolution preserves
+            // OS order; select the matching endpoint rather than assuming index 0.
+            const auto endpoint = std::find_if(addrs->begin(), addrs->end(), [](const auto& address) {
+                return address.isIpv4() && address.toIp() == "127.0.0.1";
+            });
+            assert(endpoint != addrs->end());
 
             // Use resolved address to create TcpClient and do echo.
-            mini::net::TcpClient client(&loop, (*addrs)[0], "coro_dns_client");
+            mini::net::TcpClient client(&loop, *endpoint, "coro_dns_client");
 
             std::promise<mini::net::TcpConnectionPtr> connPromise;
             auto connFuture = connPromise.get_future();
@@ -165,15 +170,7 @@ int main() {
 
             client.connect();
 
-            // Wait for connection (poll-style with asyncReadSome on the connection).
-            // Use a simpler approach: yield to the loop and let callbacks fire.
-            // We'll poll with SleepAwaitable.
-            // For simplicity, just wait for the future (blocking is OK in this test
-            // because the loop is running on this same thread via loop()).
-            // Actually, we need a different approach since we're inside a coroutine
-            // on the loop thread. Let's use a while-loop with co_await sleep.
-
-            // Use SleepAwaitable to yield back to the loop.
+            // Yield through the owner loop while connection/message callbacks run.
             for (int i = 0; i < 50; ++i) {
                 co_await mini::coroutine::asyncSleep(&loop, 10ms);
                 if (notified) break;
@@ -190,6 +187,7 @@ int main() {
             resultPromise.set_value(msgFuture.get());
 
             client.stop();
+            loop.quit();
         };
 
         // Start coroutine and run loop.

@@ -43,6 +43,8 @@ add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/
 add_mini_test(contract event_loop_thread ${CMAKE_CURRENT_SOURCE_DIR}/contract/event_loop_thread/test_start_stop_failure.cpp lifecycle threading)
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_cancellation_reentry.cpp lifecycle coro)
 add_mini_test(contract tcp_server ${CMAKE_CURRENT_SOURCE_DIR}/contract/tcp_server/test_close_during_destruction.cpp lifecycle threading)
+add_mini_test(contract connector ${CMAKE_CURRENT_SOURCE_DIR}/contract/connector/test_connector_reentry.cpp lifecycle threading)
+add_mini_test(contract net ${CMAKE_CURRENT_SOURCE_DIR}/contract/net/test_socket_creation.cpp lifecycle)
 
 add_test(NAME contract.build.install_consumer
     COMMAND ${CMAKE_COMMAND}
@@ -137,6 +139,14 @@ add_mini_test(
     lifecycle
 )
 add_mini_test(contract tcp_client ${CMAKE_CURRENT_SOURCE_DIR}/contract/tcp_client/test_tcp_client.cpp)
+add_mini_test(contract tcp_client ${CMAKE_CURRENT_SOURCE_DIR}/contract/tcp_client/test_dns_candidates.cpp lifecycle threading)
+# Compile the same production resolver in this executable so ld --wrap covers
+# its OS boundary for both static and shared library builds. No runtime test hook.
+target_sources(contract_tcp_client_test_dns_candidates PRIVATE
+    ${PROJECT_SOURCE_DIR}/mini/net/DnsResolver.cc
+    ${PROJECT_SOURCE_DIR}/mini/net/platform/SocketsOps_linux.cc)
+target_link_options(contract_tcp_client_test_dns_candidates PRIVATE
+    -Wl,--wrap=getaddrinfo,--wrap=freeaddrinfo,--wrap=socket)
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_sleep_awaitable.cpp coro lifecycle)
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_combinator_contract.cpp coro lifecycle)
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_cancellation_contract.cpp coro lifecycle)

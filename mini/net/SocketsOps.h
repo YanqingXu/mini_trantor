@@ -1,7 +1,7 @@
 #pragma once
 
 // SocketsOps 暴露最底层的 socket 系统调用辅助函数。
-// IPv4/IPv6 双栈：createNonblockingOrDie 接受 family 参数，
+// IPv4/IPv6 双栈：createNonblocking 返回可恢复的创建失败，OrDie 入口保留 fail-fast，
 // bind/accept/getLocalAddr/getPeerAddr 统一使用 sockaddr_storage。
 
 #include "mini/net/SocketTypes.h"
@@ -13,8 +13,14 @@ namespace mini::net::sockets {
 
 void ensureInitialized();
 
-/// Create a non-blocking, close-on-exec TCP socket for the given address family.
+/// Create a non-blocking TCP socket (also close-on-exec on Linux).
+/// The caller owns a successful result. On failure, returns kInvalidSocket and
+/// preserves the platform error in lastError() on the calling thread.
+/// Windows process-wide WinSock initialization retains its fail-fast policy.
 /// @param family  AF_INET or AF_INET6
+SocketFd createNonblocking(sa_family_t family);
+
+/// Create a non-blocking TCP socket, terminating on creation/setup failure.
 SocketFd createNonblockingOrDie(sa_family_t family);
 SocketFd createNonblockingDatagramOrDie(sa_family_t family);
 

@@ -14,7 +14,7 @@
 7. TimerQueue 通过 poll timeout 驱动，无独立 timer 线程，也不再依赖 timerfd。
 8. Task 管 coroutine frame，awaitable 负责把网络等待接回 EventLoop；两者不能相互替代。
 9. DNS 有阻塞解析 worker；它与 Reactor 的回流边界需要特别审计。
-10. 协程、DNS 投递、线程启停与 TcpServer 关闭投递已有 S1 修复；共享控制块已建立插桩运行库对照。一般回调重入/异常、DNS 双栈候选和 TLS 身份验证仍需完成。
+10. 协程、DNS 投递/候选回退、Connector 重入、线程启停与 TcpServer 关闭投递已有 S1 修复；共享控制块已建立插桩运行库对照。一般回调重入/异常及 TLS 身份验证仍需完成。
 11. `mini/net/detail/ConnectionTransport` 是 TCP/TLS 内部 I/O 策略；已移除的通用
     `mini/net/transport/` 则是另一套上层抽象，两者不能混淆。
 
@@ -256,6 +256,32 @@ SleepAwaitable 在 timer 回调恢复，网络 awaiter 通过 queueInLoop 恢复
 8. **易误解处**：恢复锁只保护 frame 边界。Sleep/TCP awaitable 析构执行 owner-loop 注销；DNS 请求注销和 loop 关闭仍需单独处理。
 9. **修改约束**：先定义挂起注销和线程规则，不能简单给 handle 再包一个 shared_ptr 就宣称安全。
 
+### `mini/net/Connector.h/.cc` / `ConnectorOptions.h`
+
+1. **核心职责**：管理一个地址的非阻塞 connect、连接超时和可选退避，成功时交付 socket。
+2. **存在理由**：把 readiness、timer 和 fd 退出路径集中起来；DNS 候选排序不应混入单地址连接器。
+3. **位置**：TcpClient 与 Channel/platform 之间的主动连接适配层。
+4. **依赖**：EventLoop 调度 start 和 timer，Channel 订阅可写/错误，Socket 临时拥有 fd。
+5. **调用方**：TcpClient 为每个候选创建 Connector；直接使用者也必须以 shared_ptr 持有它。
+6. **关键状态**：内部 Idle/StartQueued/Connecting/Connected/RetryWaiting 区分排队与计时；公开 state 仍保持三个连接状态。generation 使旧 readiness、timeout 和 start 失效。
+7. **阅读抓手**：start 始终排队；fail 先清资源、发布 Idle，再调用 hook；scheduleRetry 先安装 timer，再通知 RetryScheduled。stop/restart 可在 hook 内调用。
+8. **易误解处**：enableRetry=false 确实禁用失败重试；start 不会覆盖配置。已 remove 的旧 Channel 要活到当前事件栈返回，其退役闭包只拥有那个具体实例。
+9. **修改约束**：hook 需要当前函数副本及回调后的代次检查；fd 只在成功交付点 release。socket family 不可用是可恢复候选失败；一般分配/回调异常策略另见 S1 待办。
+
+### `mini/net/TcpClient.h/.cc` / `TcpClientOptions.h`
+
+1. **核心职责**：管理一次连接轮次及其 TcpConnection，统一数字地址与 hostname 两种入口。
+2. **存在理由**：DNS、单地址连接器和已建立连接有不同生命周期；应用不应自行拼接旧解析结果、失败重试与关闭通知。
+3. **位置**：面向应用的 TCP 客户端协调层；字节 I/O 仍由 TcpConnection 负责。
+4. **依赖**：DnsResolver 返回地址值，Connector 建立单地址连接，EventLoop 串行推进，TcpConnection 持有成功后的 socket。
+5. **调用方**：callback/coroutine 应用通过 connect、stop、disconnect 控制连接；读取 connection() 取得共享引用不会延长 owner loop 生命周期。
+6. **关键状态**：Idle/Resolving/Connecting/Connected 和 connectGeneration_ 描述一轮；candidates_/nextCandidate_ 保存系统顺序。当前 Connector 的身份进一步隔离同一轮里的旧候选。
+7. **阅读抓手**：connectInLoop 的幂等判断、resolveAndConnect 的迟到结果检查、startNextCandidate 的有限推进、removeConnection 的重连入口。
+8. **易误解处**：stop 保留已建立连接，disconnect 另请求 shutdown；enableRetry 控制已建立连接断开后的重连，ConnectorOptions.enableRetry 控制单地址连接失败后的退避。hostname 每个候选只尝试一次。
+9. **修改约束**：失败 hook 可以停止或销毁 client；推进要排队并重验 lifetime/generation/attempt。Disconnected 通知中的手动 connect 等旧连接移除再执行。TLS 认证阶段独立于 TCP 已接管状态，身份及失败关闭仍待专门修复。
+
+两组模块的状态图、顺序图、测试映射和当前验证状态见 [S1 DNS 候选记录](s1_dns_candidates.md)。
+
 ### 其余核心与支撑文件
 
 下表将成对的公开头/实现放在一起，路径均位于 `mini/`。这些模块保留相同的审查要求：
@@ -270,7 +296,7 @@ SleepAwaitable 在 timer 回调恢复，网络 awaiter 通过 queueInLoop 恢复
 | `net/Buffer.h/.cc` | 读写索引和连续字节空间；支撑部分读写 | ConnectionTransport 读入，应用消费；append/retrieve/readFd | view 失效、扩容与 compaction；不是线程安全队列 |
 | `net/InetAddress.h/.cc` | IPv4/IPv6 地址值，屏蔽 sockaddr 细节 | Acceptor/Connector/Socket/DNS 使用 | family/长度、mapped IPv4；地址字符串与名称解析分开 |
 | `net/Socket.h/.cc` | fd RAII、bind/listen/accept/options | Acceptor/Connection 拥有 | releaseFd 显式交付所有权；setsockopt 返回值策略仍待加强 |
-| `net/SocketsOps.h` | 两个平台共享的低层 socket 函数声明 | Socket/ConnectionTransport/Connector 调用 | ssize_t/错误码翻译；接口不应泄露业务状态 |
+| `net/SocketsOps.h` | 两个平台共享的低层 socket 函数声明 | Socket/ConnectionTransport/Connector 调用 | createNonblocking 返回失败并保留错误；OrDie 保留 fail-fast。两者都不隐含 fd 所有权转移 |
 | `net/platform/SocketsOps_linux.cc` | POSIX 创建/读写/地址和错误分类 | Linux 实现上述声明 | would-block/EINTR/peer close 要保持 distinct |
 | `net/platform/SocketsOps_win.cc` | WinSock 初始化与相同操作入口 | Windows 实现上述声明 | SOCKET 宽度、WSA 错误，不可按 int 假设所有句柄 |
 | `net/platform/SocketTypes.h` | SocketFd 和平台头文件边界 | 全部 socket 模块 | Windows FD_SETSIZE=1024 定义在此，include 顺序可能影响容量 |
@@ -278,8 +304,8 @@ SleepAwaitable 在 timer 回调恢复，网络 awaiter 通过 queueInLoop 恢复
 | `net/poller/PollerFactory.cc` | 按平台选 backend | Poller::newDefaultPoller 被 EventLoop 调用 | 它只构造后端，不启动线程 |
 | `net/SocketTypes.h`、`net/EPollPoller.h`、`net/SelectPoller.h` | 原路径的转发头 | 老核心包含路径使用 | 不是第二份实现；不能双处修改 |
 | `net/Acceptor.h/.cc` | 持有监听 socket/Channel，并移交 accept fd | Server 安装 newConnectionCallback | stop 关闭监听并注销；accept 循环无独立业务预算 |
-| `net/Connector.h/.cc`、`ConnectorOptions.h` | 非阻塞 connect、timeout、retry | TcpClient 使用，成功时移交 fd | kDisconnected/Connecting/Connected；配置是否完整校验、stop thread 合同要一致 |
-| `net/TcpClient.h/.cc`、`TcpClientOptions.h` | 主动连接、重连、持有 Connection 与 Connector | 应用使用 connect/disconnect/stop | hostname 路径额外依赖 DNS；析构先断回调再停 connector |
+| `net/Connector.h/.cc`、`ConnectorOptions.h` | 单地址非阻塞 connect、timeout、retry | TcpClient 使用，成功时移交 fd | 详见上节；排队 start、代次隔离和旧 Channel 退役决定重入安全 |
+| `net/TcpClient.h/.cc`、`TcpClientOptions.h` | 连接轮次、候选推进、持有 Connection 与 Connector | 应用使用 connect/disconnect/stop | 详见上节；DNS 顺序不等于 IPv4 优先，stop/断开/失败重试各有独立语义 |
 | `net/TcpServerOptions.h` | server 配置值与校验 | Server 构造/应用设置 | worker 数不含 base；Options 合法不等于配置可在运行时任意变更 |
 | `net/Callbacks.h` | 核心 callback 签名共享 | Server/Client/Connection/Thread | Buffer 借用、callback 在 owner；不再定义 Logic/Transport 回调 |
 | `net/NetError.h` | Expected 与显式网络错误 | awaitable 返回 | Cancelled/TimedOut/PeerClosed 区分；错误类型不拥有资源 |
@@ -321,6 +347,11 @@ classDiagram
     TcpConnection *-- Channel
     TcpConnection *-- Buffer
     TcpConnection --> EventLoop : borrow
+    TcpClient o-- TcpConnection : established
+    TcpClient *-- Connector : current candidate
+    TcpClient --> DnsResolver : address values
+    Connector *-- Channel : pending connect
+    Connector --> EventLoop : owner scheduling
 ```
 
 EventLoop 的 `pendingFunctors_` 由 mutex 保护，`activeChannels_` 则只属 owner；两者

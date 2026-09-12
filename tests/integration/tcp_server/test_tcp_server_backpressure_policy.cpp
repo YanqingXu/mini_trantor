@@ -63,7 +63,8 @@ int main() {
         ++connectionEvents;
         if (!connection->connected()) {
             disconnected.set_value();
-            loop.quit();
+            // Disconnected precedes TcpServer's queued base-loop removal. Keep
+            // dispatch alive until that removal releases the socket on its owner.
         }
     });
     server.setMessageCallback([&](const mini::net::TcpConnectionPtr& connection, mini::net::Buffer* buffer) {
@@ -81,7 +82,8 @@ int main() {
 
     server.start();
 
-    std::thread client([port, firstHandledFuture, secondHandledFuture] {
+    std::thread client([port, firstHandledFuture, secondHandledFuture,
+                        posting = loop.handle(), &loop, &server] {
         const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
         assert(fd >= 0);
 
@@ -163,13 +165,25 @@ int main() {
         assert(sawClose);
 
         ::close(fd);
+        const bool accepted = posting.queue([&loop, &server] {
+            // Real EOF/reset proves owner cleanup ran; Disconnected alone does
+            // not provide this barrier. Quit only after checking base bookkeeping.
+            assert(server.connectionCount() == 0);
+            loop.quit();
+        });
+        assert(accepted);
     });
 
+    // Per-phase client deadlines remain unchanged. This bounds an unexpected
+    // failure to deliver the final completion message instead of hanging loop().
+    loop.runAfter(10s, [] { assert(false && "backpressure policy progress timed out"); });
     loop.loop();
     client.join();
+    server.stop(); // join the worker before reading its callback counters
 
-    assert(connectionEvents >= 2);
     assert(disconnectedFuture.wait_for(0s) == std::future_status::ready);
+    assert(connectionEvents == 2);
+    assert(server.connectionCount() == 0);
 
     return 0;
 }

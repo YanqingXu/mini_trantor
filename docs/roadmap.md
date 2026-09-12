@@ -12,6 +12,33 @@
 保留 TimerQueue、基础背压和 TLS 接点的理由是已有 TCP 超时、资源控制和连接机制依赖它们。
 不能为了恢复早期目录而倒退到没有超时和关闭约束的实现。
 
+## 当前执行顺序与验收
+
+近期唯一主线是完成 S1，再进入 S2、S3。下一步不以“增加一个模块”为产出，
+而以关闭一个可复现的失败合同为产出。已经存在的 TimerQueue、协程取消、DNS
+安全投递和线程启停机制继续复用，不重复设计另一套运行时。
+
+| 顺序 | 具体交付 | 验收边界 |
+| --- | --- | --- |
+| 1 | 收尾 DNS 候选回退与 Connector 重入 | IPv4/IPv6 顺序、不可用 family、候选耗尽、失败 hook 重连、旧解析结果、stop/restart、自替换 hook 均有合同；真实 hostname echo 与静态/共享库验证通过 |
+| 2 | 完成回调异常与清理规则 | Channel/EventLoop 状态可复位；一个回调抛出不能遗失已接受的清理任务或到期 timer；连接注销及 worker 取消发布在异常退出时仍完成 |
+| 3 | 完成 TLS 默认身份校验和失败关闭 | 可信且匹配的 DNS/IP 身份成功；不可信证书、名称不符及 TLS 初始化失败不得触发 Connected 或发送明文；显式关闭校验的模式单独标明 |
+| 4 | 固化最小 TCP 发布合同（S2） | 排队入口关闭、配置时机、半关闭、慢读者、内存上限、accept 公平性及资源耗尽都有可执行断言；Windows 支持范围由行为测试确定 |
+| 5 | 建立负载与发布证据（S3） | 固定负载模型和机器配置，保存吞吐及 p50/p95/p99、RSS/FD/排队峰值；慢读、突发连接、重连和停服写入的持续测试可复现 |
+
+第 2 项先在 intent 中选定异常合同。建议保存首个异常，完成当前独立批次和已接受
+队列的必要清理后停止 loop，再向调用者回传；同一 Channel 的后续事件不能在其处理
+失败后继续盲目调用。TimerQueue 必须完成到期批次的容器复位，TcpConnection 必须
+完成关闭通知与 Channel remove，EventLoopThread 必须先撤销发布的 loop 指针再销毁。
+这是一组协作规则，单独给 eventHandling_ 加复位不能作为整项完成证据。
+
+第 3 项同时覆盖证书链、参考身份和 TLS 初始化失败路径。hostname 候选回退不能把
+原始 DNS 身份替换为当前候选 IP；数字地址连接则按 IP 身份验证。测试证书应在测试
+中生成并明确有效期，避免依赖某台机器的信任库或固定证书到期日期。
+
+执行时每组独立提交到 main，并记录该提交的实际验证；全部保留测试通过前不进入
+下一组。进度以以下实施记录为准，计划中的验收不能提前写成已支持能力。
+
 ## S0：裁剪与证据重置（本次）
 
 - 移除游戏框架、协议生态、自研 KCP/PMTU/FEC 源码、安装 API 和专属测试。
@@ -77,6 +104,14 @@ join worker。见[关闭记录](s1_server_close.md)。本地 ASan 72/72、Releas
 双栈候选顺序与 TcpClient 回退，再继续一般回调重入/异常及 TLS 身份验证。
 S1、S2、S3 的整体退出要求保持不变。
 
+S1-04c 已补齐 DNS 顺序候选、不可用 family 回退、连接轮次隔离及 Connector
+终态重入；最终失败 hook 可以显式重连。保留背压测试同时修正了提前停止 base
+dispatch 的退出违约。见 [DNS/Connector 记录](s1_dns_candidates.md)。最终本地
+ASan/UBSan 75/75、Release 72/72、插桩 libc++ TSan 72/72、Windows 34/34，
+共享库关键合同及安装消费 4/4；四个重点入口在 TSan 下各重复 20 次通过。
+下一项实施一般回调异常与清理规则，再进入 TLS 身份验证；远端 CI 单独确认，
+S1 整体继续保持进行中。
+
 | 顺序 | 任务 | 必须守住的合同 | 退出证据 |
 | --- | --- | --- | --- |
 | 1 | 协程挂起帧注销 | Task 提前销毁后，timer/I/O/queued resume/cancel 不访问失效 handle；先定义谁能销毁、在哪个 loop 销毁 | `tests/contract/coroutine/test_task_lifetime.cpp`；sleep/read/write/close、完成队列交错的 ASan 回归 |
@@ -86,9 +121,9 @@ S1、S2、S3 的整体退出要求保持不变。
 | 5 | 关闭、重入和异常策略 | 分清“回调发起 close/stop”与“在回调中销毁 owner”；事件批处理、析构、drain deadline 有一致规则 | 扩展 `test_shutdown_ordering.cpp`、`test_connection_event_contract.cpp` 与 Channel failure contracts |
 | 6 | TLS 对端身份 | 客户端默认验证证书链；hostname 同时用于名称校验；明确不验证模式 | 新增不可信证书及 hostname mismatch 拒绝合同，不能只证明自签 echo 成功 |
 
-表内新测试文件名为待实施任务，不宣称已经存在。
+表格描述 S1 总体合同；各项的实际完成范围以以上实施记录为准。
 S1 退出要求：所有已登记 P0 有回归，Linux Debug/Release 与 ASan/UBSan 全量通过，
-TSan 全量通过并保存证据。本次已实跑 49/57，8 个失败入口及分诊见[审计记录](audit_2026-09-12.md#71-tsan-失败分诊)；
+TSan 全量通过并保存证据。首次审计为 49/57，其 8 个失败入口及历史分诊见[审计记录](audit_2026-09-12.md#71-tsan-失败分诊)；当前验证结果见最新 S1 实施记录。
 逐项修复库合同、测试同步或证明工具链归因，不能以排除/suppressions 代替关闭。
 环境无法运行 TSan 时保持缺口，不记作通过。
 所有新测试避免用 sleep 猜时序，优先 promise/barrier、可控 I/O 和确定的阶段边界。
@@ -97,12 +132,19 @@ TSan 全量通过并保存证据。本次已实跑 49/57，8 个失败入口及�
 
 依赖 S1 退出；每次只做一个边界清楚的变更。
 
-1. 定义 queued work 在 quitting/stopped 时是否接受及如何反馈；外部生产者先停再销毁 loop。
-2. 明确配置 API 何时可调用；统一 0 worker = base-loop 的含义和非法配置校验。
-3. 完整验证 half-close、慢读者、输出硬上限、accept 公平性、连接拒绝和 FD 耗尽。
-4. 把 Windows TCP server/client、关闭、backpressure 测试从编译预览扩展为行为验证；
-   select 容量上限保持显式，不开始 IOCP/io_uring 后端扩张。
-5. 固化两个小示例：callback echo 和受生命周期约束的 coroutine echo。
+1. 在已有 LoopHandle 合同上统一 queued work 在 quitting/stopped 时的准入和反馈；
+   明确配置 API 的调用时机、0 worker = base-loop 和非法配置行为。外部生产者先停再销毁 loop。
+2. 补齐内存硬上限：预算同时计入跨线程队列里的 payload 和 outputBuffer，明确拒绝或
+   关闭行为及调用方反馈。已有高低水位限读继续复用；慢读者和多生产者负载下验证预算不被绕过。
+3. 补齐 half-close 与 drain：对端仅关闭写方向后仍收到完整响应，本地已接受数据先于
+   FIN 发出；`stop(Duration)` 覆盖自然完成、deadline 强关、stop 重入和 0/多 worker。
+   断开只通知一次，deadline timer 注销，worker join 后资源回到基线。
+4. 验证 accept 公平性和资源耗尽：连续建连时 pending work/timer 在约定 accept 预算内
+   获得执行；Linux 子进程以受控 FD 上限触发 EMFILE，验证无忙转/泄漏且资源恢复后可继续 accept。
+5. 将 TCP client/connection、关闭、半关闭和慢读者合同移植到 Windows Debug/Release；
+   明确 select 的内部 Channel 占用和容量边界，不开始 IOCP/io_uring 后端扩张。
+6. 复用 callback echo、coroutine echo 和安装消费工程，补可自动结束的关闭验证；安装
+   验收使用全新 prefix 和 consumer build，避免旧文件使缺失安装项被误判通过。
 
 退出要求：当前 API 都有合同映射；安装可从全新前缀消费；Linux/Windows 的支持差异
 有明确列表；关闭后 socket、Channel、timer、coroutine frame 数量回到基线。

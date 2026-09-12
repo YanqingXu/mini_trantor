@@ -1,7 +1,7 @@
 // Unit tests for DnsResolver.
 //
 // Tests basic resolution, cache behavior, and error handling.
-// These tests use "localhost" which always resolves to 127.0.0.1 on Linux.
+// localhost may produce IPv4 and IPv6 candidates in either order.
 
 #include "mini/net/DnsResolver.h"
 #include "mini/net/EventLoop.h"
@@ -20,8 +20,37 @@
 
 using namespace std::chrono_literals;
 
+namespace {
+
+void assertLoopbackAddresses(const std::vector<mini::net::InetAddress>& addresses,
+                             uint16_t port) {
+    assert(!addresses.empty());
+    for (const auto& address : addresses) {
+        assert(address.isIpv4() || address.isIpv6());
+        assert(address.toIp() == (address.isIpv4() ? "127.0.0.1" : "::1"));
+        assert(address.port() == port);
+    }
+}
+
+void assertCachedAddresses(const std::vector<mini::net::InetAddress>& original,
+                          const std::vector<mini::net::InetAddress>& cached,
+                          uint16_t port) {
+    assert(cached.size() == original.size());
+    for (std::size_t i = 0; i < original.size(); ++i) {
+        assert(cached[i].family() == original[i].family());
+        assert(cached[i].toIp() == original[i].toIp());
+        assert(cached[i].port() == port);
+        if (cached[i].isIpv6()) {
+            assert(cached[i].getSockAddrInet6().sin6_scope_id ==
+                   original[i].getSockAddrInet6().sin6_scope_id);
+        }
+    }
+}
+
+}  // namespace
+
 int main() {
-    // Unit 1: resolve "localhost" returns 127.0.0.1
+    // Unit 1: every localhost candidate is a loopback address with the requested port.
     {
         mini::net::EventLoopThread loopThread;
         mini::net::EventLoop* loop = loopThread.startLoop();
@@ -39,12 +68,10 @@ int main() {
 
         auto addrs = future.get();
         assert(addrs);
-        assert(!addrs->empty());
-        assert((*addrs)[0].toIp() == "127.0.0.1");
-        assert((*addrs)[0].port() == 8080);
+        assertLoopbackAddresses(*addrs, 8080);
 
         loop->runInLoop([loop] { loop->quit(); });
-        std::printf("  PASS: resolve localhost returns 127.0.0.1\n");
+        std::printf("  PASS: resolve localhost preserves valid loopback candidates\n");
     }
 
     // Unit 2: resolve invalid hostname returns explicit ResolveFailed
@@ -90,7 +117,7 @@ int main() {
         });
         auto addrs1 = f1.get();
         assert(addrs1);
-        assert(!addrs1->empty());
+        assertLoopbackAddresses(*addrs1, 9090);
 
         // Second resolve: should hit cache (different port to verify port is applied).
         std::promise<mini::net::DnsResolver::ResolveResult> p2;
@@ -103,9 +130,8 @@ int main() {
         });
         auto addrs2 = f2.get();
         assert(addrs2);
-        assert(!addrs2->empty());
-        assert((*addrs2)[0].toIp() == "127.0.0.1");
-        assert((*addrs2)[0].port() == 7070);
+        assertLoopbackAddresses(*addrs2, 7070);
+        assertCachedAddresses(*addrs1, *addrs2, 7070);
 
         loop->runInLoop([loop] { loop->quit(); });
         std::printf("  PASS: cache stores and serves results\n");
@@ -149,17 +175,19 @@ int main() {
         std::printf("  PASS: clearCache works\n");
     }
 
-    // Unit 5: resolve "127.0.0.1" literal address works
-    {
+    // Unit 5: literal and cached addresses cover both families independently of
+    // the host's localhost configuration. Numeric IPv6 resolution needs no listener.
+    for (const char* literal : {"127.0.0.1", "::1"}) {
         mini::net::EventLoopThread loopThread;
         mini::net::EventLoop* loop = loopThread.startLoop();
         mini::net::DnsResolver resolver(1);
+        resolver.enableCache(60s);
 
         std::promise<mini::net::DnsResolver::ResolveResult> promise;
         auto future = promise.get_future();
 
         loop->runInLoop([&] {
-            resolver.resolve("127.0.0.1", 5000, loop,
+            resolver.resolve(literal, 5000, loop,
                 [&](mini::net::DnsResolver::ResolveResult addrs) {
                     promise.set_value(std::move(addrs));
                 });
@@ -167,12 +195,27 @@ int main() {
 
         auto addrs = future.get();
         assert(addrs);
-        assert(!addrs->empty());
-        assert((*addrs)[0].toIp() == "127.0.0.1");
-        assert((*addrs)[0].port() == 5000);
+        assertLoopbackAddresses(*addrs, 5000);
+        const auto family = std::string(literal) == "::1" ? AF_INET6 : AF_INET;
+        for (const auto& address : *addrs) {
+            assert(address.family() == family);
+            assert(address.toIp() == literal);
+        }
+
+        std::promise<mini::net::DnsResolver::ResolveResult> cachedPromise;
+        auto cachedFuture = cachedPromise.get_future();
+        loop->runInLoop([&] {
+            resolver.resolve(literal, 5001, loop,
+                [&](mini::net::DnsResolver::ResolveResult result) {
+                    cachedPromise.set_value(std::move(result));
+                });
+        });
+        auto cached = cachedFuture.get();
+        assert(cached);
+        assertCachedAddresses(*addrs, *cached, 5001);
 
         loop->runInLoop([loop] { loop->quit(); });
-        std::printf("  PASS: resolve IP literal works\n");
+        std::printf("  PASS: resolve and cache IP literal %s\n", literal);
     }
 
     // Unit 6: global shared instance

@@ -30,8 +30,12 @@ void setNonBlockingOrDie(SocketFd sockfd) {
 void ensureInitialized() {
 }
 
+SocketFd createNonblocking(sa_family_t family) {
+    return ::socket(family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_TCP);
+}
+
 SocketFd createNonblockingOrDie(sa_family_t family) {
-    const SocketFd sockfd = ::socket(family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_TCP);
+    const SocketFd sockfd = createNonblocking(family);
     if (!isValid(sockfd)) {
         die("socket");
     }
