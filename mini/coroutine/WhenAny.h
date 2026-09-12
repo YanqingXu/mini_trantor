@@ -63,10 +63,13 @@ struct WhenAnyState {
         }
     }
 
-    void cancelLosers(std::size_t winner) {
+    void cancelLosers(std::size_t winner) noexcept {
         for (std::size_t i = 0; i < N; ++i) {
             if (i != winner) {
-                cancellationSources[i].cancel();
+                try { cancellationSources[i].cancel(); }
+                catch (...) {
+                    if (!winnerException) { winnerException = std::current_exception(); }
+                }
             }
         }
     }
@@ -98,10 +101,13 @@ struct WhenAnyVoidState {
         }
     }
 
-    void cancelLosers(std::size_t winner) {
+    void cancelLosers(std::size_t winner) noexcept {
         for (std::size_t i = 0; i < N; ++i) {
             if (i != winner) {
-                cancellationSources[i].cancel();
+                try { cancellationSources[i].cancel(); }
+                catch (...) {
+                    if (!winnerException) { winnerException = std::current_exception(); }
+                }
             }
         }
     }

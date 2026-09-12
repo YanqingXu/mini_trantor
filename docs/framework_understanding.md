@@ -292,12 +292,12 @@ SleepAwaitable 在 timer 回调恢复，网络 awaiter 通过 queueInLoop 恢复
 | `net/DnsResolver.h/.cc`、`DnsResolverOptions.h` | worker getaddrinfo、缓存和结果回流 | TcpClient/ResolveAwaitable 使用 resolve | callback 统一经 LoopHandle 排队；closed target 放弃回调；registration 独立互斥，捕获资源的释放线程需相容 |
 | `net/SignalWatcher.h/.cc` | Linux signalfd 接入 Channel | 应用主动配置 | 线程信号屏蔽顺序重要；Windows 不提供等价实现 |
 | `net/framing/FrameType.h`、`PacketFramer.h/.cc` | 有界 header/payload 解码，区分未完整/非法/超限 | 应用工具与 fuzz 使用 | Packet.payload 是借用 view；无游戏身份、顺序调度或可靠传输保证 |
-| `coroutine/CancellationToken.h` | source/token/registration 与取消 callback | awaitable/Task/combinator 使用 | 取消通知不等于 target 已停止；回调锁与注销重入需要验证 |
+| `coroutine/CancellationToken.h` | source/token/registration 与取消 callback | awaitable/Task/combinator 使用 | 锁外释放捕获；观察者异常在通知全体后回传；reset 不等待已提取回调 |
 | `coroutine/ResumeHandle.h` | 借用 frame 的恢复权限与执行锁 | Task 在释放前失效；内建 awaitable 保留 metadata | 同一 Task/组合器树串行恢复，I/O 仍属于各自 EventLoop；不拥有 frame，也不许可异线程注销网络等待 |
 | `coroutine/SleepAwaitable.h` | timer 到期/取消恢复 | Task 调 asyncSleep | S1 析构注销并标为 Abandoned；state 不拥有 frame，挂起析构要求 owner-loop |
 | `coroutine/ResolveAwaitable.h` | 解析结果转换为一次 await | 依赖 DNS + EventLoop | move-only；owner 析构标 Abandoned 并取消私有请求；caller token 只单向传播，完成统一排队 |
 | `coroutine/WhenAll.h` | 等待子 task 集合完成 | 用包装 Task/共享状态收集结果 | 所有结果完成后恢复父，父/子 frame 生命周期与异常传播需审计 |
-| `coroutine/WhenAny.h` | 选择先完成子 task 并请求取消其余 | Timeout 复用；原子 winner 标记 | 取消败者不等于已 join；parent.resume 不自动创建固定 owner 语义 |
+| `coroutine/WhenAny.h` | 选择先完成子 task 并请求取消其余 | Timeout 复用；原子 winner 标记 | 取消观察者异常仍完成 parent；取消败者不等于 join，恢复沿完成线程 |
 | `coroutine/Timeout.h` | 操作与定时竞争并映射 TimedOut | 依赖 WhenAny/Sleep/NetError | 继承两者的生命周期限制，不能作为全局安全屏障 |
 | `examples/echo_server/main.cpp` | 最小 callback 入口 | 组装 loop/server/message callback | 先读它建立主链路，再下钻资源释放 |
 | `examples/coroutine_echo_server/main.cpp` | 展示 asyncRead/Write 顺序代码 | detach 一个连接处理 Task | detach 不是托管服务范围，示例不证明提前销毁安全 |

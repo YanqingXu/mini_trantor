@@ -41,6 +41,7 @@ add_mini_test(contract event_loop ${CMAKE_CURRENT_SOURCE_DIR}/contract/event_loo
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_resolve_awaitable_lifetime.cpp coro lifecycle)
 add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_cancel_during_teardown.cpp coro lifecycle threading)
 add_mini_test(contract event_loop_thread ${CMAKE_CURRENT_SOURCE_DIR}/contract/event_loop_thread/test_start_stop_failure.cpp lifecycle threading)
+add_mini_test(contract coroutine ${CMAKE_CURRENT_SOURCE_DIR}/contract/coroutine/test_cancellation_reentry.cpp lifecycle coro)
 
 add_test(NAME contract.build.install_consumer
     COMMAND ${CMAKE_COMMAND}

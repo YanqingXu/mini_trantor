@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -63,10 +64,12 @@ public:
 
         auto state = std::move(state_);
         const auto callbackId = std::exchange(callbackId_, 0);
+        decltype(state->callbacks)::node_type removed;
         {
             std::lock_guard<std::mutex> lock(state->mutex);
-            state->callbacks.erase(callbackId);
+            removed = state->callbacks.extract(callbackId);
         }
+        // Capture destructors may register/cancel again. Release after unlocking.
     }
 
 private:
@@ -104,6 +107,9 @@ public:
                 invokeImmediately = true;
             } else {
                 callbackId = state_->nextCallbackId++;
+                // Allocate any new buckets BEFORE moving the callback into a node.
+                // A failed rehash must not destroy its captures under this mutex.
+                state_->callbacks.reserve(state_->callbacks.size() + 1);
                 state_->callbacks.emplace(callbackId, std::move(callback));
             }
         }
@@ -131,27 +137,34 @@ public:
     }
 
     bool isCancellationRequested() const noexcept {
-        return state_->cancelled.load(std::memory_order_acquire);
+        return state_ && state_->cancelled.load(std::memory_order_acquire);
     }
 
     void cancel() const {
-        if (!state_) {
+        auto state = state_; // callbacks may release the source that made this call
+        if (!state) {
             return;
         }
 
-        if (state_->cancelled.exchange(true, std::memory_order_acq_rel)) {
+        if (state->cancelled.exchange(true, std::memory_order_acq_rel)) {
             return;
         }
 
         std::unordered_map<std::size_t, std::function<void()>> callbacks;
         {
-            std::lock_guard<std::mutex> lock(state_->mutex);
-            callbacks.swap(state_->callbacks);
+            std::lock_guard<std::mutex> lock(state->mutex);
+            callbacks.swap(state->callbacks);
         }
 
+        std::exception_ptr failure;
         for (auto& [_, callback] : callbacks) {
-            callback();
+            try {
+                callback();
+            } catch (...) {
+                if (!failure) { failure = std::current_exception(); }
+            }
         }
+        if (failure) { std::rethrow_exception(failure); }
     }
 
 private:

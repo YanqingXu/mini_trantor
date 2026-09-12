@@ -111,6 +111,9 @@ WhenAny is a composition utility, not a scheduler.
   to the parent (remaining sub-tasks are still cancelled)
 - moving the winning value into result storage may also throw; the winner must
   still deliver that exception once, rather than leave the parent suspended
+- If a synchronous cancellation observer throws, notify all other losers and still
+  resume the parent. Keep an existing winner exception; otherwise publish the first
+  cancellation exception. See cancellation_token.intent.md and test_cancellation_reentry.
 - if a cancelled sub-task throws during its cancellation/cleanup path,
   that exception is silently discarded (the parent has already been resumed)
 - double-resume prevention is critical: the atomic first-completion flag
