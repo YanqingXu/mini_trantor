@@ -1,6 +1,7 @@
 /build/
 /out/
 /Testing/
+/.tmp/
 /build_audit*
 /build_*/
 *.swp

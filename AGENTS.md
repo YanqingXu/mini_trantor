@@ -36,6 +36,16 @@ Start from:
 
 ---
 
+## Temporary Artifacts
+- Store agent-created temporary artifacts under the repository's `.tmp/` directory.
+- Use subdirectories such as `.tmp/build/`, `.tmp/logs/`, and `.tmp/probes/` for
+  temporary builds, logs, generated probes, scratch scripts, and archives.
+- Store temporary commit/PR descriptions under `.tmp/` as well.
+- Do not scatter `build_*` files or directories, logs, or scratch scripts in the
+  project root. Keep `.tmp/` ignored by Git and do not commit its contents.
+
+---
+
 ## Must Follow
 - Always read the relevant intent file before generating or modifying code
 - Always obey thread-affinity rules
