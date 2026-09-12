@@ -50,7 +50,7 @@ SleepAwaitable 改为 move-only，`state()` 仅提供只读诊断视图；读取
 
 ## 验证与剩余工作
 
-当前实现先覆盖 sleep。TCP read/write/close 的注册和已排队恢复、ResolveAwaitable、
+当前实现覆盖 sleep 与 TCP read/write/close 的注册和已排队恢复。ResolveAwaitable、
 组合器父 frame 提前销毁，以及 Task 重复启动仍需逐项建立相同强度的合同。
 P0-01/P1-04 在上述范围完成前保持开放；完整测试与 sanitizer 结果在执行后登记。
 
@@ -62,3 +62,48 @@ cancellation_contract）。审计中的后两个 sleep 相关 TSan 失败入口�
 首轮 sleep 生命周期修复通过 13 个协程相关 ASan/UBSan 用例。随后新增的“预先取消优先于
 零时长 timer”合同先产生明确断言失败，再补充 arming 前取消判断；跨线程发布合同包含
 200 次启动/取消交错，并使用独立 loop 寿命屏障隔离线程池停止问题。
+
+## TCP 等待与槽位保护（S1-01b）
+
+`test_tcp_awaitable_lifetime.cpp` 在修改前同样触发 ASan UAF。修复后注册表保存共享的
+ConnectionAwaiterState；回调借用的 handle 只有在 Queued 状态才允许恢复。awaitable
+析构在 owner loop 解除槽位、注销 token 并清空 handle，已经排队的闭包只剩失效状态。
+
+```mermaid
+sequenceDiagram
+    participant Frame as coroutine frame
+    participant Conn as TcpConnection owner loop
+    participant Registry as AwaiterRegistry
+    participant Queue as EventLoop queue
+    Frame->>Conn: 发布 state/token/参数
+    Conn->>Registry: arm(state)
+    Registry->>Queue: ready / close / cancel：排队 state
+    Note over Registry: Queued 仍占有槽位，数据尚未被消费
+    alt 正常消费
+        Queue->>Frame: state 置 Completed，移出 handle 后恢复
+        Frame->>Registry: await_resume 注销槽位，再读取结果
+    else owner loop 提前销毁 frame
+        Frame->>Registry: unregister(state)，置 Abandoned
+        Queue->>Queue: 看见 Abandoned，跳过恢复
+    end
+```
+
+取消 token 只捕获 weak connection/state；注册 action 自身持有 connection，确保“尚未开始
+注册就销毁 frame”不会让 action 解引用已销毁连接。两者不持有 frame。
+owner 线程重复注册继续同步抛 logic_error；异线程 arming 的异常存入操作状态，排队回到
+该协程的 await_resume 抛出。它不应逃逸到无关的 EventLoop callback。
+
+TCP awaitable 改为 move-only。连接非空时统一经过 await_suspend，以便在 I/O 提交前观察
+显式或继承的取消 token；ready I/O 也排队完成。空连接仍同步返回 NotConnected。
+已排队的 write 仍保留槽位，避免同时存在两个尚未消费完成结果的 write waiter。
+
+Gate 补充：连接和注册表由原 owner loop 管理；frame 的所有者保持 Task/Task::Awaiter。
+read/write/close 完成恢复可能重入用户代码，因此先取出 handle；跨线程仅投递完整操作。
+新增合同覆盖等待、排队完成、排队取消、注册尚未执行、重复注册和预先取消不发送数据；
+`test_connection_awaiter_registry.cpp` 恢复了原来跳过的取消及取消后析构测试。
+
+第一轮 GCC ASan/UBSan 全量 63/63；补充跨线程与槽位合同后的结果另行登记。
+补充合同通过 ASan 定向 1/1；Windows Release 全量 23/23。
+完整 Clang/libc++ TSan 为 54/60，新增 TCP 合同通过；剩余 6 项均为审计已记录的
+thread_pool_stop、connector、timer_queue、dns_contract 及两个 TcpServer 集成用例。
+原 sleep_awaitable/cancellation_contract 失败本轮保持通过，不新增排除或 suppressions。

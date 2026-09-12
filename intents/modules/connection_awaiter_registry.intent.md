@@ -1,8 +1,8 @@
 # Module Intent: ConnectionAwaiterRegistry
 
-> S1 gap: queued/stored handles lack a frame-destruction unregistration protocol.
-> Existing cancel methods request completion; they do not make early frame
-> destruction safe. See [the audit](../../docs/audit_2026-09-12.md).
+> S1-01b implements owner-loop unregistration and invalidation of queued resumes.
+> The remaining Task/combinator/DNS lifecycle work is tracked in
+> [the execution record](../../docs/s1_coroutine_lifecycle.md).
 
 ## 1. Intent
 ConnectionAwaiterRegistry coordinates coroutine waiters that suspend on one
@@ -33,6 +33,14 @@ and resume semantics still flow through EventLoop scheduling.
 ---
 
 ## 4. Core Invariants
+- S1-01b: a waiter has an explicit Unarmed/Pending/Queued/Completed/Abandoned
+  lifecycle. Queued callbacks share the operation state, not ownership of the frame.
+- Unregistering an abandoned waiter removes its slot without resuming it;
+  queued completions must check the state before touching the borrowed handle.
+- A queued waiter still reserves its read/write/close slot until await_resume
+  consumes completion or destruction unregisters it. Readiness is not consumption.
+- Cancellation is an explicit outcome; it cannot overwrite a completion that
+  has already won. A pre-cancelled token wins before I/O submission.
 - one registry belongs to exactly one TcpConnection and one owner loop
 - waiter registration and waiter state mutation happen on the owner loop thread
 - coroutine resumption returns through EventLoop scheduling
@@ -76,13 +84,16 @@ and resume semantics still flow through EventLoop scheduling.
 ---
 
 ## 9. Extension Points
-- cancellation exists; destruction-vs-queued-resume safety must be established next
+- cancellation and owner-loop destruction have distinct completion/unregistration paths
 - future richer read/write completion result types
 - future observability for waiter counts and resume reasons
 
 ---
 
 ## 10. Test Contracts
+- `tests/contract/coroutine/test_tcp_awaitable_lifetime.cpp`: destruction before
+  readiness, after completion/cancel was queued, write already drained vs blocked,
+  and replacement read after an earlier waiter was destroyed.
 - read waiter resumes on owner loop when enough bytes arrive
 - read waiter observes explicit peer-closed result when connection closes empty
 - write waiter resumes on owner loop after output drain

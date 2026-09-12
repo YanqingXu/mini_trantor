@@ -249,13 +249,18 @@ TcpConnection::ReadAwaitable::ReadAwaitable(
       token_(std::move(token)) {
 }
 
+TcpConnection::ReadAwaitable::~ReadAwaitable() {
+    if (connection_ && cancellationState_) { connection_->abandonWaiter(cancellationState_); }
+}
+
 bool TcpConnection::ReadAwaitable::await_ready() const noexcept {
-    return !connection_ || connection_->isReadAwaitReady(minBytes_);
+    return !connection_; // a live connection observes cancellation before I/O submission
 }
 
 Expected<std::string> TcpConnection::ReadAwaitable::await_resume() {
-    cancellationState_->registration.reset();
-    if (cancellationState_->cancelled) {
+    if (!connection_) { return std::unexpected(NetError::NotConnected); }
+    connection_->finishWaiter(cancellationState_);
+    if (cancellationState_->outcome == AwaitCancellationState::Outcome::Cancelled) {
         return std::unexpected(NetError::Cancelled);
     }
     return connection_ ? connection_->resumeReadAwait(minBytes_) : std::unexpected(NetError::NotConnected);
@@ -271,13 +276,18 @@ TcpConnection::WriteAwaitable::WriteAwaitable(
       token_(std::move(token)) {
 }
 
+TcpConnection::WriteAwaitable::~WriteAwaitable() {
+    if (connection_ && cancellationState_) { connection_->abandonWaiter(cancellationState_); }
+}
+
 bool TcpConnection::WriteAwaitable::await_ready() const noexcept {
-    return !connection_ || connection_->isWriteAwaitReady(data_);
+    return !connection_; // a live connection observes cancellation before I/O submission
 }
 
 Expected<void> TcpConnection::WriteAwaitable::await_resume() const {
-    cancellationState_->registration.reset();
-    if (cancellationState_->cancelled) {
+    if (!connection_) { return std::unexpected(NetError::NotConnected); }
+    connection_->finishWaiter(cancellationState_);
+    if (cancellationState_->outcome == AwaitCancellationState::Outcome::Cancelled) {
         return std::unexpected(NetError::Cancelled);
     }
     return connection_ ? connection_->resumeWriteAwait() : std::unexpected(NetError::NotConnected);
@@ -291,13 +301,18 @@ TcpConnection::CloseAwaitable::CloseAwaitable(
       token_(std::move(token)) {
 }
 
-bool TcpConnection::CloseAwaitable::await_ready() const noexcept {
-    return !connection_ || connection_->isCloseAwaitReady();
+TcpConnection::CloseAwaitable::~CloseAwaitable() {
+    if (connection_ && cancellationState_) { connection_->abandonWaiter(cancellationState_); }
 }
 
-Expected<void> TcpConnection::CloseAwaitable::await_resume() const noexcept {
-    cancellationState_->registration.reset();
-    if (cancellationState_->cancelled) {
+bool TcpConnection::CloseAwaitable::await_ready() const noexcept {
+    return !connection_; // a live connection observes cancellation before I/O submission
+}
+
+Expected<void> TcpConnection::CloseAwaitable::await_resume() const {
+    if (!connection_) { return std::unexpected(NetError::NotConnected); }
+    connection_->finishWaiter(cancellationState_);
+    if (cancellationState_->outcome == AwaitCancellationState::Outcome::Cancelled) {
         return std::unexpected(NetError::Cancelled);
     }
     return connection_ ? connection_->resumeCloseAwait() : std::unexpected(NetError::NotConnected);
@@ -522,18 +537,6 @@ bool TcpConnection::canReadImmediately(std::size_t minBytes) const noexcept {
     return impl_->inputBuffer.readableBytes() >= minBytes || impl_->state != kConnected;
 }
 
-bool TcpConnection::isReadAwaitReady(std::size_t minBytes) const noexcept {
-    return impl_->loop->isInLoopThread() && canReadImmediately(minBytes);
-}
-
-bool TcpConnection::isWriteAwaitReady(std::string_view data) const noexcept {
-    return impl_->loop->isInLoopThread() && (data.empty() || disconnected());
-}
-
-bool TcpConnection::isCloseAwaitReady() const noexcept {
-    return impl_->loop->isInLoopThread() && disconnected();
-}
-
 std::string TcpConnection::consumeReadableBytes(std::size_t minBytes) {
     impl_->loop->assertInLoopThread();
     if (impl_->inputBuffer.readableBytes() == 0) {
@@ -569,111 +572,82 @@ Expected<void> TcpConnection::resumeCloseAwait() const noexcept {
     return {};
 }
 
-void TcpConnection::armReadWaiter(std::coroutine_handle<> handle, std::size_t minBytes) {
+void TcpConnection::armWaiter(
+    const std::shared_ptr<AwaitCancellationState>& state,
+    std::coroutine_handle<> handle, AwaitKind kind,
+    mini::coroutine::CancellationToken token, std::size_t minBytes, std::string data) {
+    using Phase = AwaitCancellationState::Phase;
+    if (state->phase != Phase::Unarmed) {
+        throw std::logic_error("a TCP awaitable can only be awaited once");
+    }
+    state->handle = handle;
+    state->phase = Phase::Pending;
     auto self = shared_from_this();
-    auto action = [self, handle, minBytes] {
-        self->impl_->loop->assertInLoopThread();
-        self->impl_->awaiters->armReadWaiter(handle, minBytes, self->canReadImmediately(minBytes));
-    };
+    const bool synchronous = impl_->loop->isInLoopThread();
+    impl_->loop->runInLoop(
+        [self, state, kind, synchronous, token = std::move(token), minBytes, data = std::move(data)] {
+            if (state->phase != Phase::Pending) { return; }
+            auto& registry = *self->impl_->awaiters;
+            try {
+                if (token.isCancellationRequested()) {
+                    registry.cancelWaiter(state);
+                    return;
+                }
+                if (token) {
+                    state->registration.emplace(token.registerCallback(
+                        [weakConnection = std::weak_ptr<TcpConnection>(self),
+                         weakState = std::weak_ptr<AwaitCancellationState>(state)] {
+                            auto connection = weakConnection.lock();
+                            auto waiting = weakState.lock();
+                            if (connection && waiting) {
+                                connection->impl_->loop->queueInLoop([connection, waiting] {
+                                    connection->impl_->awaiters->cancelWaiter(waiting);
+                                });
+                            }
+                        }));
+                }
+                switch (kind) {
+                case AwaitKind::Read:
+                    registry.armReadWaiter(state, minBytes, self->canReadImmediately(minBytes));
+                    break;
+                case AwaitKind::Write: {
+                    const bool ready = data.empty() || self->impl_->state == kDisconnected;
+                    registry.armWriteWaiter(state, ready);
+                    if (!ready) {
+                        self->sendInLoop(data.data(), data.size());
+                        if (!self->impl_->channel->isWriting() &&
+                            self->impl_->outputBuffer.readableBytes() == 0) {
+                            registry.resumeWriteWaiterIfNeeded();
+                        }
+                    }
+                    break;
+                }
+                case AwaitKind::Close:
+                    registry.armCloseWaiter(state, self->impl_->state == kDisconnected);
+                    break;
+                }
+            } catch (...) {
+                if (synchronous) {
+                    registry.unregisterWaiter(state);
+                    throw; // preserves owner-thread duplicate-registration semantics
+                }
+                // await_suspend may already have returned on another thread.
+                // Deliver setup/duplicate-registration failures to its coroutine.
+                registry.failWaiter(state, std::current_exception());
+            }
+        });
+}
 
-    if (impl_->loop->isInLoopThread()) {
-        action();
-    } else {
-        impl_->loop->queueInLoop(std::move(action));
+void TcpConnection::finishWaiter(const std::shared_ptr<AwaitCancellationState>& state) {
+    impl_->awaiters->unregisterWaiter(state);
+    if (state->failure) { std::rethrow_exception(state->failure); }
+}
+
+void TcpConnection::abandonWaiter(const std::shared_ptr<AwaitCancellationState>& state) noexcept {
+    using Phase = AwaitCancellationState::Phase;
+    if (state->phase == Phase::Pending || state->phase == Phase::Queued) {
+        impl_->awaiters->unregisterWaiter(state);
     }
 }
 
-void TcpConnection::armWriteWaiter(std::coroutine_handle<> handle, std::string data) {
-    auto self = shared_from_this();
-    auto action = [self, handle, data = std::move(data)]() mutable {
-        self->impl_->loop->assertInLoopThread();
-        self->impl_->awaiters->armWriteWaiter(handle, data.empty() || self->impl_->state == kDisconnected);
-        if (data.empty() || self->impl_->state == kDisconnected) {
-            return;
-        }
-
-        self->sendInLoop(data.data(), data.size());
-        if (!self->impl_->channel->isWriting() && self->impl_->outputBuffer.readableBytes() == 0) {
-            self->impl_->awaiters->resumeWriteWaiterIfNeeded();
-        }
-    };
-
-    if (impl_->loop->isInLoopThread()) {
-        action();
-    } else {
-        impl_->loop->queueInLoop(std::move(action));
-    }
-}
-
-void TcpConnection::armCloseWaiter(std::coroutine_handle<> handle) {
-    auto self = shared_from_this();
-    auto action = [self, handle] {
-        self->impl_->loop->assertInLoopThread();
-        self->impl_->awaiters->armCloseWaiter(handle, self->impl_->state == kDisconnected);
-    };
-
-    if (impl_->loop->isInLoopThread()) {
-        action();
-    } else {
-        impl_->loop->queueInLoop(std::move(action));
-    }
-}
-
-void TcpConnection::cancelReadWaiter(
-    std::coroutine_handle<> handle,
-    const std::shared_ptr<AwaitCancellationState>& cancellationState) {
-    auto self = shared_from_this();
-    auto action = [self, handle, cancellationState] {
-        self->impl_->loop->assertInLoopThread();
-        if (self->impl_->awaiters->cancelReadWaiter(handle)) {
-            cancellationState->cancelled = true;
-            cancellationState->registration.reset();
-        }
-    };
-
-    if (impl_->loop->isInLoopThread()) {
-        impl_->loop->queueInLoop(std::move(action));
-    } else {
-        impl_->loop->queueInLoop(std::move(action));
-    }
-}
-
-void TcpConnection::cancelWriteWaiter(
-    std::coroutine_handle<> handle,
-    const std::shared_ptr<AwaitCancellationState>& cancellationState) {
-    auto self = shared_from_this();
-    auto action = [self, handle, cancellationState] {
-        self->impl_->loop->assertInLoopThread();
-        if (self->impl_->awaiters->cancelWriteWaiter(handle)) {
-            cancellationState->cancelled = true;
-            cancellationState->registration.reset();
-        }
-    };
-
-    if (impl_->loop->isInLoopThread()) {
-        impl_->loop->queueInLoop(std::move(action));
-    } else {
-        impl_->loop->queueInLoop(std::move(action));
-    }
-}
-
-void TcpConnection::cancelCloseWaiter(
-    std::coroutine_handle<> handle,
-    const std::shared_ptr<AwaitCancellationState>& cancellationState) {
-    auto self = shared_from_this();
-    auto action = [self, handle, cancellationState] {
-        self->impl_->loop->assertInLoopThread();
-        if (self->impl_->awaiters->cancelCloseWaiter(handle)) {
-            cancellationState->cancelled = true;
-            cancellationState->registration.reset();
-        }
-    };
-
-    if (impl_->loop->isInLoopThread()) {
-        impl_->loop->queueInLoop(std::move(action));
-    } else {
-        impl_->loop->queueInLoop(std::move(action));
-    }
-}
-
-}  // namespace mini::net
+} // namespace mini::net

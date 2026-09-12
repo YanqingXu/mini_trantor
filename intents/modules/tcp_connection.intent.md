@@ -60,6 +60,15 @@ inline inside TcpConnection.
 ---
 
 ## 6. Threading Rules
+- S1-01b: await_suspend copies connection, token and arguments before publishing
+  one owner-loop registration action. After publication it does not access the frame.
+- Destroying a pending TCP awaitable is owner-loop-only and unregisters without
+  resumption. The connection remains alive through any queued arming action.
+- Coroutine waits with a connection complete through a queued owner-loop resume,
+  including immediately ready I/O; this also makes inherited cancellation tokens
+  observable before submission. A null connection reports NotConnected synchronously.
+- Registration failures from cross-thread arming are delivered to the waiting
+  coroutine, rather than throwing through the unrelated EventLoop dispatcher.
 - handleRead/handleWrite/handleClose/handleError run on owner loop thread
 - cross-thread send/shutdown must marshal back into the loop
 - helper components must not create a second mutable thread domain

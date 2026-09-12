@@ -284,7 +284,7 @@ SleepAwaitable 在 timer 回调恢复，网络 awaiter 通过 queueInLoop 恢复
 | `net/Callbacks.h` | 核心 callback 签名共享 | Server/Client/Connection/Thread | Buffer 借用、callback 在 owner；不再定义 Logic/Transport 回调 |
 | `net/NetError.h` | Expected 与显式网络错误 | awaitable 返回 | Cancelled/TimedOut/PeerClosed 区分；错误类型不拥有资源 |
 | `net/detail/ConnectionCallbackDispatcher.h/.cc` | 集中 callback slot 与通知 | Connection 独占调用 | 立即通知与 queued writeComplete 有不同重入窗口 |
-| `net/detail/ConnectionAwaiterRegistry.h/.cc` | 每连接 read/write/close waiter | Connection arm、readiness、close 驱动 | 保存裸 handle；clear 后 queueResume 也需要 frame 存活证据 |
+| `net/detail/ConnectionAwaiterRegistry.h/.cc` | 每连接 read/write/close waiter | Connection arm、readiness、close 驱动 | S1 用共享操作状态守护借用的 handle；排队仍占槽位，消费或 owner-loop 析构时注销 |
 | `net/detail/ConnectionBackpressureController.h/.cc` | 高低水位驱动暂停/恢复读 | Connection 依据 outputBuffer 更新 | 限读不等于输出内存硬上限，也不管理业务优先级 |
 | `net/detail/ConnectionTransport.h/.cc` | plain/TLS handshake、read/write/shutdown | Connection 在 owner loop 调用 | WANT_READ/WRITE 与 channel interest；不含业务 transport manager |
 | `net/TlsContext.h/.cc` | SSL_CTX RAII 与 CA/verify 配置 | TLS ConnectionTransport 创建 SSL | 默认客户端验证目前未启用，SNI 不等于 hostname 校验；待修复 |
@@ -292,7 +292,7 @@ SleepAwaitable 在 timer 回调恢复，网络 awaiter 通过 queueInLoop 恢复
 | `net/SignalWatcher.h/.cc` | Linux signalfd 接入 Channel | 应用主动配置 | 线程信号屏蔽顺序重要；Windows 不提供等价实现 |
 | `net/framing/FrameType.h`、`PacketFramer.h/.cc` | 有界 header/payload 解码，区分未完整/非法/超限 | 应用工具与 fuzz 使用 | Packet.payload 是借用 view；无游戏身份、顺序调度或可靠传输保证 |
 | `coroutine/CancellationToken.h` | source/token/registration 与取消 callback | awaitable/Task/combinator 使用 | 取消通知不等于 target 已停止；回调锁与注销重入需要验证 |
-| `coroutine/SleepAwaitable.h` | timer 到期/取消恢复 | Task 调 asyncSleep | SleepState 活着不代表 frame 活着；当前缺少提前销毁注销 |
+| `coroutine/SleepAwaitable.h` | timer 到期/取消恢复 | Task 调 asyncSleep | S1 析构注销并标为 Abandoned；state 不拥有 frame，挂起析构要求 owner-loop |
 | `coroutine/ResolveAwaitable.h` | 解析结果转换为 await | 依赖 DNS + EventLoop | 同步 cache hit 和跨线程完成都影响 suspend 发布顺序 |
 | `coroutine/WhenAll.h` | 等待子 task 集合完成 | 用包装 Task/共享状态收集结果 | 所有结果完成后恢复父，父/子 frame 生命周期与异常传播需审计 |
 | `coroutine/WhenAny.h` | 选择先完成子 task 并请求取消其余 | Timeout 复用；原子 winner 标记 | 取消败者不等于已 join；parent.resume 不自动创建固定 owner 语义 |

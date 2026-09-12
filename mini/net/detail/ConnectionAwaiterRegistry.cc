@@ -1,135 +1,103 @@
 #include "mini/net/detail/ConnectionAwaiterRegistry.h"
+#include "mini/net/EventLoop.h"
 
 #include <stdexcept>
+#include <utility>
 
 namespace mini::net::detail {
 
-ConnectionAwaiterRegistry::ConnectionAwaiterRegistry(EventLoop* loop) : loop_(loop) {
-}
+using Phase = ConnectionAwaiterState::Phase;
+using Outcome = ConnectionAwaiterState::Outcome;
+
+ConnectionAwaiterRegistry::ConnectionAwaiterRegistry(EventLoop* loop) : loop_(loop) {}
 
 bool ConnectionAwaiterRegistry::hasReadWaiter() const noexcept {
-    return readWaiter_.active;
+    return static_cast<bool>(readWaiter_);
 }
 
 void ConnectionAwaiterRegistry::armReadWaiter(
-    std::coroutine_handle<> handle,
-    std::size_t minBytes,
-    bool readyNow) {
+    const Waiter& waiter, std::size_t minBytes, bool readyNow) {
     loop_->assertInLoopThread();
-    if (readWaiter_.active) {
+    if (readWaiter_) {
         throw std::logic_error("only one read waiter is allowed per TcpConnection");
     }
-    if (readyNow) {
-        queueResume(handle);
-        return;
-    }
-    readWaiter_ = {.handle = handle, .minBytes = minBytes, .active = true};
+    readWaiter_ = waiter;
+    minReadBytes_ = minBytes;
+    if (readyNow) { queueResume(waiter); }
 }
 
-void ConnectionAwaiterRegistry::armWriteWaiter(std::coroutine_handle<> handle, bool readyNow) {
+void ConnectionAwaiterRegistry::armWriteWaiter(const Waiter& waiter, bool readyNow) {
     loop_->assertInLoopThread();
-    if (writeWaiter_.active) {
+    if (writeWaiter_) {
         throw std::logic_error("only one write waiter is allowed per TcpConnection");
     }
-    if (readyNow) {
-        queueResume(handle);
-        return;
-    }
-    writeWaiter_ = {.handle = handle, .active = true};
+    writeWaiter_ = waiter;
+    if (readyNow) { queueResume(waiter); }
 }
 
-void ConnectionAwaiterRegistry::armCloseWaiter(std::coroutine_handle<> handle, bool readyNow) {
+void ConnectionAwaiterRegistry::armCloseWaiter(const Waiter& waiter, bool readyNow) {
     loop_->assertInLoopThread();
-    if (closeWaiter_.active) {
+    if (closeWaiter_) {
         throw std::logic_error("only one close waiter is allowed per TcpConnection");
     }
-    if (readyNow) {
-        queueResume(handle);
-        return;
-    }
-    closeWaiter_ = {.handle = handle, .active = true};
+    closeWaiter_ = waiter;
+    if (readyNow) { queueResume(waiter); }
 }
 
 void ConnectionAwaiterRegistry::resumeReadWaiterIfSatisfied(std::size_t readableBytes) {
     loop_->assertInLoopThread();
-    if (!readWaiter_.active) {
-        return;
-    }
-    if (readableBytes < readWaiter_.minBytes) {
-        return;
-    }
-    auto handle = readWaiter_.handle;
-    readWaiter_ = {};
-    queueResume(handle);
+    if (readableBytes >= minReadBytes_) { queueResume(readWaiter_); }
 }
 
 void ConnectionAwaiterRegistry::resumeWriteWaiterIfNeeded() {
     loop_->assertInLoopThread();
-    if (!writeWaiter_.active) {
-        return;
-    }
-    auto handle = writeWaiter_.handle;
-    writeWaiter_ = {};
-    queueResume(handle);
+    queueResume(writeWaiter_);
 }
 
 void ConnectionAwaiterRegistry::resumeAllOnClose() {
     loop_->assertInLoopThread();
-    if (readWaiter_.active) {
-        auto handle = readWaiter_.handle;
-        readWaiter_ = {};
-        queueResume(handle);
-    }
-    if (writeWaiter_.active) {
-        auto handle = writeWaiter_.handle;
-        writeWaiter_ = {};
-        queueResume(handle);
-    }
-    if (closeWaiter_.active) {
-        auto handle = closeWaiter_.handle;
-        closeWaiter_ = {};
-        queueResume(handle);
-    }
+    queueResume(readWaiter_);
+    queueResume(writeWaiter_);
+    queueResume(closeWaiter_);
 }
 
-bool ConnectionAwaiterRegistry::cancelReadWaiter(std::coroutine_handle<> handle) {
+bool ConnectionAwaiterRegistry::cancelWaiter(const Waiter& waiter) {
     loop_->assertInLoopThread();
-    if (!readWaiter_.active || readWaiter_.handle != handle) {
-        return false;
-    }
-    auto waiter = readWaiter_.handle;
-    readWaiter_ = {};
+    if (waiter->phase != Phase::Pending) { return false; }
+    waiter->outcome = Outcome::Cancelled;
     queueResume(waiter);
     return true;
 }
 
-bool ConnectionAwaiterRegistry::cancelWriteWaiter(std::coroutine_handle<> handle) {
+void ConnectionAwaiterRegistry::failWaiter(const Waiter& waiter, std::exception_ptr failure) {
     loop_->assertInLoopThread();
-    if (!writeWaiter_.active || writeWaiter_.handle != handle) {
-        return false;
-    }
-    auto waiter = writeWaiter_.handle;
-    writeWaiter_ = {};
+    waiter->failure = std::move(failure);
+    waiter->outcome = Outcome::Failed;
     queueResume(waiter);
-    return true;
 }
 
-bool ConnectionAwaiterRegistry::cancelCloseWaiter(std::coroutine_handle<> handle) {
+void ConnectionAwaiterRegistry::unregisterWaiter(const Waiter& waiter) {
     loop_->assertInLoopThread();
-    if (!closeWaiter_.active || closeWaiter_.handle != handle) {
-        return false;
+    if (readWaiter_ == waiter) { readWaiter_.reset(); }
+    if (writeWaiter_ == waiter) { writeWaiter_.reset(); }
+    if (closeWaiter_ == waiter) { closeWaiter_.reset(); }
+    if (waiter->phase == Phase::Pending || waiter->phase == Phase::Queued) {
+        waiter->phase = Phase::Abandoned;
+        waiter->handle = {};
     }
-    auto waiter = closeWaiter_.handle;
-    closeWaiter_ = {};
-    queueResume(waiter);
-    return true;
+    waiter->registration.reset();
 }
 
-void ConnectionAwaiterRegistry::queueResume(std::coroutine_handle<> handle) {
-    if (!handle) {
-        return;
-    }
-    loop_->queueInLoop([handle] { handle.resume(); });
+void ConnectionAwaiterRegistry::queueResume(const Waiter& waiter) {
+    if (!waiter || waiter->phase != Phase::Pending) { return; }
+    waiter->phase = Phase::Queued;
+    loop_->queueInLoop([waiter] {
+        if (waiter->phase != Phase::Queued) { return; }
+        waiter->phase = Phase::Completed;
+        auto handle = std::exchange(waiter->handle, {});
+        waiter->registration.reset();
+        handle.resume();
+    });
 }
 
-}  // namespace mini::net::detail
+} // namespace mini::net::detail

@@ -1,4 +1,5 @@
 #include "mini/coroutine/Task.h"
+#include "mini/net/EventLoop.h"
 #include "mini/net/EventLoopThread.h"
 #include "mini/net/detail/ConnectionAwaiterRegistry.h"
 
@@ -15,23 +16,33 @@ namespace {
 
 mini::coroutine::Task<void> waitForRead(
     mini::net::detail::ConnectionAwaiterRegistry* registry,
-    std::promise<std::thread::id>* resumedOn) {
+    std::promise<std::thread::id>* resumedOn,
+    std::shared_ptr<mini::net::detail::ConnectionAwaiterState>* exposed = nullptr) {
     struct Awaitable {
         mini::net::detail::ConnectionAwaiterRegistry* registry;
+        std::shared_ptr<mini::net::detail::ConnectionAwaiterState> state =
+            std::make_shared<mini::net::detail::ConnectionAwaiterState>();
+
+        ~Awaitable() { registry->unregisterWaiter(state); }
 
         bool await_ready() const noexcept {
             return false;
         }
 
         void await_suspend(std::coroutine_handle<> handle) {
-            registry->armReadWaiter(handle, 4, false);
+            state->handle = handle;
+            state->phase = mini::net::detail::ConnectionAwaiterState::Phase::Pending;
+            registry->armReadWaiter(state, 4, false);
         }
 
         void await_resume() const noexcept {
+            registry->unregisterWaiter(state);
         }
     };
 
-    co_await Awaitable{registry};
+    Awaitable waiting{registry};
+    if (exposed) { *exposed = waiting.state; }
+    co_await waiting;
     resumedOn->set_value(std::this_thread::get_id());
 }
 
@@ -151,12 +162,49 @@ int main() {
     }
     duplicateFirst.result();
 
-    // Note: The original cancellation section (cancelReadWaiter + coroutine lifecycle)
-    // has a pre-existing lifecycle race: cancelReadWaiter uses queueInLoop to resume
-    // the coroutine, causing a use-after-free when the Task's coroutine_handle is
-    // destroyed before the queued resume runs. This needs deeper investigation.
-    // Skipping the cancellation section for now; core awaiter registry behavior
-    // (arm/resume/close/duplicate rejection) is fully covered above.
+    // Exercise the cancellation section formerly skipped because of stale handles.
+    std::shared_ptr<mini::net::detail::ConnectionAwaiterState> cancelledState;
+    std::promise<std::thread::id> cancelledOn;
+    auto cancelledOnFuture = cancelledOn.get_future();
+    auto cancelled = waitForRead(regPtr, &cancelledOn, &cancelledState);
+    loop->queueInLoop([&] {
+        cancelled.start();
+        const bool accepted = regPtr->cancelWaiter(cancelledState);
+        assert(accepted);
+        const bool again = regPtr->cancelWaiter(cancelledState);
+        assert(!again);
+        regPtr->resumeAllOnClose(); // already queued: must not resume twice
+    });
+    assert(cancelledOnFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+    assert(cancelledOnFuture.get() == ownerThread);
+
+    std::promise<void> cleaned;
+    auto cleanedFuture = cleaned.get_future();
+    loop->queueInLoop([&] {
+        assert(cancelled.done());
+        cancelled.result();
+        cancelled = {};
+        assert(!regPtr->hasReadWaiter());
+        cleaned.set_value();
+    });
+    assert(cleanedFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+
+    std::promise<std::thread::id> abandonedResume;
+    auto abandonedResumeFuture = abandonedResume.get_future();
+    std::promise<void> abandonedDrained;
+    auto abandonedDrainedFuture = abandonedDrained.get_future();
+    loop->queueInLoop([&] {
+        std::shared_ptr<mini::net::detail::ConnectionAwaiterState> state;
+        auto abandoned = waitForRead(regPtr, &abandonedResume, &state);
+        abandoned.start();
+        const bool accepted = regPtr->cancelWaiter(state);
+        assert(accepted);
+        abandoned = {}; // invalidates the callback that was just queued
+        assert(!regPtr->hasReadWaiter());
+        loop->queueInLoop([&] { abandonedDrained.set_value(); });
+    });
+    assert(abandonedDrainedFuture.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+    assert(abandonedResumeFuture.wait_for(std::chrono::milliseconds(0)) == std::future_status::timeout);
 
     return 0;
 }
