@@ -7,6 +7,7 @@
 #include "mini/coroutine/Task.h"
 
 #include <atomic>
+#include <array>
 #include <coroutine>
 #include <exception>
 #include <memory>
@@ -24,7 +25,7 @@ namespace detail {
 template <typename... Ts>
 struct WhenAllState {
     std::atomic<std::size_t> remaining;
-    std::coroutine_handle<> parent{};
+    ResumeHandle parent{};
     std::atomic<bool> exceptionCaptured{false};
     std::exception_ptr firstException{};
     std::tuple<std::optional<Ts>...> results;
@@ -52,7 +53,7 @@ struct WhenAllState {
 // Specialization for all-void case
 struct WhenAllVoidState {
     std::atomic<std::size_t> remaining;
-    std::coroutine_handle<> parent{};
+    ResumeHandle parent{};
     std::atomic<bool> exceptionCaptured{false};
     std::exception_ptr firstException{};
 
@@ -104,10 +105,14 @@ public:
 
     bool await_ready() const noexcept { return sizeof...(Ts) == 0; }
 
-    void await_suspend(std::coroutine_handle<> parent) {
-        state_->parent = parent;
-        // Start all wrapper coroutines (detach = fire-and-forget).
-        for (auto& w : wrappers_) {
+    template <typename Promise>
+    void await_suspend(std::coroutine_handle<Promise> parent) {
+        auto state = state_;
+        auto wrappers = std::move(wrappers_);
+        state->parent = borrowResume(parent);
+        for (auto& w : wrappers) { TaskAccess::joinChain(w, parent); }
+        // Starting a child can finish/destroy the awaiter. Use launch locals only.
+        for (auto& w : wrappers) {
             w.detach();
         }
     }
@@ -133,7 +138,7 @@ private:
     }
 
     std::shared_ptr<WhenAllState<Ts...>> state_;
-    Task<void> wrappers_[sizeof...(Ts)];
+    std::array<Task<void>, sizeof...(Ts)> wrappers_;
 };
 
 // --- WhenAll Awaitable (all void) ---
@@ -151,10 +156,14 @@ public:
 
     bool await_ready() const noexcept { return N == 0; }
 
-    void await_suspend(std::coroutine_handle<> parent) {
-        state_->parent = parent;
-        for (std::size_t i = 0; i < N; ++i) {
-            wrappers_[i].detach();
+    template <typename Promise>
+    void await_suspend(std::coroutine_handle<Promise> parent) {
+        auto state = state_;
+        auto wrappers = std::move(wrappers_);
+        state->parent = borrowResume(parent);
+        for (auto& wrapper : wrappers) { TaskAccess::joinChain(wrapper, parent); }
+        for (auto& wrapper : wrappers) {
+            wrapper.detach();
         }
     }
 
@@ -176,7 +185,7 @@ private:
     }
 
     std::shared_ptr<WhenAllVoidState> state_;
-    Task<void> wrappers_[N > 0 ? N : 1];
+    std::array<Task<void>, N> wrappers_;
 };
 
 }  // namespace detail

@@ -184,7 +184,7 @@ private:
     std::string consumeReadableBytes(std::size_t minBytes);
     enum class AwaitKind { Read, Write, Close };
     void armWaiter(const std::shared_ptr<AwaitCancellationState>& state,
-                   std::coroutine_handle<> handle, AwaitKind kind,
+                   mini::coroutine::detail::ResumeHandle handle, AwaitKind kind,
                    mini::coroutine::CancellationToken token,
                    std::size_t minBytes = 1, std::string data = {});
     void finishWaiter(const std::shared_ptr<AwaitCancellationState>& state);
@@ -206,7 +206,7 @@ void TcpConnection::ReadAwaitable::await_suspend(std::coroutine_handle<Promise> 
         }
     }
     // No access to the awaiter or promise after this publication.
-    connection->armWaiter(state, handle, AwaitKind::Read, std::move(token), minBytes_);
+    connection->armWaiter(state, mini::coroutine::detail::borrowResume(handle), AwaitKind::Read, std::move(token), minBytes_);
 }
 
 template <typename Promise>
@@ -220,7 +220,7 @@ void TcpConnection::WriteAwaitable::await_suspend(std::coroutine_handle<Promise>
         }
     }
     // No access to the awaiter or promise after this publication.
-    connection->armWaiter(state, handle, AwaitKind::Write, std::move(token), 1, std::move(data_));
+    connection->armWaiter(state, mini::coroutine::detail::borrowResume(handle), AwaitKind::Write, std::move(token), 1, std::move(data_));
 }
 
 template <typename Promise>
@@ -234,7 +234,7 @@ void TcpConnection::CloseAwaitable::await_suspend(std::coroutine_handle<Promise>
         }
     }
     // No access to the awaiter or promise after this publication.
-    connection->armWaiter(state, handle, AwaitKind::Close, std::move(token));
+    connection->armWaiter(state, mini::coroutine::detail::borrowResume(handle), AwaitKind::Close, std::move(token));
 }
 
 } // namespace mini::net

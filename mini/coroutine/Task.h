@@ -4,6 +4,7 @@
 // 它提供 start/detach/co_await 语义，但不替代 EventLoop 的调度规则。
 
 #include "mini/coroutine/CancellationToken.h"
+#include "mini/coroutine/ResumeHandle.h"
 
 #include <coroutine>
 #include <exception>
@@ -19,9 +20,15 @@ class Task;
 
 namespace detail {
 
+struct TaskAccess;
+
 template <typename T>
 class TaskPromiseBase {
 public:
+    ~TaskPromiseBase() { frameControl_->handle = {}; }
+
+    std::shared_ptr<FrameControl> frameControl() const noexcept { return frameControl_; }
+
     std::suspend_always initial_suspend() noexcept {
         return {};
     }
@@ -38,6 +45,7 @@ public:
                 return promise.continuation_;
             }
             if (promise.detached_) {
+                promise.frameControl_->handle = {};
                 handle.destroy();
             }
             return std::noop_coroutine();
@@ -90,6 +98,7 @@ public:
     }
 
 private:
+    std::shared_ptr<FrameControl> frameControl_ = std::make_shared<FrameControl>();
     enum class StartState { Lazy, Started };
     StartState startState_{StartState::Lazy};
     std::exception_ptr exception_;
@@ -155,18 +164,21 @@ public:
 
     Task() = default;
 
-    explicit Task(handle_type coroutine) noexcept : coroutine_(coroutine) {
+    explicit Task(handle_type coroutine) noexcept
+        : coroutine_(coroutine),
+          control_(coroutine ? coroutine.promise().frameControl() : nullptr) {
+        if (control_) { control_->handle = coroutine; }
     }
 
-    Task(Task&& other) noexcept : coroutine_(std::exchange(other.coroutine_, {})) {
+    Task(Task&& other) noexcept : coroutine_(std::exchange(other.coroutine_, {})),
+                                 control_(std::move(other.control_)) {
     }
 
     Task& operator=(Task&& other) noexcept {
         if (this != &other) {
-            if (coroutine_) {
-                coroutine_.destroy();
-            }
+            detail::destroyFrame(coroutine_, control_);
             coroutine_ = std::exchange(other.coroutine_, {});
+            control_ = std::move(other.control_);
         }
         return *this;
     }
@@ -175,30 +187,40 @@ public:
     Task& operator=(const Task&) = delete;
 
     ~Task() {
-        if (coroutine_) {
-            coroutine_.destroy();
-        }
+        detail::destroyFrame(coroutine_, control_);
     }
 
     bool done() const noexcept {
-        return !coroutine_ || coroutine_.done();
+        if (!coroutine_) { return true; }
+        auto gate = control_->gate;
+        std::lock_guard lock(gate->mutex);
+        return coroutine_.done();
     }
 
     void setCancellationToken(CancellationToken token) noexcept {
         if (coroutine_) {
+            auto gate = control_->gate;
+            std::lock_guard lock(gate->mutex);
             coroutine_.promise().set_cancellation_token(std::move(token));
         }
     }
 
     CancellationToken cancellationToken() const noexcept {
-        return coroutine_ ? coroutine_.promise().cancellationToken() : CancellationToken{};
+        if (!coroutine_) { return {}; }
+        auto gate = control_->gate;
+        std::lock_guard lock(gate->mutex);
+        return coroutine_.promise().cancellationToken();
     }
 
     void start() {
+        if (!coroutine_) { return; }
+        auto gate = control_->gate;
+        std::lock_guard lock(gate->mutex);
         if (coroutine_ && !coroutine_.done()) {
             if (!coroutine_.promise().try_start()) {
                 throw std::logic_error("cannot start an already-started Task");
             }
+            detail::FrameExecution execution(*gate);
             coroutine_.resume();
         }
     }
@@ -208,18 +230,25 @@ public:
             return;
         }
         auto coroutine = std::exchange(coroutine_, {});
+        auto control = std::move(control_);
+        auto gate = control->gate;
+        std::lock_guard lock(gate->mutex);
         if (coroutine.done()) {
-            coroutine.destroy();
+            detail::destroyFrame(coroutine, control);
             return;
         }
         coroutine.promise().set_detached(true);
         if (coroutine.promise().try_start()) {
+            detail::FrameExecution execution(*gate);
             coroutine.resume();
         }
     }
 
     decltype(auto) result() & {
-        if (!coroutine_ || !coroutine_.done()) {
+        if (!coroutine_) { throw std::logic_error("task result requested before completion"); }
+        auto gate = control_->gate;
+        std::lock_guard lock(gate->mutex);
+        if (!coroutine_.done()) {
             throw std::logic_error("task result requested before completion");
         }
         if constexpr (std::is_void_v<T>) {
@@ -231,7 +260,10 @@ public:
     }
 
     decltype(auto) result() && {
-        if (!coroutine_ || !coroutine_.done()) {
+        if (!coroutine_) { throw std::logic_error("task result requested before completion"); }
+        auto gate = control_->gate;
+        std::lock_guard lock(gate->mutex);
+        if (!coroutine_.done()) {
             throw std::logic_error("task result requested before completion");
         }
         if constexpr (std::is_void_v<T>) {
@@ -244,18 +276,33 @@ public:
 
     struct Awaiter {
         handle_type coroutine_;
+        std::shared_ptr<detail::FrameControl> control_;
 
-        explicit Awaiter(handle_type coroutine) noexcept : coroutine_(coroutine) {}
+        Awaiter(handle_type coroutine, std::shared_ptr<detail::FrameControl> control) noexcept
+            : coroutine_(coroutine), control_(std::move(control)) {}
         Awaiter(const Awaiter&) = delete;
         Awaiter& operator=(const Awaiter&) = delete;
-        Awaiter(Awaiter&& other) noexcept : coroutine_(std::exchange(other.coroutine_, {})) {}
+        Awaiter(Awaiter&& other) noexcept : coroutine_(std::exchange(other.coroutine_, {})),
+                                           control_(std::move(other.control_)) {}
         Awaiter& operator=(Awaiter&&) = delete;
 
         bool await_ready() const noexcept {
-            return !coroutine_ || coroutine_.done();
+            if (!coroutine_) { return true; }
+            auto gate = control_->gate;
+            std::lock_guard lock(gate->mutex);
+            return coroutine_.done();
         }
 
-        std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) noexcept {
+        template <typename Promise>
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> continuation) noexcept {
+            if constexpr (requires { continuation.promise().frameControl(); }) {
+                // Adoption follows Task ownership synchronization. Sharing a gate
+                // also protects the parent's symmetric continuation from this child.
+                auto parentControl = continuation.promise().frameControl();
+                parentControl->linkChild(control_);
+            }
+            auto gate = control_->gate;
+            std::lock_guard lock(gate->mutex);
             coroutine_.promise().set_continuation(continuation);
             return coroutine_.promise().try_start() ? std::coroutine_handle<>(coroutine_)
                                                    : std::noop_coroutine();
@@ -274,21 +321,32 @@ public:
         }
 
         ~Awaiter() {
-            if (coroutine_) {
-                coroutine_.destroy();
-            }
+            detail::destroyFrame(coroutine_, control_);
         }
     };
 
     Awaiter operator co_await() && noexcept {
-        return Awaiter{std::exchange(coroutine_, {})};
+        return Awaiter{std::exchange(coroutine_, {}), std::move(control_)};
     }
 
 private:
+    friend struct detail::TaskAccess;
     handle_type coroutine_{};
+    std::shared_ptr<detail::FrameControl> control_;
 };
 
 namespace detail {
+
+// Internal composition hook: share execution synchronization, never frame ownership.
+// Call only while ownership/adoption is quiescent, before publishing a child.
+struct TaskAccess {
+    template <typename T, typename Promise>
+    static void joinChain(Task<T>& child, std::coroutine_handle<Promise> parent) {
+        if constexpr (requires { parent.promise().frameControl(); }) {
+            parent.promise().frameControl()->linkChild(child.control_);
+        }
+    }
+};
 
 template <typename T>
 Task<T> TaskPromise<T>::get_return_object() noexcept {

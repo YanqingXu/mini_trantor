@@ -29,8 +29,8 @@ mini::coroutine::Task<void> waitForRead(
             return false;
         }
 
-        void await_suspend(std::coroutine_handle<> handle) {
-            state->handle = handle;
+        void await_suspend(mini::coroutine::Task<void>::handle_type handle) {
+            state->handle = mini::coroutine::detail::borrowResume(handle);
             state->phase = mini::net::detail::ConnectionAwaiterState::Phase::Pending;
             registry->armReadWaiter(state, 4, false);
         }

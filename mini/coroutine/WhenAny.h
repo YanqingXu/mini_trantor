@@ -35,20 +35,18 @@ struct WhenAnyResult<void> {
 namespace detail {
 
 // --- Shared control block for WhenAny (value type) ---
-// Wrappers are stored in the shared state so they survive the awaitable's
-// destruction (which happens when the parent coroutine is resumed by the
-// winning wrapper while other wrappers haven't been detached yet).
+// Shared state does not own wrapper frames: wrappers themselves retain it.
+// await_suspend moves launch ownership into locals before any child can win.
 
 template <typename T, std::size_t N>
 struct WhenAnyState {
     std::atomic<bool> done{false};
-    std::coroutine_handle<> parent{};
+    ResumeHandle parent{};
     std::size_t winnerIndex{0};
     std::optional<T> winnerValue{};
     std::exception_ptr winnerException{};
     std::array<CancellationSource, N> cancellationSources{};
     std::array<LinkedCancellation, N> linkedCancellations{};
-    Task<void> wrappers[N];
 
     bool tryWin(std::size_t index) {
         bool expected = false;
@@ -79,12 +77,11 @@ struct WhenAnyState {
 template <std::size_t N>
 struct WhenAnyVoidState {
     std::atomic<bool> done{false};
-    std::coroutine_handle<> parent{};
+    ResumeHandle parent{};
     std::size_t winnerIndex{0};
     std::exception_ptr winnerException{};
     std::array<CancellationSource, N> cancellationSources{};
     std::array<LinkedCancellation, N> linkedCancellations{};
-    Task<void> wrappers[N];
 
     bool tryWin(std::size_t index) {
         bool expected = false;
@@ -118,7 +115,12 @@ Task<void> whenAnyValueWrapper(Task<T> subtask, std::size_t index,
     try {
         auto val = co_await std::move(subtask);
         if (state->tryWin(index)) {
-            state->winnerValue.emplace(std::move(val));
+            // Winning the race is terminal even when moving T into storage fails.
+            try {
+                state->winnerValue.emplace(std::move(val));
+            } catch (...) {
+                state->winnerException = std::current_exception();
+            }
             state->cancelLosers(index);
             state->resumeParent();
         }
@@ -165,17 +167,21 @@ public:
         ((state_->linkedCancellations[i].link(tasks.cancellationToken()),
           state_->linkedCancellations[i].link(state_->cancellationSources[i].token()),
           tasks.setCancellationToken(state_->linkedCancellations[i].token()),
-          state_->wrappers[i] = whenAnyValueWrapper<T, N>(std::move(tasks), i, state_),
+          wrappers_[i] = whenAnyValueWrapper<T, N>(std::move(tasks), i, state_),
           ++i),
          ...);
     }
 
     bool await_ready() const noexcept { return false; }
 
-    void await_suspend(std::coroutine_handle<> parent) {
-        state_->parent = parent;
-        for (std::size_t i = 0; i < N; ++i) {
-            state_->wrappers[i].detach();
+    template <typename Promise>
+    void await_suspend(std::coroutine_handle<Promise> parent) {
+        auto state = state_;
+        auto wrappers = std::move(wrappers_);
+        state->parent = borrowResume(parent);
+        for (auto& wrapper : wrappers) { TaskAccess::joinChain(wrapper, parent); }
+        for (auto& wrapper : wrappers) {
+            wrapper.detach();
         }
     }
 
@@ -189,6 +195,7 @@ public:
 
 private:
     std::shared_ptr<WhenAnyState<T, N>> state_;
+    std::array<Task<void>, N> wrappers_;
 };
 
 // --- WhenAny Awaitable (void) ---
@@ -204,17 +211,21 @@ public:
         ((state_->linkedCancellations[i].link(tasks.cancellationToken()),
           state_->linkedCancellations[i].link(state_->cancellationSources[i].token()),
           tasks.setCancellationToken(state_->linkedCancellations[i].token()),
-          state_->wrappers[i] = whenAnyVoidWrapper<N>(std::move(tasks), i, state_),
+          wrappers_[i] = whenAnyVoidWrapper<N>(std::move(tasks), i, state_),
           ++i),
          ...);
     }
 
     bool await_ready() const noexcept { return false; }
 
-    void await_suspend(std::coroutine_handle<> parent) {
-        state_->parent = parent;
-        for (std::size_t i = 0; i < N; ++i) {
-            state_->wrappers[i].detach();
+    template <typename Promise>
+    void await_suspend(std::coroutine_handle<Promise> parent) {
+        auto state = state_;
+        auto wrappers = std::move(wrappers_);
+        state->parent = borrowResume(parent);
+        for (auto& wrapper : wrappers) { TaskAccess::joinChain(wrapper, parent); }
+        for (auto& wrapper : wrappers) {
+            wrapper.detach();
         }
     }
 
@@ -227,6 +238,7 @@ public:
 
 private:
     std::shared_ptr<WhenAnyVoidState<N>> state_;
+    std::array<Task<void>, N> wrappers_;
 };
 
 }  // namespace detail

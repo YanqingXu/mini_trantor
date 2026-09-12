@@ -4,6 +4,8 @@
 > on re-entry; callbackLoop is borrowed without an enforced shutdown barrier.
 > See [the audit](../../docs/audit_2026-09-12.md). IPv4/IPv6 resolution is already
 > implemented; resolver ecosystem work is frozen pending these contracts.
+> S1-01d: ResolveAwaitable borrows a guarded Task resume handle. This prevents
+> late frame resumption but does not close request cancellation or loop shutdown.
 
 ## 1. Intent
 DnsResolver provides asynchronous domain name resolution integrated with

@@ -37,6 +37,11 @@ WhenAny is a composition utility, not a scheduler.
 ---
 
 ## 4. Core Invariants
+- S1-01d: parent resumption uses a guarded ResumeHandle. Destroying its owning Task
+  invalidates the token before destroying its locals; late winners never resume it.
+- Wrapper ownership resides in the awaitable until moved to await_suspend locals
+  and detached. Shared result state does not own wrapper frames, avoiding a cycle
+  during construction failure and access to a destroyed launch frame.
 - WhenAny is lazy: sub-tasks are not started until co_await
 - the parent coroutine resumes exactly once, triggered by the first
   sub-task to complete
@@ -53,7 +58,7 @@ WhenAny is a composition utility, not a scheduler.
 - cancellation is cooperative: WhenAny requests cancellation for losing sub-tasks,
   but sub-tasks must observe that request at their own suspension points
 - WhenAny currently injects a `CancellationToken` into each sub-task before start
-- built-in awaitables that understand the current token (currently `SleepAwaitable`)
+- built-in awaitables that understand the current token (sleep, TCP and resolve)
   resume promptly with explicit cancellation
 - awaitables that do not yet consume the token may continue running to completion;
   this is acceptable during staged rollout
@@ -104,14 +109,16 @@ WhenAny is a composition utility, not a scheduler.
 ## 8. Failure Semantics
 - if the first completing sub-task throws, the exception is propagated
   to the parent (remaining sub-tasks are still cancelled)
+- moving the winning value into result storage may also throw; the winner must
+  still deliver that exception once, rather than leave the parent suspended
 - if a cancelled sub-task throws during its cancellation/cleanup path,
   that exception is silently discarded (the parent has already been resumed)
 - double-resume prevention is critical: the atomic first-completion flag
   ensures only one sub-task triggers parent resume
-- if the parent coroutine is destroyed while sub-tasks are still running,
-  the cancelled sub-tasks will complete but the parent handle will not be
-  resumed; this is avoided by design (the parent should co_await WhenAny,
-  which means it is suspended until WhenAny resumes it)
+- if the parent Task is destroyed while sub-tasks run, its guarded parent handle
+  is invalidated. Detached children continue; the eventual winner requests loser
+  cancellation but never resumes the destroyed parent. Child input data must
+  outlive that parent's frame or be owned independently.
 
 ---
 

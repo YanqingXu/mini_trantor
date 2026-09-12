@@ -35,6 +35,9 @@ eagerly upon `co_await` and relies on each sub-task's own awaitables
 ---
 
 ## 4. Core Invariants
+- S1-01d: parent resumption uses ResumeHandle, invalidated by Task ownership teardown.
+  Launch wrappers move to ordinary await_suspend locals before any child starts;
+  no access to the awaitable/frame is allowed after publishing a possible resume.
 - WhenAll is lazy: sub-tasks are not started until the WhenAll awaitable
   is `co_await`-ed
 - once started, all sub-tasks run to completion (no early cancellation)
@@ -88,10 +91,9 @@ eagerly upon `co_await` and relies on each sub-task's own awaitables
 - if a sub-task throws, the exception is captured in the shared state
 - remaining sub-tasks continue to run (no early abort in v3-alpha)
 - when all sub-tasks complete, the captured exception is rethrown to the parent
-- if the parent coroutine is destroyed before sub-tasks complete
-  (e.g. due to Task destruction), sub-task wrapper coroutines will complete
-  but the parent handle will not be resumed (it is already invalid);
-  this scenario should be avoided by design
+- if the parent Task is destroyed before sub-tasks complete, detached wrappers
+  continue under their existing ownership contract but their parent resume token
+  is invalidated. Inputs must own any data needed beyond the parent's lifetime.
 - double-resume of the parent is prevented by atomic counter: only the
   thread that decrements to zero performs the resume
 
@@ -109,7 +111,8 @@ eagerly upon `co_await` and relies on each sub-task's own awaitables
 ## 10. Test Contracts
 - all void tasks: WhenAll with multiple Task<void> completes successfully
 - all value tasks: WhenAll returns std::tuple with correct values in order
-- mixed types: WhenAll<int, std::string, void> returns correctly typed tuple
+- mixed non-void types: WhenAll<int, std::string> returns a typed tuple;
+  mixing void and non-void tasks is not supported
 - single task: WhenAll with one task degenerates correctly
 - exception propagation: if one sub-task throws, parent receives the exception
 - multiple exceptions: first exception (in completion order) is propagated

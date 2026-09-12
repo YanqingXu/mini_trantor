@@ -4,6 +4,7 @@
 // 取消返回 Cancelled；析构只注销，绝不恢复已被销毁的 coroutine frame。
 
 #include "mini/coroutine/CancellationToken.h"
+#include "mini/coroutine/ResumeHandle.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/NetError.h"
 #include "mini/net/TimerId.h"
@@ -21,7 +22,7 @@ namespace mini::coroutine {
 struct SleepState {
     enum class Phase { Unarmed, Pending, Expired, Cancelled, Abandoned };
     mini::net::EventLoop* loop{nullptr};
-    std::coroutine_handle<> handle{};
+    detail::ResumeHandle handle{};
     mini::net::TimerId timerId{};
     Phase phase{Phase::Unarmed};
     std::optional<CancellationRegistration> registration;
@@ -69,7 +70,7 @@ public:
             }
         }
         const auto deadline = mini::base::now() + duration_;
-        state->handle = handle;
+        state->handle = detail::borrowResume(handle);
         state->phase = SleepState::Phase::Pending;
 
         // Everything needed from the awaiter/promise was copied before publishing.

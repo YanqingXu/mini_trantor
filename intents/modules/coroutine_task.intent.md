@@ -1,8 +1,8 @@
 # Module Intent: coroutine::Task
 
 > S1 progress: sleep and TCP waiters implement owner-loop unregistration.
-> Start/detach/adoption ownership edges are covered. Combinator parent destruction
-> and DNS remain open;
+> Start/detach/adoption ownership edges and guarded combinator parent resumption
+> are covered. DNS operation unregistration and shutdown remain open;
 > see [the execution record](../../docs/s1_coroutine_lifecycle.md). No claim is
 > made that arbitrary destruction concurrent with coroutine execution is safe.
 
@@ -66,12 +66,17 @@ Task is a bridge, not a scheduler.
 ---
 
 ## 6. Threading Rules
-- Destruction must not race coroutine execution. A suspended network Task is
+- Tracked ResumeHandle execution and frame destruction share an execution gate.
+  Direct/custom raw-handle execution still requires external synchronization.
+  A suspended network Task is
   destroyed on its active awaitable's owner loop; off-thread callers request
   cancellation and arrange owner-loop cleanup instead of directly destroying it.
 - A completion promise set inside a coroutine does not prove final suspension.
   Transfer back to another thread only after an owner-loop completion barrier.
-- Task itself is thread-agnostic: it has no internal synchronization
+- Task is thread-agnostic: its frame gate serializes tracked resume/release but
+  does not schedule work. Moves, adoption and concurrent access to the same Task
+  object require external synchronization. Adopting a started chain must be
+  quiescent and follow every active awaitable's owner-loop contract.
 - the caller of `start()` or `detach()` determines the initial execution thread
 - when a Task is used with TcpConnection awaitables, the awaitable's
   `await_suspend` registers the coroutine handle with EventLoop, and resume
@@ -105,6 +110,7 @@ Task is a bridge, not a scheduler.
 - Task<T> supports arbitrary return types via TaskPromise<T>::return_value
 - Task<void> specialization uses return_void
 - FinalAwaiter's symmetric transfer enables efficient Task-to-Task chaining
+- ResumeHandle metadata protects a borrowed callback handle without owning its frame.
 - cancellation token propagation already exists in the promise;
   frame unregistration and safe completion are the next required contracts
 

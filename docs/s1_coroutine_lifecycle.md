@@ -50,8 +50,8 @@ SleepAwaitable 改为 move-only，`state()` 仅提供只读诊断视图；读取
 
 ## 验证与剩余工作
 
-当前实现覆盖 sleep 与 TCP read/write/close 的注册和已排队恢复。ResolveAwaitable、
-组合器父 frame 提前销毁仍需逐项建立相同强度的合同；Task 启动语义见下文 S1-01c。
+当前实现覆盖 sleep 与 TCP read/write/close 的注册和已排队恢复。Task 启动语义见
+S1-01c，组合器父 frame 保护见 S1-01d；DNS 操作注销和 loop 关闭仍待实施。
 P0-01/P1-04 在上述范围完成前保持开放；完整测试与 sanitizer 结果在执行后登记。
 
 S1-01a 验证：Linux GCC ASan/UBSan + TLS 全量 62/62；Windows Release 22/22；
@@ -137,3 +137,64 @@ Awaiter 移动后 frame 参数恰好释放一次。
 
 验证：GCC ASan/UBSan + TLS 全量 64/64；Linux Release 61/61；Windows Release 24/24。
 本轮不宣称组合器和 DNS 的 frame 生命周期已经解决。
+
+## 组合器父 frame 与恢复权限（S1-01d）
+
+新增合同在修复前分别触发 whenAll 父 frame UAF、whenAny 父 frame UAF，以及同步
+winner 释放 awaitable 后启动循环继续读取它的 UAF。另一个断言证明：winner 的结果
+移入存储时抛异常，会留下永不恢复的父 Task。所有回归保留在
+`tests/contract/coroutine/test_combinator_lifetime.cpp`。
+
+ResumeHandle 保存借用 handle 和独立 FrameControl。Task/Task::Awaiter 在 frame 的
+局部变量析构前先使 control 失效；迟到恢复只检查 metadata，不访问已释放的 frame。
+恢复和释放使用同一个递归锁，锁本身由恢复入口的局部 shared_ptr 保持存活。
+
+Task 的对称 continuation、组合器 detached wrapper 和子 Task 共用任务树的恢复锁。
+因此同一树的协程代码串行执行，其 I/O 和所属 EventLoop 仍可独立并发运行。初版为
+wrapper 保留独立锁，TSan 报告父启动→子锁 / 子完成→父锁的反转；最终实现取消这条
+反向锁依赖，没有加入 suppressions。Weak child metadata 只用于静止状态下迁移已启动
+任务树的锁，不持有 frame；每次连接子任务时清理过期链接。
+
+```mermaid
+sequenceDiagram
+    participant Owner as Task / Awaiter
+    participant Control as FrameControl 与任务树恢复锁
+    participant Children as detached wrappers
+    Owner->>Control: await_suspend 前连接恢复锁
+    Owner->>Children: 启动局部数组中的 wrappers
+    alt 所有者提前释放
+        Owner->>Control: 加锁，handle 失效
+        Owner->>Owner: destroy frame（网络等待仍要求 owner-loop 注销）
+        Children->>Control: 完成后借用恢复
+        Control-->>Children: handle 已失效，跳过
+    else 正常完成
+        Children->>Control: 加锁，确认 handle 有效
+        Control->>Owner: 恢复至下一挂起点或 final_suspend
+    end
+```
+
+whenAll/whenAny 在启动任何子协程之前，把 wrapper 数组移入普通局部变量；发布后
+不再读取 awaitable。WhenAny 的共享结果状态不再反过来拥有 wrapper，避免构造失败
+时形成所有权环。winnerValue.emplace 失败写入 winnerException，仍完成原 winner 的
+取消和恢复路径。
+
+五项 gate：
+
+| 问题 | 回答 |
+| --- | --- |
+| 谁拥有线程规则？ | Task 没有调度线程；恢复发生在原完成线程。Sleep/TCP/Resolve 仍经所属 EventLoop |
+| 谁拥有和释放？ | Task、Awaiter 或显式 detached 状态拥有 frame；ResumeHandle 仅持有 metadata；组合器子 frame 自行完成释放 |
+| 哪些回调会重入？ | 同步 child、winner、final continuation 都可能完成父协程并销毁 awaitable；启动所需状态必须先移到局部变量 |
+| 跨线程边界？ | guarded resume 与所有者释放互斥；同一个 Task 对象的移动/访问/接管仍需外部同步；接管已启动任务树要求后代静止；挂起网络 awaitable 的注销仍为 owner-only |
+| 哪些测试？ | test_combinator_lifetime 覆盖 value/void、同步完成、600 个跨线程父任务与 1200 个子任务、已启动嵌套接管及结果异常；已有 sleep/TCP/Task 合同继续运行 |
+
+成本与限制：每个 Task 增加 frame metadata 和恢复锁分配，同一组合任务树的协程执行
+会串行化；这属于后续 S3 应测量的成本。禁止在任务树执行内部销毁该树尚未 final 的
+Task，当前实现 fail-fast；自定义裸 handle awaitable 仍自行保证生命周期。
+本轮对 ResolveAwaitable 仅接入 guarded resume，尚未解决 DNS 操作注销、缓存锁重入
+或 EventLoop 寿命，因此不关闭 DNS 阻塞项。
+
+S1-01d 最终验证：GCC ASan/UBSan + TLS 全量 65/65；Linux Release 62/62；Windows
+Release 25/25；Clang/libc++ TSan 全量 57/62。新增及已有协程合同全部通过，TSan
+剩余失败为 thread_pool_stop、connector、timer_queue、dns_contract、tcp_server。
+既有 tcp_server_threaded 报告本轮未复现，继续保留在开放账本中，不据此宣称已修复。

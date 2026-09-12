@@ -249,11 +249,11 @@ SleepAwaitable 在 timer 回调恢复，网络 awaiter 通过 queueInLoop 恢复
 1. **核心职责**：lazy coroutine 的结果与 frame 所有权容器。
 2. **存在理由**：统一开始、组合、返回值和异常传递，而不把调度塞进网络层。
 3. **位置**：协程对象层，无 EventLoop 成员。
-4. **依赖**：标准 coroutine、CancellationToken。
+4. **依赖**：标准 coroutine、CancellationToken、ResumeHandle。
 5. **调用方**：业务协程、echo 示例、WhenAll/WhenAny 包装协程。
 6. **关键方法**：start/detach/result、转移 frame 的 operator co_await、FinalAwaiter 的 continuation/self-destroy。
 7. **阅读抓手**：每个路径谁拥有 handle，何处 destroy，continuation 何时被恢复。
-8. **易误解处**：Task 析构 destroy frame 不会自动通知网络 registry 或 TimerQueue；本次已复现 UAF。
+8. **易误解处**：恢复锁只保护 frame 边界。Sleep/TCP awaitable 析构执行 owner-loop 注销；DNS 请求注销和 loop 关闭仍需单独处理。
 9. **修改约束**：先定义挂起注销和线程规则，不能简单给 handle 再包一个 shared_ptr 就宣称安全。
 
 ### 其余核心与支撑文件
@@ -292,6 +292,7 @@ SleepAwaitable 在 timer 回调恢复，网络 awaiter 通过 queueInLoop 恢复
 | `net/SignalWatcher.h/.cc` | Linux signalfd 接入 Channel | 应用主动配置 | 线程信号屏蔽顺序重要；Windows 不提供等价实现 |
 | `net/framing/FrameType.h`、`PacketFramer.h/.cc` | 有界 header/payload 解码，区分未完整/非法/超限 | 应用工具与 fuzz 使用 | Packet.payload 是借用 view；无游戏身份、顺序调度或可靠传输保证 |
 | `coroutine/CancellationToken.h` | source/token/registration 与取消 callback | awaitable/Task/combinator 使用 | 取消通知不等于 target 已停止；回调锁与注销重入需要验证 |
+| `coroutine/ResumeHandle.h` | 借用 frame 的恢复权限与执行锁 | Task 在释放前失效；内建 awaitable 保留 metadata | 同一 Task/组合器树串行恢复，I/O 仍属于各自 EventLoop；不拥有 frame，也不许可异线程注销网络等待 |
 | `coroutine/SleepAwaitable.h` | timer 到期/取消恢复 | Task 调 asyncSleep | S1 析构注销并标为 Abandoned；state 不拥有 frame，挂起析构要求 owner-loop |
 | `coroutine/ResolveAwaitable.h` | 解析结果转换为 await | 依赖 DNS + EventLoop | 同步 cache hit 和跨线程完成都影响 suspend 发布顺序 |
 | `coroutine/WhenAll.h` | 等待子 task 集合完成 | 用包装 Task/共享状态收集结果 | 所有结果完成后恢复父，父/子 frame 生命周期与异常传播需审计 |

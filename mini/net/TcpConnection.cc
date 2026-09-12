@@ -574,7 +574,7 @@ Expected<void> TcpConnection::resumeCloseAwait() const noexcept {
 
 void TcpConnection::armWaiter(
     const std::shared_ptr<AwaitCancellationState>& state,
-    std::coroutine_handle<> handle, AwaitKind kind,
+    mini::coroutine::detail::ResumeHandle handle, AwaitKind kind,
     mini::coroutine::CancellationToken token, std::size_t minBytes, std::string data) {
     using Phase = AwaitCancellationState::Phase;
     if (state->phase != Phase::Unarmed) {

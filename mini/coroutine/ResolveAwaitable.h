@@ -5,6 +5,7 @@
 // 它不是独立调度器，不绕过 EventLoop 调度语义。
 
 #include "mini/coroutine/CancellationToken.h"
+#include "mini/coroutine/ResumeHandle.h"
 #include "mini/net/DnsResolver.h"
 #include "mini/net/EventLoop.h"
 #include "mini/net/InetAddress.h"
@@ -21,7 +22,7 @@ namespace mini::coroutine {
 /// Ensures the coroutine handle is resumed exactly once.
 struct ResolveState {
     mini::net::EventLoop* loop{nullptr};
-    std::coroutine_handle<> handle{};
+    detail::ResumeHandle handle{};
     mini::net::DnsResolver::ResolveResult result = std::unexpected(mini::net::NetError::ResolveFailed);
     bool resumed{false};
 };
@@ -46,7 +47,7 @@ public:
 
     template <typename Promise>
     void await_suspend(std::coroutine_handle<Promise> handle) {
-        state_->handle = handle;
+        state_->handle = detail::borrowResume(handle);
         auto state = state_;
         auto token = token_;
         if (!token) {

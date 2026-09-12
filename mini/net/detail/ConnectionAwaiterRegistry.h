@@ -2,6 +2,7 @@
 
 // 注册表只借用 coroutine frame；共享的等待状态保护已排队恢复的有效期。
 #include "mini/coroutine/CancellationToken.h"
+#include "mini/coroutine/ResumeHandle.h"
 
 #include <coroutine>
 #include <cstddef>
@@ -20,7 +21,7 @@ struct ConnectionAwaiterState {
     enum class Outcome { Ready, Cancelled, Failed };
     Phase phase{Phase::Unarmed};
     Outcome outcome{Outcome::Ready};
-    std::coroutine_handle<> handle{};
+    mini::coroutine::detail::ResumeHandle handle{};
     std::optional<mini::coroutine::CancellationRegistration> registration;
     std::exception_ptr failure;
 };

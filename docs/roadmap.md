@@ -37,6 +37,10 @@ S1-01b（TCP 等待注销与发布）通过 ASan 全量 63/63、Windows Release 
 完整 TSan 为 54/60，剩余 6 项已记录。Task 启动、组合器与 DNS 的 frame 生命周期仍待处理。
 S1-01c（Task 启动与所有权转移）已通过 ASan 64/64、Linux Release 61/61、Windows Release 24/24。
 继续处理组合器父 frame 和 DNS，S1 整体保持进行中。
+S1-01d（组合器父 frame、同步完成与恢复权限）通过 ASan/UBSan 65/65、
+Linux Release 62/62、Windows Release 25/25；完整 TSan 本轮 57/62。
+新的协程合同全部通过，5 个失败入口均在已有 6 项账本中；本轮未复现的 threaded
+TcpServer 报告继续保持开放，不能以一次通过关闭。接下来处理 DNS 生命周期。
 
 | 顺序 | 任务 | 必须守住的合同 | 退出证据 |
 | --- | --- | --- | --- |
