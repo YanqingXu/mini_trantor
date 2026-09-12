@@ -1,7 +1,7 @@
 #pragma once
 
 // TcpServerOptions 收敛 TcpServer 的配置参数。
-// 值语义、可复制、默认值与 v5-gamma 行为完全一致。
+// 值语义、可复制；numThreads 表示 base loop 之外的 worker 数。
 // 必须在 start() 前设置。与现有 set*() 方法并存，set*() 可覆盖 Options 值。
 
 #include <chrono>
@@ -14,14 +14,11 @@ struct TcpServerOptions {
     using Duration = std::chrono::steady_clock::duration;
 
     struct MetricsOptions {
-        /// Enable broadcast fanout / payload / latency samples when a callback is installed.
-        bool enableBroadcastMetrics = false;
-
         /// Enable EventLoop pending-functor / wakeup samples for base and worker loops.
         bool enableEventLoopQueueMetrics = false;
     };
 
-    /// IO 线程数（含 base loop）。默认 1（单线程模式）。
+    /// worker IO 线程数（不含 base loop）。0 为单线程；默认 1 个 worker。
     int numThreads = 1;
 
     /// 空闲连接超时。默认 0 表示不超时。
@@ -42,8 +39,8 @@ struct TcpServerOptions {
 
     /// 验证选项合法性。不合法时抛 std::invalid_argument。
     void validate() const {
-        if (numThreads < 1) {
-            throw std::invalid_argument("TcpServerOptions: numThreads must be >= 1");
+        if (numThreads < 0) {
+            throw std::invalid_argument("TcpServerOptions: numThreads must be >= 0");
         }
         if (idleTimeout < Duration::zero()) {
             throw std::invalid_argument("TcpServerOptions: idleTimeout must be non-negative");

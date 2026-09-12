@@ -13,7 +13,6 @@
       "architecture": "x64",
       "binaryDir": "${sourceDir}/out/windows/windows-vs2026-x64",
       "cacheVariables": {
-        "CMAKE_GENERATOR_INSTANCE": "D:/VS2026/2026",
         "CMAKE_CXX_STANDARD": "23",
         "BUILD_TESTING": "ON",
         "MINI_ENABLE_TLS": "OFF"

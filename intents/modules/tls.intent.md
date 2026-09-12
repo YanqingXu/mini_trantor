@@ -1,5 +1,10 @@
 # Module Intent: TLS/SSL Integration
 
+> S1 gap: client contexts default to SSL_VERIFY_NONE, and the hostname currently
+> configures SNI without hostname verification. TLS is optional/off by default;
+> peer-identity contracts must be implemented before a safe-default claim.
+> See [the audit](../../docs/audit_2026-09-12.md).
+
 ## 1. Intent
 TLS integration adds a secure transport layer on top of existing TCP connections.
 It wraps OpenSSL's `SSL_CTX` and `SSL` objects with reactor-friendly, non-blocking

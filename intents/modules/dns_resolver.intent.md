@@ -1,5 +1,10 @@
 # Module Intent: DnsResolver
 
+> S1 gap: cache-hit callbacks currently execute under cacheMutex and can deadlock
+> on re-entry; callbackLoop is borrowed without an enforced shutdown barrier.
+> See [the audit](../../docs/audit_2026-09-12.md). IPv4/IPv6 resolution is already
+> implemented; resolver ecosystem work is frozen pending these contracts.
+
 ## 1. Intent
 DnsResolver provides asynchronous domain name resolution integrated with
 EventLoop scheduling semantics. It runs blocking `getaddrinfo` calls on a

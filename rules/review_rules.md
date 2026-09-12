@@ -33,7 +33,7 @@ The following areas always require focused review:
 ## 4. PR Standard
 Each PR for a core module should contain:
 - intent reference
-- stage reference (`v1-alpha`, `v1-beta`, or `v1-coro-preview`)
+- current stage reference (`S0`, `S1`, `S2`, or `S3` in `docs/roadmap.md`)
 - answers to the 5 core-module change gate questions
 - public interface
 - implementation

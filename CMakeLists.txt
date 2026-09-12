@@ -1,9 +1,19 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.25)
 project(mini_trantor VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles("#include <expected>
+#include <thread>
+static_assert(sizeof(std::jthread) > 0);
+int main() { std::expected<int, int> result(1); return result.value() - 1; }"
+    MINI_HAS_CXX23_RUNTIME)
+if(NOT MINI_HAS_CXX23_RUNTIME)
+    message(FATAL_ERROR "std::expected and std::jthread are required. Use a compatible compiler/standard library pair; see README for the tested Clang/libc++ flags.")
+endif()
 
 include(CTest)
 include(GNUInstallDirs)
@@ -14,11 +24,8 @@ include(Sanitizers)
 option(MINI_ENABLE_ASAN_UBSAN "Enable AddressSanitizer and UndefinedBehaviorSanitizer for Debug guarded builds" OFF)
 option(MINI_ENABLE_TSAN "Enable ThreadSanitizer for Debug guarded builds" OFF)
 option(MINI_ENABLE_FUZZ "Build libFuzzer protocol parser targets" OFF)
-if(WIN32)
-    option(MINI_ENABLE_TLS "Build OpenSSL/TLS integration" OFF)
-else()
-    option(MINI_ENABLE_TLS "Build OpenSSL/TLS integration" ON)
-endif()
+option(MINI_ENABLE_TLS "Build optional OpenSSL/TLS integration" OFF)
+option(MINI_BUILD_EXAMPLES "Build TCP echo examples" ON)
 
 if(MINI_ENABLE_TSAN AND MINI_ENABLE_FUZZ)
     message(FATAL_ERROR "MINI_ENABLE_TSAN cannot be combined with MINI_ENABLE_FUZZ.")
@@ -35,7 +42,6 @@ endif()
 
 set(MINI_TRANTOR_SOURCES
     mini/base/Logger.cc
-    mini/base/MetricsExporter.cc
     mini/net/InetAddress.cc
     mini/net/Buffer.cc
     mini/net/Socket.cc
@@ -48,52 +54,17 @@ set(MINI_TRANTOR_SOURCES
     mini/net/Connector.cc
     mini/net/EventLoopThread.cc
     mini/net/EventLoopThreadPool.cc
-    mini/net/broadcast/BroadcastRouter.cc
-    mini/net/broadcast/BroadcastDispatcher.cc
     mini/net/TcpConnection.cc
     mini/net/detail/ConnectionCallbackDispatcher.cc
     mini/net/detail/ConnectionAwaiterRegistry.cc
     mini/net/detail/ConnectionBackpressureController.cc
     mini/net/detail/ConnectionTransport.cc
-    mini/net/buffer/Payload.cc
-    mini/net/buffer/PayloadPool.cc
     mini/net/TcpClient.cc
     mini/net/TcpServer.cc
     mini/net/TlsContext.cc
-    mini/net/udp/IcmpPathMtuListener.cc
-    mini/net/udp/PathMtuSignalAdapter.cc
-    mini/net/udp/UdpSocket.cc
-    mini/net/udp/UdpServer.cc
-    mini/net/transport/PathMtuCache.cc
     mini/net/framing/PacketFramer.cc
-    mini/codec/ProtobufAdapter.cc
-    mini/codec/FlatBuffersAdapter.cc
-    mini/net/kcp/KcpCodec.cc
-    mini/net/kcp/KcpTransport.cc
-    mini/net/kcp/KcpSession.cc
-    mini/game/PlayerSession.cc
-    mini/game/SessionManager.cc
-    mini/game/GameServerPipeline.cc
-    mini/game/logic/GameCommandQueue.cc
-    mini/game/logic/LogicLoop.cc
     mini/net/DnsResolver.cc
     mini/net/SignalWatcher.cc
-    mini/net/ProtocolConnectionAdapter.cc
-    mini/http/HttpRequest.cc
-    mini/http/HttpResponse.cc
-    mini/http/HttpResponseContext.cc
-    mini/http/HttpContext.cc
-    mini/http/HttpClient.cc
-    mini/http/HttpServer.cc
-    mini/ws/WebSocketCodec.cc
-    mini/ws/WebSocketHandshake.cc
-    mini/ws/WebSocketConnection.cc
-    mini/ws/WebSocketServer.cc
-    mini/rpc/RpcCodec.cc
-    mini/rpc/RpcChannel.cc
-    mini/rpc/RpcServer.cc
-    mini/rpc/RpcClient.cc
-    mini/rpc/RpcConnectionPool.cc
 )
 
 if(WIN32)
@@ -135,14 +106,14 @@ if(WIN32)
 endif()
 enable_sanitizers(mini_trantor)
 
+if(MINI_BUILD_EXAMPLES)
 add_executable(echo_server examples/echo_server/main.cpp)
 target_link_libraries(echo_server PRIVATE mini_trantor)
 
 add_executable(coroutine_echo_server examples/coroutine_echo_server/main.cpp)
 target_link_libraries(coroutine_echo_server PRIVATE mini_trantor)
 
-add_executable(game_server examples/game_server/main.cpp)
-target_link_libraries(game_server PRIVATE mini_trantor)
+endif()
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
@@ -160,12 +131,14 @@ install(
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-install(
-    DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/mini/
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/mini
-    FILES_MATCHING
-        PATTERN "*.h"
-)
+# Install only maintained header directories, including no empty retired directories.
+file(GLOB MINI_PUBLIC_HEADERS CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+    mini/base/*.h mini/coroutine/*.h mini/net/*.h mini/net/detail/*.h
+    mini/net/platform/*.h mini/net/poller/*.h mini/net/framing/*.h)
+foreach(header IN LISTS MINI_PUBLIC_HEADERS)
+    get_filename_component(header_dir "${header}" DIRECTORY)
+    install(FILES "${header}" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${header_dir}")
+endforeach()
 
 set(mini_trantor_config_install_dir ${CMAKE_INSTALL_LIBDIR}/cmake/mini_trantor)
 

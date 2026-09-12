@@ -1,103 +1,30 @@
-# Tests Layout
+# 测试与证据
 
-`tests/` 按“层级 + 模块”组织，避免所有测试平铺在一个目录里。
+当前模块范围以 [scope intent](../intents/architecture/reactor_scope_reset.intent.md) 为准。
+已撤除功能的测试清单及旧基线失败保存在 [审计记录](../docs/audit_2026-09-12.md)。
 
-## 层级
-
-- `unit/`: 只验证单模块局部语义、小不变量、基础回调分发
-- `contract/`: 验证公共 API、线程亲和、生命周期和模块间契约
-- `integration/`: 验证主链路是否真正跑通，包括 server 主路径与协程桥接
-- `fuzz/`: 可选 libFuzzer 入口，验证协议解析器与帧解析器对畸形输入的健壮性
-
-## 风险标签
-
-除 `unit` / `contract` / `integration` 分层标签外，高风险测试还会带有风险维度标签：
-
-- `lifecycle`: 生命周期、关闭、销毁、remove-before-destroy、awaiter resume 等路径
-- `threading`: 跨线程投递、owner loop 回流、线程池停止、广播分桶等路径
-- `coro`: coroutine suspend/resume、cancel、timeout、combinator 等路径
-- `protocol`: HTTP / WebSocket / RPC / codec / framing 等协议解析与序列化路径
-- `transport`: TCP / UDP / KCP / transport adapter 等传输抽象路径
-- `benchmark`: 轻量性能基线，默认仍作为 integration 测试构建
-
-## 当前映射摘要
-
-- `unit/buffer/`: `Buffer`
-- `unit/channel/`: `Channel`
-- `unit/coroutine/`: `Task`
-- `contract/event_loop/`: `EventLoop`
-- `contract/poller/`: `Poller`
-- `contract/tcp_connection/`: `TcpConnection`
-- `contract/event_loop_thread_pool/`: `EventLoopThreadPool`
-- `integration/tcp_server/`: 同步 Reactor 主链路
-- `integration/coroutine/`: 协程桥接主链路
-
-## 运行方式
-
-- 全量：`ctest --output-on-failure`
-- 只跑 unit：`ctest --output-on-failure -L unit`
-- 只跑 contract：`ctest --output-on-failure -L contract`
-- 只跑 integration：`ctest --output-on-failure -L integration`
-- 生命周期风险集合：`ctest --output-on-failure -L lifecycle`
-- 线程边界集合：`ctest --output-on-failure -L threading`
-- 协议解析集合：`ctest --output-on-failure -L protocol`
-- 性能基线集合：`ctest --output-on-failure -L benchmark`
-
-也可以直接使用构建目标：
-
-- `check-unit`
-- `check-contract`
-- `check-integration`
-- `check-tests`
-- `check-lifecycle`
-- `check-threading`
-- `check-protocol`
-- `check-benchmark`
-
-## Fuzz 入口
-
-Fuzz target 默认不进入普通构建。需要使用 Clang 显式启用：
+- unit：Buffer、Channel、Task/取消、连接协作者、地址、timer id 等局部不变量。
+- contract：公开 API、线程归属、关闭顺序、timer/coroutine、DNS 和安装消费。
+- integration：TCP echo、线程分配、backpressure、idle timeout、协程与可选 TLS。
+- fuzz：只保留 PacketFramer；Clang 工具链、ASan/UBSan 和实现层 coverage instrumentation。
+- package：独立 find_package 消费，不从源码 include；检查退休 API 不进入安装包。
 
 ```bash
-CC=clang CXX=clang++ cmake -S . -B build-fuzz \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DBUILD_TESTING=OFF \
-  -DMINI_ENABLE_FUZZ=ON
-cmake --build build-fuzz -j$(nproc)
-./build-fuzz/tests/fuzz/fuzz_http_context -runs=1000
-./build-fuzz/tests/fuzz/fuzz_ws_codec -runs=1000
-./build-fuzz/tests/fuzz/fuzz_rpc_codec -runs=1000
-./build-fuzz/tests/fuzz/fuzz_packet_framer -runs=1000
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
+cmake --build build --parallel 4
+ctest --test-dir build --output-on-failure
+ctest --test-dir build --output-on-failure -L lifecycle
+ctest --test-dir build --output-on-failure -L threading
 ```
 
-## Sanitizer 入口
+测试目标在 Release 中也启用 assert，避免已有 setup 表达式被 NDEBUG 删除。
+新增测试把有副作用的调用放在 assert 外，再断言返回结果。测试数量来自本次配置，
+不能跨 TLS/平台/阶段直接比较。Windows 当前是可移植子集，新增 TCP 关闭事件契约
+在两个平台执行；不以 Windows 子集替代 Linux 全量集成测试。
 
-ASan/UBSan 用于生命周期与未定义行为护栏：
+已知 coroutine frame 销毁、DNS 锁重入和 TLS 对端验证缺口在 S1 账本中。
+现有套件未覆盖它们；必须补失败回归并修复后才能关闭，不得用当前通过率宣称安全。
 
-```bash
-cmake -S . -B build-asan \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DBUILD_TESTING=ON \
-  -DMINI_ENABLE_ASAN_UBSAN=ON
-cmake --build build-asan -j$(nproc)
-ctest --test-dir build-asan --output-on-failure -L "unit|contract"
-```
-
-TSan 用于线程边界与 coroutine 调度护栏。推荐使用 Clang，与 CI 保持一致：
-
-```bash
-CC=clang CXX=clang++ cmake -S . -B build-tsan \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DBUILD_TESTING=ON \
-  -DMINI_ENABLE_TSAN=ON
-cmake --build build-tsan -j$(nproc)
-ctest --test-dir build-tsan --output-on-failure -L "threading|coro"
-```
-
-## VSCode 断点调试
-
-- 打开任意一个 `tests/.../*.cpp` 测试文件
-- 选择 `gdb: debug current test file`
-- 按 `F5`，会先自动构建当前文件对应的 CMake 测试目标，再进入断点调试
-
-这个调试入口依赖当前活动编辑器文件路径来推导测试目标，因此需要从测试源文件本身发起调试。
+Clang/libc++ 普通构建 57/57，完整 TSan 为 49/57，失败项包含库内竞争、测试同步问题和
+待归因的控制块报告；[分诊与堆栈](../docs/audit_2026-09-12.md#71-tsan-失败分诊)是 S1 的验收起点。
+PacketFramer 已用 4 份初始语料执行 1,000 次 fuzz；变异目录位于 build，不修改提交的种子。

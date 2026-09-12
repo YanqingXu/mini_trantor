@@ -65,6 +65,12 @@ For lifecycle-sensitive modules, tests should include:
 When generating code, generate tests in the same change set.
 No public interface should be added without at least one direct contract assertion.
 
+## 9.2 Build and Scope Contracts
+- Assertions must execute in every test build configuration, including Release.
+- New tests must perform setup outside assert expressions and then check its result.
+- Keep contracts for every retained API; removed-feature tests must be listed in the audit.
+- Installed-package consumption must verify dependency selection and retired API exclusion.
+
 ## 9.1 Change Gate Requirement
 For core modules, the change description must name the specific test file that validates the behavior.
 "covered by tests" is not sufficient.

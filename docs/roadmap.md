@@ -1,455 +1,85 @@
-# mini-trantor Roadmap
-
-## 1. 文档目标
-
-本文档将"当前项目还缺什么"整理为一份可执行的演进路线图。
-
-路线图的目标不是继续堆功能，而是优先补齐：
-
-1. 底座一致性
-2. 生命周期闭环
-3. 线程亲和与关闭语义
-4. 可接入性
-5. 可观测性与工程护栏
-6. 上层复用生态
-
----
-
-## 2. 排序原则
-
-优先级按以下顺序确定：
-
-1. 先修会影响所有上层模块正确性的缺口
-2. 先修生命周期、线程亲和、关闭语义，再扩协议面
-3. 先把核心 contract 收敛，再追求工程舒适度
-4. 每个阶段都必须直接对应模块、测试文件和退出信号
-
----
-
-## 3. 当前判断
-
-mini-trantor 目前已经具备一个"小而完整"的网络库骨架：
-
-- Reactor core 已成型
-- one-loop-per-thread 线程模型已成型
-- TcpServer / TcpClient 双侧主链路已成型
-- coroutine bridge、DNS、TLS、HTTP、WebSocket、RPC 已具备可运行能力
-- 安装与 `find_package` 已具备
-- `unit / contract / integration` 三层测试结构已建立
-
-但作为"长期可演进的 C++ 网络库底座"，仍有几个关键缺口：
-
-- ~~取消语义和错误语义仍未统一~~ ✅ 已在 v5-alpha 中统一
-- ~~进程级优雅关闭与信号集成尚未闭环~~ ✅ 已在 v5-beta 中闭环
-- ~~地址模型仍偏 IPv4-only~~ ✅ 已在 v5-gamma 中补全为 IPv4/IPv6 双栈
-- ~~配置、可观测性仍偏轻~~ ✅ 已在 v5-delta 中补全
-- 工程护栏仍偏轻
-- 协议层和传输层解耦还不够彻底
-- client 生态能力仍不完整
-- README / docs / intent 存在阶段性漂移
-
----
-
-## 4. 路线图总览
-
-### G0：文档与 Intent 对齐
-
-目标：
-- 先收敛项目认知，不让实现、README、docs、intent 继续漂移
-
-主要模块 / 文件：
-- [README.md](/home/xyq/mini-trantor/README.md)
-- [intents/architecture/system_overview.intent.md](/home/xyq/mini-trantor/intents/architecture/system_overview.intent.md)
-- [intents/architecture/v3_stages.intent.md](/home/xyq/mini-trantor/intents/architecture/v3_stages.intent.md)
-- [docs/00_overview/00_project_summary.md](/home/xyq/mini-trantor/docs/00_overview/00_project_summary.md)
-- [docs/00_overview/01_architecture_overview.md](/home/xyq/mini-trantor/docs/00_overview/01_architecture_overview.md)
-
-测试关联：
-- 无新增 runtime 测试要求
-- 但后续 PR 必须能在 change description 中准确引用现有测试文件
-
-退出信号：
-- README、docs、intent 中的版本边界一致
-- 测试数量、语言标准、目录说明与仓库实际内容一致
-- 不再出现"文档声称存在、仓库实际不存在"的目录或能力
-
----
-
-### v5-alpha：统一取消与错误语义（已完成 ✅）
-
-当前状态：
-- ✅ 已退出（2026-04-25）。退出信号全部满足，61/61 测试通过。
-
-目标：
-- 建立全库一致的 cancellation 和 error surface
-
-为什么优先：
-- timeout、组合 awaitable、关闭路径、重试语义都依赖这一层
-
-主要模块：
-- [mini/net/TcpConnection.h](/home/xyq/mini-trantor/mini/net/TcpConnection.h)
-- [mini/net/detail/ConnectionAwaiterRegistry.h](/home/xyq/mini-trantor/mini/net/detail/ConnectionAwaiterRegistry.h)
-- [mini/coroutine/SleepAwaitable.h](/home/xyq/mini-trantor/mini/coroutine/SleepAwaitable.h)
-- [mini/coroutine/WhenAny.h](/home/xyq/mini-trantor/mini/coroutine/WhenAny.h)
-- [mini/net/NetError.h](/home/xyq/mini-trantor/mini/net/NetError.h)
-- [mini/net/DnsResolver.h](/home/xyq/mini-trantor/mini/net/DnsResolver.h)
-- [mini/coroutine/ResolveAwaitable.h](/home/xyq/mini-trantor/mini/coroutine/ResolveAwaitable.h)
-- [mini/coroutine/Task.h](/home/xyq/mini-trantor/mini/coroutine/Task.h)
-
-已完成项：
-- [已完成] 新增 [mini/coroutine/CancellationToken.h](/home/xyq/mini-trantor/mini/coroutine/CancellationToken.h)，其中同时提供 `CancellationToken` / `CancellationSource` / `CancellationRegistration`
-- [已完成] [mini/net/NetError.h](/home/xyq/mini-trantor/mini/net/NetError.h) 建立显式错误面，当前已覆盖 `PeerClosed` / `ConnectionReset` / `NotConnected` / `Cancelled` / `TimedOut` / `ResolveFailed`
-- [已完成] 新增 [mini/coroutine/Timeout.h](/home/xyq/mini-trantor/mini/coroutine/Timeout.h)，将 `WhenAny(asyncOp, asyncSleep(...))` 的常见 timeout race 收敛为统一 `NetError::TimedOut`
-- [已完成] [mini/coroutine/SleepAwaitable.h](/home/xyq/mini-trantor/mini/coroutine/SleepAwaitable.h) 接入 token cancel，并将取消映射为 `NetError::Cancelled`
-- [已完成] [mini/net/TcpConnection.h](/home/xyq/mini-trantor/mini/net/TcpConnection.h) / [mini/net/TcpConnection.cc](/home/xyq/mini-trantor/mini/net/TcpConnection.cc) 的 `asyncReadSome` / `asyncWrite` / `waitClosed` 已接入 token，并返回 `Expected<...>`
-- [已完成] [mini/net/detail/ConnectionAwaiterRegistry.h](/home/xyq/mini-trantor/mini/net/detail/ConnectionAwaiterRegistry.h) 具备 cancel waiter 路径，恢复仍通过 owner loop `queueInLoop()`
-- [已完成] [mini/coroutine/WhenAny.h](/home/xyq/mini-trantor/mini/coroutine/WhenAny.h) 已向 subtask 注入 cancellation token，并在 winner 确定后 `cancelLosers()`
-- [已完成] [mini/coroutine/Task.h](/home/xyq/mini-trantor/mini/coroutine/Task.h) 已支持把 cancellation token 绑定到 promise，供 awaitable 在 `await_suspend()` 时继承
-- [已完成] `TcpConnection` / `WhenAny` 相关 contract 测试已恢复到当前源码可编译、可通过的状态；此前暴露出的编译问题、悬空 capture 与脆弱竞态测试已收口
-- [已完成] [mini/net/DnsResolver.h](/home/xyq/mini-trantor/mini/net/DnsResolver.h) / [mini/coroutine/ResolveAwaitable.h](/home/xyq/mini-trantor/mini/coroutine/ResolveAwaitable.h) 已接入 `CancellationToken`，取消结果显式映射为 `NetError::Cancelled`
-
-未完成项：
-- [已完成] 深入说明类文档已补充 `withTimeout()` / `NetError::TimedOut` 使用示例（见 README）；旧的 "`WhenAny` 败者不取消" 表述已清理
-
-建议新增模块（按当前实现调整）：
-- [已完成] 不再需要单独新增 `mini/coroutine/CancellationSource.h`，当前已合并进 [mini/coroutine/CancellationToken.h](/home/xyq/mini-trantor/mini/coroutine/CancellationToken.h)
-- [可选] 若后续需要更清晰的 public API 边界，可再拆分 `CancellationSource.h`；这不是当前退出信号所必需
-
-优先覆盖的现有测试：
-- [tests/unit/coroutine/test_sleep_awaitable.cpp](/home/xyq/mini-trantor/tests/unit/coroutine/test_sleep_awaitable.cpp)
-- [tests/unit/coroutine/test_when_any.cpp](/home/xyq/mini-trantor/tests/unit/coroutine/test_when_any.cpp)
-- [tests/contract/coroutine/test_combinator_contract.cpp](/home/xyq/mini-trantor/tests/contract/coroutine/test_combinator_contract.cpp)
-- [tests/contract/tcp_connection/test_tcp_connection.cpp](/home/xyq/mini-trantor/tests/contract/tcp_connection/test_tcp_connection.cpp)
-- [tests/contract/dns/test_dns_contract.cpp](/home/xyq/mini-trantor/tests/contract/dns/test_dns_contract.cpp)
-
-建议新增测试：
-- [已完成] [tests/unit/coroutine/test_cancellation_token.cpp](/home/xyq/mini-trantor/tests/unit/coroutine/test_cancellation_token.cpp)
-- [已完成] [tests/contract/coroutine/test_cancellation_contract.cpp](/home/xyq/mini-trantor/tests/contract/coroutine/test_cancellation_contract.cpp)
-- [已完成] [tests/contract/coroutine/test_timeout_contract.cpp](/home/xyq/mini-trantor/tests/contract/coroutine/test_timeout_contract.cpp)
-- [已完成] [tests/integration/coroutine/test_timeout_race.cpp](/home/xyq/mini-trantor/tests/integration/coroutine/test_timeout_race.cpp)
-
-当前测试状态：
-- 已接入 CTest 的相关用例包括：
-  - [tests/unit/coroutine/test_cancellation_token.cpp](/home/xyq/mini-trantor/tests/unit/coroutine/test_cancellation_token.cpp)
-  - [tests/contract/coroutine/test_cancellation_contract.cpp](/home/xyq/mini-trantor/tests/contract/coroutine/test_cancellation_contract.cpp)
-  - [tests/contract/coroutine/test_combinator_contract.cpp](/home/xyq/mini-trantor/tests/contract/coroutine/test_combinator_contract.cpp)
-  - [tests/contract/coroutine/test_timeout_contract.cpp](/home/xyq/mini-trantor/tests/contract/coroutine/test_timeout_contract.cpp)
-  - [tests/contract/dns/test_dns_contract.cpp](/home/xyq/mini-trantor/tests/contract/dns/test_dns_contract.cpp)
-  - [tests/contract/tcp_connection/test_tcp_connection.cpp](/home/xyq/mini-trantor/tests/contract/tcp_connection/test_tcp_connection.cpp)
-  - [tests/integration/coroutine/test_timeout_race.cpp](/home/xyq/mini-trantor/tests/integration/coroutine/test_timeout_race.cpp)
-- 截至 2026-04-07 的定向验证结果：
-  - `unit.coroutine.test_cancellation_token` 通过
-  - `contract.coroutine.test_cancellation_contract` 通过
-  - `contract.coroutine.test_combinator_contract` 通过
-  - `contract.coroutine.test_timeout_contract` 通过
-  - `contract.dns.test_dns_contract` 通过
-  - `unit.dns.test_dns_resolver` 通过
-  - `integration.dns.test_dns_client` 通过
-  - `contract.tcp_connection.test_tcp_connection` 通过
-  - `integration.coroutine.test_timeout_race` 通过
-- 当前结论：v5-alpha 已退出。61/61 测试通过，退出信号全部满足。
-
-继续推进清单（已完成）：
-1. ~~同步修正文档漂移，至少更新 `WhenAny` 相关文档说明和 README 的阶段状态~~ ✅
-2. 复核是否还需要把 `withTimeout()` 上推到更多上层模块（如未来 HTTP client / handshake timeout）— 留待后续阶段
-3. ~~继续围绕关闭路径与 timeout/cancel 交错补充更高层集成 coverage~~ ✅
-
-退出信号：
-- `asyncReadSome`、`asyncWrite`、`asyncSleep`、DNS resolve、`WhenAny` 共享一致取消模型
-- 调用者可区分 peer close、timeout、主动 cancel、I/O error
-- close/error/cancel 路径不会 double-resume 或泄漏协程句柄
-
----
-
-### v5-beta：优雅关闭与信号集成（已完成 ✅）
-
-当前状态：
-- ✅ 已退出（2026-04-25）。退出信号全部满足。
-
-目标：
-- 让"服务如何停下来"成为库级 contract，而不是应用层临时约定
-
-主要模块：
-- [mini/net/EventLoop.h](/home/xyq/mini-trantor/mini/net/EventLoop.h)
-- [mini/net/TcpServer.h](/home/xyq/mini-trantor/mini/net/TcpServer.h)
-- [mini/net/TcpClient.h](/home/xyq/mini-trantor/mini/net/TcpClient.h)
-- [mini/net/Acceptor.h](/home/xyq/mini-trantor/mini/net/Acceptor.h)
-- [mini/net/EventLoopThreadPool.h](/home/xyq/mini-trantor/mini/net/EventLoopThreadPool.h)
-
-已新增模块：
-- [mini/net/SignalWatcher.h](/home/xyq/mini-trantor/mini/net/SignalWatcher.h) — 通过 signalfd + Channel 将 SIGINT/SIGTERM 接入 EventLoop
-
-已完成项：
-- [已完成] [mini/net/Acceptor.h](/home/xyq/mini-trantor/mini/net/Acceptor.h) / [mini/net/Acceptor.cc](/home/xyq/mini-trantor/mini/net/Acceptor.cc) 新增 `stop()` 方法：停止监听 Channel 并设 `listening_ = false`
-- [已完成] [mini/net/EventLoopThreadPool.h](/home/xyq/mini-trantor/mini/net/EventLoopThreadPool.h) / [mini/net/EventLoopThreadPool.cc](/home/xyq/mini-trantor/mini/net/EventLoopThreadPool.cc) 新增 `stop()` 方法：quit 所有 worker loops 并清理线程，重置 `next_` 为 0
-- [已完成] [mini/net/TcpServer.h](/home/xyq/mini-trantor/mini/net/TcpServer.h) / [mini/net/TcpServer.cc](/home/xyq/mini-trantor/mini/net/TcpServer.cc) 新增 `stop()` 方法：停止 Acceptor → forceClose 所有连接 → 停止线程池；添加显式 `stopped_` 标志保证幂等性
-- [已完成] [mini/net/SignalWatcher.h](/home/xyq/mini-trantor/mini/net/SignalWatcher.h) / [mini/net/SignalWatcher.cc](/home/xyq/mini-trantor/mini/net/SignalWatcher.cc) 通过 signalfd + Channel 将 SIGINT/SIGTERM 接入 EventLoop；构造时全局屏蔽 SIGPIPE；提供 `blockSignals()` / `ignoreSigpipe()` 静态方法
-- [已完成] [mini/net/Socket.h](/home/xyq/mini-trantor/mini/net/Socket.h) / [mini/net/Socket.cc](/home/xyq/mini-trantor/mini/net/Socket.cc) 新增 `releaseFd()` 方法支持 Acceptor::stop() 关闭监听 socket
-
-优先覆盖的现有测试：
-- [tests/contract/event_loop/test_event_loop.cpp](/home/xyq/mini-trantor/tests/contract/event_loop/test_event_loop.cpp)
-- [tests/contract/tcp_server/test_tcp_server.cpp](/home/xyq/mini-trantor/tests/contract/tcp_server/test_tcp_server.cpp)
-- [tests/contract/tcp_client/test_tcp_client.cpp](/home/xyq/mini-trantor/tests/contract/tcp_client/test_tcp_client.cpp)
-- [tests/integration/tcp_server/test_tcp_server_threaded.cpp](/home/xyq/mini-trantor/tests/integration/tcp_server/test_tcp_server_threaded.cpp)
-
-已新增测试：
-- [tests/unit/acceptor/test_acceptor_stop.cpp](/home/xyq/mini-trantor/tests/unit/acceptor/test_acceptor_stop.cpp) — Acceptor::stop() 单元测试
-- [tests/unit/event_loop_thread_pool/test_thread_pool_stop.cpp](/home/xyq/mini-trantor/tests/unit/event_loop_thread_pool/test_thread_pool_stop.cpp) — EventLoopThreadPool::stop() 单元测试（8 个场景）
-- [tests/contract/signal/test_signal_handling.cpp](/home/xyq/mini-trantor/tests/contract/signal/test_signal_handling.cpp) — SignalWatcher contract 测试
-- [tests/contract/tcp_server/test_shutdown_ordering.cpp](/home/xyq/mini-trantor/tests/contract/tcp_server/test_shutdown_ordering.cpp) — shutdown ordering contract 测试（6 个场景）
-- [tests/integration/tcp_server/test_graceful_shutdown.cpp](/home/xyq/mini-trantor/tests/integration/tcp_server/test_graceful_shutdown.cpp) — 优雅关闭集成测试
-
-退出信号：
-- ✅ SIGINT / SIGTERM 能安全唤醒 owner loop
-- ✅ 停止 accept、停止新建连接、关闭已有连接、退出 worker loops 的顺序明确
-- ✅ pending functors 与关闭路径不产生悬空 callback
-
-退出信号验证结果：
-- `unit.acceptor.test_acceptor_stop` 通过
-- `unit.event_loop_thread_pool.test_thread_pool_stop` 通过（8 个场景）
-- `contract.signal.test_signal_handling` 通过
-- `contract.tcp_server.test_shutdown_ordering` 通过（6 个场景）
-- `contract.tcp_server.test_tcp_server` 通过
-- `contract.event_loop_thread_pool.test_event_loop_thread_pool` 通过
-- `integration.tcp_server.test_graceful_shutdown` 通过（5 个场景）
-- 既有测试（contract.event_loop、integration.tcp_server、contract.tcp_client）无回归
-
----
-
-### v5-gamma：IPv6 与地址模型补全 ✅
-
-目标：
-- 把地址抽象从 IPv4-only 提升到可双栈使用
-
-已完成的变更：
-- `InetAddress` 内部存储从 `sockaddr_in` 升级为 `sockaddr_storage` + `sa_family_t family_`
-- 新增 IPv6 构造器：`InetAddress(string, port, bool ipv6)`、`InetAddress(const sockaddr_in6&)`、`InetAddress(const sockaddr_storage&)`
-- 新增 IPv6 访问器：`getSockAddrInet6()`、`setSockAddrInet6()`、`getSockAddr()`、`getSockAddrLen()`
-- 新增族查询：`family()`、`isIpv4()`、`isIpv6()`
-- `toIpPort()` 对 IPv6 使用 `[addr]:port` 括号表示法
-- `SocketsOps::createNonblockingOrDie()` 接受 `sa_family_t` 参数
-- `SocketsOps` 的 `bindOrDie`/`accept`/`getLocalAddr`/`getPeerAddr` 统一使用 `sockaddr_storage`
-- `Socket::setIpv6Only()` 声明和实现补齐
-- `Connector::connect()` 使用 family-aware 的 socket 创建和连接
-- `Connector::handleWrite()` 自连接检测支持 IPv4/IPv6
-- `DnsResolver` 使用 `AF_UNSPEC` 双栈解析，缓存从 `sockaddr_in` 升级为 `sockaddr_storage`
-- IPv4 所有现有 API 保持向后兼容
-
-已覆盖的测试：
-- `tests/unit/net/test_inet_address_ipv6.cpp` — IPv4/IPv6 构造、转换、括号解析
-- `tests/contract/tcp_client/test_tcp_client_ipv6.cpp` — IPv6 echo、地址族检测、括号表示法
-- `tests/integration/tcp_server/test_tcp_server_ipv6.cpp` — 多线程 IPv6 echo
-- 所有现有 IPv4 测试无回归
-
-退出信号：
-- 监听、主动连接、字符串化、DNS 结果消费均可覆盖 IPv4 / IPv6
-- 不破坏既有 IPv4 接口与测试
-
----
-
-### v5-delta：配置体系与可观测性 ✅
-
-目标：
-- 把硬编码参数和"只能靠读代码排查问题"的状态，升级为可配置、可观测的库能力
-
-已完成的变更：
-- `ConnectorOptions` 结构体：initRetryDelay / maxRetryDelay / connectTimeout / enableRetry
-- `DnsResolverOptions` 结构体：numWorkerThreads / cacheTtl / enableCache
-- `TcpServerOptions` 结构体：numThreads / idleTimeout / backpressureHighWaterMark / backpressureLowWaterMark / reusePort
-- `TcpClientOptions` 结构体：内嵌 ConnectorOptions + retry
-- `MetricsHook` 回调接口：ConnectionEvent / BackpressureEvent / ConnectorEvent / TlsEvent 四类事件枚举
-- `TcpServer` hook 注入：setConnectionEventCallback / setBackpressureEventCallback / setTlsEventCallback
-- `TcpClient` hook 注入：setConnectorEventCallback / setConnectionEventCallback / setTlsEventCallback
-- `Connector` 连接超时：connectTimeout > 0 时注册 EventLoop 定时器，超时走正常失败路径
-- `TcpServer` drain-aware stop：stop(Duration drainTimeout) 等待在飞连接关闭
-- `ConnectionBackpressureController` 触发 BackpressureEvent hook
-- `ConnectionTransport` TLS 握手完成/失败触发 TlsEvent hook
-- 所有现有 API 保持向后兼容（原构造函数签名不变）
-- 所有 hook 在 owner loop 线程调用
-
-已覆盖的测试：
-- `tests/contract/net/test_options_contract.cpp` — Options 默认值/自定义值/验证/传播/向后兼容
-- `tests/contract/net/test_metrics_hook_contract.cpp` — ConnectionEvent/ConnectorEvent hook 触发/无 hook 行为不变
-- 所有现有 IPv4/IPv6/TLS/DNS 测试无回归
-
-退出信号：
-- 重连、DNS、背压、poll timeout 等关键参数可显式配置
-- 连接建立、关闭、超时、重试、握手失败等关键事件有 hook
-- 观测能力不破坏 owner-thread 纪律
-
----
-
-### v5-epsilon：协议层与传输层进一步解耦 ✅ COMPLETE
-
-目标：
-- 给 HTTP client、更多协议适配和未来替代传输打抽象基础
-
-实现情况：
-
-**新增文件：**
-- [mini/net/ProtocolConnection.h](/home/xyq/mini-trantor/mini/net/ProtocolConnection.h) — `IProtocolConnection` 窄接口
-- [mini/net/ProtocolConnectionAdapter.h](/home/xyq/mini-trantor/mini/net/ProtocolConnectionAdapter.h) — `ProtocolConnectionAdapter` 适配器
-- [mini/net/ProtocolConnectionAdapter.cc](/home/xyq/mini-trantor/mini/net/ProtocolConnectionAdapter.cc) — 适配器实现
-- [tests/unit/net/test_protocol_connection_adapter.cpp](/home/xyq/mini-trantor/tests/unit/net/test_protocol_connection_adapter.cpp) — 7 个单元测试全通过
-- [tests/contract/http/test_http_transport_contract.cpp](/home/xyq/mini-trantor/tests/contract/http/test_http_transport_contract.cpp) — 4 个 HTTP transport contract 测试全通过
-
-**修改文件：**
-- [mini/http/HttpServer.h](/home/xyq/mini-trantor/mini/http/HttpServer.h) / `.cc` — 迁移到 ProtocolConnectionAdapter；onRequest 签名改为 `IProtocolConnection*`；新增 `stop()`
-- [mini/ws/WebSocketServer.cc](/home/xyq/mini-trantor/mini/ws/WebSocketServer.cc) — 迁移到 ProtocolConnectionAdapter
-- [mini/rpc/RpcChannel.cc](/home/xyq/mini-trantor/mini/rpc/RpcChannel.cc) — respond/respondError 使用 `shared_ptr<ProtocolConnectionAdapter>`
-- [mini/rpc/RpcServer.cc](/home/xyq/mini-trantor/mini/rpc/RpcServer.cc) — 迁移到 ProtocolConnectionAdapter
-
-退出信号：✅ 全部满足
-- 协议层不再依赖 `TcpConnection` 的过多内部细节（send/shutdown/forceClose/setContext 通过 adapter 完成）
-- 传输、缓冲、编解码边界更清晰
-- 所有 WS / RPC contract + integration 测试无回归
-- HTTP transport contract 测试 T1~T4 全通过
-
----
-
-### v5-zeta：工程护栏补齐
-
-目标：
-- 让项目从"能开发"进化到"敢长期维护"
-
-主要文件：
-- [CMakeLists.txt](/home/xyq/mini-trantor/CMakeLists.txt)
-- [tests/CMakeLists.txt](/home/xyq/mini-trantor/tests/CMakeLists.txt)
-- [.github/PULL_REQUEST_TEMPLATE.md](/home/xyq/mini-trantor/.github/PULL_REQUEST_TEMPLATE.md)
-
-建议新增文件：
-- `.github/workflows/ci.yml`
-- `cmake/Sanitizers.cmake`
-- `tests/fuzz/http/fuzz_http_context.cpp`
-- `tests/fuzz/ws/fuzz_ws_codec.cpp`
-- `benchmarks/`
-
-建议先覆盖：
-- 全部现有 `unit / contract / integration` 测试进入 CI
-- 关键并发与生命周期测试进入 ASan / UBSan
-
-退出信号：
-- 每次提交自动验证 build、ctest、install、sanitizer
-- HTTP / WS parser 具备基础 fuzz 入口
-- 核心路径具备基准测试基线
-
----
-
-### v6-alpha：客户端生态与上层复用能力
-
-目标：
-- 在底座语义稳定后，再补真正能被上层服务大量复用的 client 生态能力
-
-主要模块：
-- [mini/net/TcpClient.h](/home/xyq/mini-trantor/mini/net/TcpClient.h)
-- [mini/http/HttpContext.h](/home/xyq/mini-trantor/mini/http/HttpContext.h)
-- [mini/rpc/RpcClient.h](/home/xyq/mini-trantor/mini/rpc/RpcClient.h)
-
-建议新增模块：
-- `mini/http/HttpClient.h`
-- `mini/rpc/RpcConnectionPool.h`
-- `mini/rpc/ServiceDiscovery.h`
-
-建议新增测试：
-- `tests/contract/http/test_http_client.cpp`
-- `tests/integration/http/test_http_client.cpp`
-- `tests/contract/rpc/test_rpc_client_pool.cpp`
-
-退出信号：
-- HTTP client 主链路可用
-- RPC 侧至少具备连接池或服务发现中的一条稳定主线
-- client 生态不绕开现有 Reactor / EventLoop 纪律
-
----
-
-### G1：Scope hardening / boundary split（当前收口）
-
-目标：
-- 暂停核心功能膨胀，把当前项目明确收口为 `game-network foundation + explicit transport preview`
-- 让读者可以从真实示例和架构图理解游戏网络底座边界
-- 保持 KCP/PMTU/FEC 类能力为 preview/experimental，而不是 core roadmap 主线
-
-主要模块 / 文件：
-- [intents/architecture/game_network_base_scope.intent.md](/home/xyq/mini-trantor/intents/architecture/game_network_base_scope.intent.md)
-- [docs/game_server_network_base_scope_boundary.md](/home/xyq/mini-trantor/docs/game_server_network_base_scope_boundary.md)
-- [docs/00_overview/01_architecture_overview.md](/home/xyq/mini-trantor/docs/00_overview/01_architecture_overview.md)
-- [README.md](/home/xyq/mini-trantor/README.md)
-- [examples/game_server/main.cpp](/home/xyq/mini-trantor/examples/game_server/main.cpp)
-- [tests/CMakeLists.txt](/home/xyq/mini-trantor/tests/CMakeLists.txt)
-
-测试 / 验证关联：
-- `cmake --build build --target game_server`
-- [tests/integration/game/test_game_server_vertical_slice.cpp](/home/xyq/mini-trantor/tests/integration/game/test_game_server_vertical_slice.cpp)
-- `transport-experimental` / `kcp-preview` / `pmtu-preview` 测试标签继续默认构建
-
-退出信号：
-- `game_server` 示例入口可编译，展示 `framed packet -> auth/session -> logic -> response/broadcast`
-- README、overview、scope intent 对 KCP/PMTU/FEC 的 preview 边界表述一致
-- AOI、账号、安全平台、分布式网关、生产 FEC/拥塞控制默认进入 adapter/example/downstream，而不是 core
-- 后续变更能在 change description 中回答 scope gate 与 core-module change gate
-
----
-
-## 5. 建议执行顺序
-
-建议按下面顺序推进：
-
-1. `G0 + v5-alpha`
-2. `v5-beta`
-3. `v5-gamma`
-4. `v5-delta`
-5. `v5-zeta`
-6. `v5-epsilon`
-7. `G1 scope hardening / boundary split`
-8. `v6-alpha`
-
-说明：
-- `G0` 与 `v5-alpha` 可以并行，因为它们分别修"认知一致性"和"运行时一致性"
-- `v5-beta` 应早于更高层协议扩展，否则关闭语义会在更多模块里复制扩散
-- `v5-gamma` 应早于 HTTP client / 更强 client 生态，否则地址模型会在新增 API 中固化
-- `v5-delta` 与 `v5-zeta` 可以部分并行，但前者更偏库能力，后者更偏工程护栏
-- `v5-epsilon` 放在 client 生态前，避免上层能力继续绑定现有传输细节
-- `G1` 放在继续扩展前，避免 KCP/PMTU/FEC 或游戏业务层能力继续被误认为 core 主线
-
----
-
-## 6. 每阶段通用变更要求
-
-每个阶段的实现和 review 都应回答以下问题：
-
-1. 这个变化增强的是哪一层 contract？
-2. 哪个 loop / thread 拥有新增状态？
-3. 谁拥有它，谁释放它？
-4. 哪些回调可能重入？
-5. 哪些操作允许跨线程，如何 marshal？
-6. 哪个测试文件直接验证新能力？
-7. 哪份 intent、文档、图需要同步更新？
-
----
-
-## 7. 与现有测试结构的映射
-
-本路线图默认继续沿用现有测试规则：
-
-- `tests/unit/`：验证局部状态机、小不变量、边界条件
-- `tests/contract/`：验证 public API、线程亲和、生命周期、回调顺序
-- `tests/integration/`：验证端到端主链路
-
-新增能力时，应优先复用现有模块目录：
-
-- coroutine 相关变更优先落到 `tests/unit/coroutine/`、`tests/contract/coroutine/`
-- TcpConnection / transport 相关变更优先落到 `tests/unit/net/`、`tests/contract/tcp_connection/`
-- server / client 生命周期变更优先落到 `tests/contract/tcp_server/`、`tests/contract/tcp_client/`
-- 协议层变更优先落到 `tests/contract/http/`、`tests/contract/ws/`、`tests/contract/rpc/`
-
----
-
-## 8. 里程碑判断
-
-如果只允许做三件事，优先级建议如下：
-
-1. `v5-alpha`：统一取消与错误语义
-2. `v5-beta`：优雅关闭与信号集成
-3. `v5-gamma`：IPv6 与地址模型补全
-
-这三项完成后，mini-trantor 作为"通用 C++ 网络库底座"的可信度会明显提升。
+# 研发路线：先形成可信的小型 Reactor
+
+本路线替代历史 v2–v6 与游戏网络 M1–M32 的功能扩张路线。
+阶段以退出证据推进，不按版本编号递增或模块数量推进。
+
+## 目标与取舍
+
+交付一套可以讲清、测试和维护的 TCP Reactor：接收连接、处理字节、跨线程投递、
+关闭并释放资源。协程只适配这些语义；游戏会话、房间、AOI、账号、应用协议和服务调度
+由应用层负责。Linux 为第一验证平台，Windows 保留可测试的预览后端。
+
+保留 TimerQueue、基础背压和 TLS 接点的理由是已有 TCP 超时、资源控制和连接机制依赖它们。
+不能为了恢复早期目录而倒退到没有超时和关闭约束的实现。
+
+## S0：裁剪与证据重置（本次）
+
+- 移除游戏框架、协议生态、自研 KCP/PMTU/FEC 源码、安装 API 和专属测试。
+- TcpServer 撤掉广播、session/group/AOI 以及 logic callback。
+- 基础 MetricsHook 撤掉游戏、UDP 和广播类型，停止发展 metrics exporter。
+- TLS 默认关闭；安装包仅请求所需依赖。
+- 修复 Release 断言、PR 触发分支、机器绝对路径和提交构建缓存的问题。
+- 修复本次定位的 EventLoop 队列启动、活动 Channel 移除、重复 loop 创建资源泄漏，
+  以及 TcpServer 关闭 hook 的线程和次数问题。
+- 建立当前理解文档与审计账本；旧文档进入 archive。
+
+退出证据：裁剪边界由源码扫描及安装消费测试验证；保留测试全量运行。
+具体结果以审计记录为准。S0 完成不意味着以下安全债务已完成。
+
+## S1：正确性阻塞项，暂停新增功能
+
+| 顺序 | 任务 | 必须守住的合同 | 退出证据 |
+| --- | --- | --- | --- |
+| 1 | 协程挂起帧注销 | Task 提前销毁后，timer/I/O/queued resume/cancel 不访问失效 handle；先定义谁能销毁、在哪个 loop 销毁 | `tests/contract/coroutine/test_task_lifetime.cpp`；sleep/read/write/close、完成队列交错的 ASan 回归 |
+| 2 | await_suspend 发布顺序 | 跨线程 arming 后不能继续访问可能已恢复/销毁的 awaiter；注册/取消 state 只能在 owner loop 修改 | `tests/contract/coroutine/test_suspend_publication.cpp`；显式同步构造竞争，TSan 验证 |
+| 3 | DNS 关闭、缓存重入与取消注册 | cache hit 用户回调不在 cacheMutex 内执行；callbackLoop 活到最后一次投递；registration 初始化/注销不得竞争 | `tests/contract/dns/test_dns_lifetime.cpp`；cache callback 调 clearCache、pending resolve 后停 loop，并关闭已有 TSan 失败 |
+| 4 | 线程启停状态机 | startLoop 不能因 init callback 提前 quit 永久等待；失败可回传；pool 不通过失效的裸 loop 指针 stop | `tests/contract/event_loop_thread/test_start_stop_failure.cpp`；init-quit、init-throw、早退、重复 stop |
+| 5 | 关闭、重入和异常策略 | 分清“回调发起 close/stop”与“在回调中销毁 owner”；事件批处理、析构、drain deadline 有一致规则 | 扩展 `test_shutdown_ordering.cpp`、`test_connection_event_contract.cpp` 与 Channel failure contracts |
+| 6 | TLS 对端身份 | 客户端默认验证证书链；hostname 同时用于名称校验；明确不验证模式 | 新增不可信证书及 hostname mismatch 拒绝合同，不能只证明自签 echo 成功 |
+
+表内新测试文件名为待实施任务，不宣称已经存在。
+S1 退出要求：所有已登记 P0 有回归，Linux Debug/Release 与 ASan/UBSan 全量通过，
+TSan 全量通过并保存证据。本次已实跑 49/57，8 个失败入口及分诊见[审计记录](audit_2026-09-12.md#71-tsan-失败分诊)；
+逐项修复库合同、测试同步或证明工具链归因，不能以排除/suppressions 代替关闭。
+环境无法运行 TSan 时保持缺口，不记作通过。
+所有新测试避免用 sleep 猜时序，优先 promise/barrier、可控 I/O 和确定的阶段边界。
+
+## S2：可发布的最小 TCP 基线
+
+依赖 S1 退出；每次只做一个边界清楚的变更。
+
+1. 定义 queued work 在 quitting/stopped 时是否接受及如何反馈；外部生产者先停再销毁 loop。
+2. 明确配置 API 何时可调用；统一 0 worker = base-loop 的含义和非法配置校验。
+3. 完整验证 half-close、慢读者、输出硬上限、accept 公平性、连接拒绝和 FD 耗尽。
+4. 把 Windows TCP server/client、关闭、backpressure 测试从编译预览扩展为行为验证；
+   select 容量上限保持显式，不开始 IOCP/io_uring 后端扩张。
+5. 固化两个小示例：callback echo 和受生命周期约束的 coroutine echo。
+
+退出要求：当前 API 都有合同映射；安装可从全新前缀消费；Linux/Windows 的支持差异
+有明确列表；关闭后 socket、Channel、timer、coroutine frame 数量回到基线。
+
+## S3：负载证据与 0.1 发布候选
+
+- 建立 TCP 请求/响应吞吐与 p50/p95/p99 延迟基线，记录硬件、编译模式、线程数、负载模型。
+- 增加慢读者、突发连接、反复重连、停服期间写入的 soak；记录 RSS/FD/排队量，而非只测 echo 成功。
+- PacketFramer fuzz 保存语料和最小化失败；smoke 次数不等于安全结论。
+- 达到预先写下的资源和延迟阈值后，再考虑优化；禁止先写 lock-free、payload pool 或批量广播。
+
+发布门槛：S1 无未关闭阻塞项，S2 合同与平台矩阵完整，S3 有可复现基线和至少一轮
+持续运行记录。未满足前不重新标注 Stable。
+
+## 明确撤销的研发方向
+
+| 原方向 | 决策 | 重新进入的前提 |
+| --- | --- | --- |
+| Session/Pipeline/LogicLoop/AOI/安全策略 | 不再属于本库；应用工程自行组织 | 下游真实需求，独立仓库或适配工程，core 不持有业务类型 |
+| KCP、SACK、PMTU、raw ICMP、FEC、拥塞调优 | 撤销自研生产化路线，源码退出 | 如有真实可靠 UDP 需求，先写独立 ADR、互操作和失败模型，再评估外部实现适配 |
+| HTTP/WS/RPC、HttpClient、RPC pool | 停止客户端生态扩张，移出发布包 | TCP 基线发布后，由独立扩展消费窄接口，无反向依赖 |
+| transport manager/session/channel 多层统一抽象 | 撤销预先统一多种协议的工作 | 至少两个真实消费者证明存在相同合同；不能以未来想象驱动 |
+| metrics exporter、观测平台 | 仅留必要 hook，移除业务指标聚合 | 应用侧实现导出；新 hook 必须服务具体诊断问题并量化成本 |
+
+## 日常研发规则
+
+一次任务先给出一个失败场景、一个 invariant 和一份可执行验收，再写代码。
+当前方向以 `reactor_scope_reset.intent.md` 为准；历史文档不构成新增功能授权。
+变更说明必须回答五项 core gate，并列出未验证部分。不得以减少测试来处理保留能力的失败。

@@ -4,12 +4,37 @@
 #include <cassert>
 #include <chrono>
 #include <future>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
 using namespace std::chrono_literals;
 
 int main() {
+    // Work accepted before loop() must not wait for the default ten-second poll.
+    {
+        mini::net::EventLoop loop;
+        const auto began = std::chrono::steady_clock::now();
+        bool ran = false;
+        loop.queueInLoop([&] { ran = true; loop.quit(); });
+        loop.loop();
+        assert(ran);
+        assert(std::chrono::steady_clock::now() - began < 1s);
+    }
+
+    // A callback cannot enter a second dispatch cycle on the same loop.
+    {
+        mini::net::EventLoop loop;
+        bool rejected = false;
+        loop.queueInLoop([&] {
+            try { loop.loop(); }
+            catch (const std::logic_error&) { rejected = true; }
+            loop.quit();
+        });
+        loop.loop();
+        assert(rejected);
+    }
+
     {
         mini::net::EventLoop loop;
         bool ran = false;

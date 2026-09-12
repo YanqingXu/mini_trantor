@@ -44,8 +44,10 @@ uint16_t allocateTestPort() {
 mini::coroutine::Task<void> echoSessionWithTimeout(
     mini::net::TcpConnectionPtr connection,
     std::chrono::steady_clock::duration idleTimeout,
-    std::promise<std::string>* closeReason) {
+    std::promise<std::string>* closeReason,
+    std::promise<void>* waitingForClose = nullptr) {
     mini::net::EventLoop* loop = connection->getLoop();
+    bool echoed = false;
 
     while (connection->connected()) {
         // Set idle timeout: if no data arrives, force close.
@@ -55,6 +57,12 @@ mini::coroutine::Task<void> echoSessionWithTimeout(
             }
         });
 
+        // The peer may otherwise close while asyncWrite is suspended, which is
+        // valid but takes a different exit branch. Synchronize the read scenario.
+        if (echoed && waitingForClose) {
+            waitingForClose->set_value();
+            waitingForClose = nullptr;
+        }
         auto result = co_await connection->asyncReadSome();
 
         // Cancel the idle timer (data arrived or connection closed).
@@ -66,6 +74,7 @@ mini::coroutine::Task<void> echoSessionWithTimeout(
         }
 
         co_await connection->asyncWrite(std::move(*result));
+        echoed = true;
     }
 
     closeReason->set_value("disconnected");
@@ -82,17 +91,19 @@ int main() {
 
         std::promise<std::string> closeReason;
         auto closeReasonFuture = closeReason.get_future();
+        std::promise<void> waitingForClose;
+        auto waitingForCloseFuture = waitingForClose.get_future().share();
 
         server.setConnectionCallback([&](const mini::net::TcpConnectionPtr& conn) {
             if (conn->connected()) {
-                echoSessionWithTimeout(conn, 500ms, &closeReason).detach();
+                echoSessionWithTimeout(conn, 500ms, &closeReason, &waitingForClose).detach();
             } else {
                 loop.quit();
             }
         });
         server.start();
 
-        std::thread client([port] {
+        std::thread client([port, waitingForCloseFuture] {
             const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
             assert(fd >= 0);
             sockaddr_in addr{};
@@ -109,6 +120,8 @@ int main() {
             const ssize_t n = ::read(fd, buf, sizeof(buf));
             assert(n == static_cast<ssize_t>(payload.size()));
             assert(std::string(buf, static_cast<std::size_t>(n)) == payload);
+
+            assert(waitingForCloseFuture.wait_for(2s) == std::future_status::ready);
 
             ::close(fd);
         });

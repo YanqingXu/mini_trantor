@@ -21,6 +21,7 @@ It is the lifecycle boundary between listening infrastructure and per-connection
 - does not perform per-connection I/O itself
 - does not own worker EventLoop objects directly beyond thread-pool coordination
 - does not process application protocol payloads
+- does not own session/group/AOI routing, broadcast pools, or logic-thread callbacks
 
 ---
 
@@ -38,6 +39,11 @@ It is the lifecycle boundary between listening infrastructure and per-connection
 - newConnection/removeConnectionInLoop run on base loop thread
 - connectEstablished/connectDestroyed run on owning connection loop
 - cross-loop handoff happens only through EventLoop scheduling APIs
+- start(), stop(), and destruction require the base loop thread
+- force-close hooks and close-callback detachment execute on the connection owner loop
+- ConnectionEvent::Disconnected is emitted once through the connection callback
+- HandshakeStarted follows the same owner-loop contract as other TLS events
+- numThreads counts workers excluding the base loop; zero selects the base loop
 
 ---
 

@@ -1,145 +1,66 @@
-# System Intent: mini-trantor Overview
+# System Intent: mini-trantor
 
-## 1. Intent
-mini-trantor is a small reactor-style C++ network library inspired by trantor.
-Its purpose is to provide a minimal but structurally correct networking foundation
-for learning, extension, coroutine integration, and AI-assisted engineering.
+## Intent
 
-This project is not intended to be a feature-complete production framework in v1.
-Its primary value is architectural correctness and evolvability.
+mini-trantor is a small, auditable C++23 Reactor TCP library. Its value is clear
+thread ownership, resource lifetime, executable contracts and a coroutine bridge
+that preserves EventLoop scheduling. The current scope authority is
+[Reactor Scope Reset](reactor_scope_reset.intent.md), and the execution stages are
+[the current roadmap](../../docs/roadmap.md), S0 through S3.
 
----
+## Responsibilities
 
-## 2. Core Architectural Style
-- Reactor pattern
-- Event-driven I/O
-- One EventLoop per thread
-- Poller-backed active event dispatch
-- Channel as fd-event binding abstraction
-- Explicit lifecycle and thread-affinity rules
-- Coroutine-ready extension design, but not coroutine-first core
+- Bind one EventLoop to one thread and drive I/O, timers and queued work there.
+- Provide TCP accept/connect, connection buffers, callbacks and explicit teardown.
+- Scale with EventLoopThread/ThreadPool without sharing unsynchronized reactor state.
+- Keep TimerQueue and basic backpressure as TCP runtime support.
+- Preserve a small coroutine bridge; fix cancellation/frame lifetime before expansion.
+- Maintain optional TLS, existing DNS and a byte-only PacketFramer with explicit limits.
 
----
+## Non-responsibilities
 
-## 3. Core Modules
-### Mandatory v1 foundation modules
-- Channel
-- Poller
-- EPollPoller
-- EventLoop
-- TimerQueue
-- Buffer
-- Acceptor
-- TcpConnection
-- TcpServer
-- EventLoopThread
-- EventLoopThreadPool
-- Coroutine adapters / awaitables
-- Task abstraction
+Game sessions, room/AOI state, business schedulers, account/security systems,
+HTTP/WebSocket/RPC ecosystems, custom reliable UDP/PMTU/FEC and observability
+platforms are outside this library. Historical implementations and intents are
+archived; their prior existence does not authorize adding them back to core.
+Linux is the primary verification platform; Windows select is a preview backend.
 
-### Deferred until after v1-coro-preview
-- Async timers
-- Metrics/tracing hooks
-- Backpressure policies
+## Invariants
 
-### Staged boundary
-- `v1-alpha`: synchronous Reactor mainline is stable
-- `v1-beta`: threading model is stable
-- `v1-coro-preview`: coroutine bridge runs through on top of Reactor semantics
+1. One loop has exactly one owner thread; mutable reactor state belongs there.
+2. EventLoop owns Poller, TimerQueue and wakeup resources. Poller borrows Channel.
+3. Channel does not own its fd or loop; registration and active-batch borrowing
+   must end before destruction.
+4. TcpConnection owns Socket, Channel and buffers, but borrows its EventLoop.
+5. Server connection bookkeeping belongs to base loop; I/O and close events to ioLoop.
+6. Cross-thread mutations return through runInLoop/queueInLoop; wakeup is a signal.
+7. Coroutine handles and callback targets require lifetime protocols beyond shared_ptr.
+8. Source, installed interfaces, tests and current documentation describe the same scope.
 
-Detailed stage contracts are defined in `v1_stages.intent.md`.
+## Priorities and failure semantics
 
----
+Lifecycle safety, thread affinity, API clarity and debuggability precede feature
+breadth or optimization. Runtime I/O failures, program contract violations and
+backend registration failures must remain distinguishable. Do not replace these
+contracts with a generic error framework or silently swallow callback failures.
 
-## 4. Architectural Priorities
-Priority order in v1:
-1. lifecycle safety
-2. thread-affinity correctness
-3. API clarity
-4. debuggability
-5. extensibility
-6. performance optimization
+Known open risks are documented in the audit, particularly coroutine destruction,
+DNS re-entry/loop lifetime, thread startup failure and TLS peer identity. None of
+the current modules has a new Stable release claim based solely on passing tests.
 
-Performance matters, but not at the cost of unclear ownership or hidden thread behavior.
+## Ownership, threading and review
 
----
+Follow [lifetime rules](lifetime_rules.intent.md), [threading model](threading_model.intent.md),
+[ownership rules](../../rules/ownership_rules.md) and [thread affinity rules](../../rules/thread_affinity_rules.md).
+Every core change answers owner thread, owner/releaser, re-entry, cross-thread
+marshaling and the exact verifying test files. Lifecycle changes require diagrams.
 
-## 5. Core Invariants
-- Each EventLoop is bound to exactly one thread
-- Poller is only used by its owner EventLoop
-- Channel belongs to exactly one EventLoop
-- registration state must remain consistent between Poller and Channel lifecycle
-- cross-thread mutation of core loop state is forbidden except via approved scheduling APIs
-- lifecycle-sensitive callbacks must not run on already-destroyed upper-layer objects
+## Contracts and extension points
 
----
-
-## 6. Threading Model Summary
-- single EventLoop owns mutable loop state
-- cross-thread requests are marshaled back into loop thread
-- wakeup mechanism is used to interrupt poll wait when necessary
-- loop-thread discipline replaces widespread locking in core path
-
-Detailed rules are defined in threading_model.intent.md and thread_affinity_rules.md.
-
----
-
-## 7. Ownership Model Summary
-- EventLoop owns Poller
-- Poller does not own Channel
-- Channel does not own fd by default
-- upper-layer objects own business semantics
-- lower-layer objects should not assume business object lifetime
-
-Detailed rules are defined in lifetime_rules.intent.md and ownership_rules.md.
-
----
-
-## 8. Public API Philosophy
-Public APIs should:
-- be narrow
-- map clearly to reactor semantics
-- preserve owner-thread execution guarantees
-- be testable by contract
-- avoid exposing backend-specific complexity
-
----
-
-## 9. Failure Semantics
-The core should distinguish:
-- programming contract violations
-- runtime I/O failures
-- backend registration failures
-- recoverable vs non-recoverable states
-
-v1 should prefer explicit logging + safe shutdown/guard behavior
-over overly abstract error modeling.
-
----
-
-## 10. Non-Goals for v1
-- full cross-platform backend support
-- SSL/TLS
-- full HTTP/WebSocket protocol layer
-- high-level business RPC framework
-- complex coroutine cancellation graph
-- lock-free everywhere design
-
----
-
-## 11. Expected Learning Outcome
-After v1, a reader should be able to understand:
-- reactor architecture
-- fd event registration and dispatch
-- thread-affinity discipline
-- connection lifecycle management
-- how coroutine integration can be layered on top safely
-
----
-
-## 12. Review Questions
-- Does this module fit reactor architecture cleanly?
-- Does this change preserve v1 priorities?
-- Does it introduce backend leakage?
-- Does it create lifecycle ambiguity?
-- Does it damage future coroutine integration points?
+Tests cover unit logic, public contracts, failure paths, lifecycle and cross-thread
+behavior. Assertions must execute in Release. All retained tests run in applicable
+configurations; optional TLS tests depend on TLS availability, not desired results.
+Installed-package tests validate dependency selection and exclusion of retired APIs.
+Applications extend through connection/message callbacks or framing, without making
+core own business state. New backends and coroutine mechanisms require evidence
+from real consumers and must pass existing reactor contracts.

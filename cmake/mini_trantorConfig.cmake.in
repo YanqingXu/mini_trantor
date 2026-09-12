@@ -2,6 +2,8 @@
 
 include(CMakeFindDependencyMacro)
 find_dependency(Threads)
-find_dependency(OpenSSL)
+if(@MINI_ENABLE_TLS@)
+    find_dependency(OpenSSL)
+endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/mini_trantorTargets.cmake")

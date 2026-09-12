@@ -1,0 +1,147 @@
+TSan audit snapshot: Clang 18.1.3 / libc++ 18, Debug, TLS OFF
+Flags: -stdlib=libc++ -fexperimental-library; MINI_ENABLE_TSAN=ON
+57 tests executed: 49 passed, 8 failed. No suppressions or test exclusions.
+
+TEST unit.event_loop_thread_pool.test_thread_pool_stop
+WARNING: ThreadSanitizer: data race (pid=1604)
+Write of size 8 at 0x72b0000000e0 by thread T4:
+  mini/net/platform/SocketsOps_linux.cc:89:9
+  mini/net/platform/Wakeup_linux.cc:22:5
+  mini/net/EventLoop.cc:57:5
+Previous read of size 8 at 0x72b0000000e0 by main thread:
+  mini/net/platform/SocketsOps_linux.cc:132:12
+  mini/net/platform/Wakeup_linux.cc:30:12
+  mini/net/EventLoop.cc:166:29
+
+TEST contract.timer_queue.test_timer_queue
+WARNING: ThreadSanitizer: data race (pid=1661)
+Read of size 8 at 0x7ffc15f3c890 by thread T4:
+  tests/contract/timer_queue/test_timer_queue.cpp:60:30
+  mini/net/TimerQueue.cc:113:13
+  mini/net/EventLoop.cc:81:22
+Previous write of size 8 at 0x7ffc15f3c890 by main thread:
+  tests/contract/timer_queue/test_timer_queue.cpp:57:19
+  mini/net/EventLoopThread.cc:27:15
+  tests/contract/timer_queue/test_timer_queue.cpp:50:49
+
+TEST contract.coroutine.test_sleep_awaitable
+WARNING: ThreadSanitizer: data race (pid=1732)
+Read of size 8 at 0x7ffd17afa7f0 by main thread:
+  tests/contract/coroutine/test_sleep_awaitable.cpp:80:9
+Previous write of size 8 at 0x7ffd17afa7f0 by thread T2:
+  tests/contract/coroutine/test_sleep_awaitable.cpp:70:23
+  mini/coroutine/Task.h:199:19
+  tests/contract/coroutine/test_sleep_awaitable.cpp:76:40
+
+TEST contract.coroutine.test_sleep_awaitable
+WARNING: ThreadSanitizer: data race (pid=1732)
+Read of size 1 at 0x721800000090 by main thread:
+  tests/contract/coroutine/test_sleep_awaitable.cpp:81:9
+Previous write of size 8 at 0x721800000090 by thread T2:
+  mini/coroutine/SleepAwaitable.h:35:18
+  mini/coroutine/SleepAwaitable.h:128:12
+  tests/contract/coroutine/test_sleep_awaitable.cpp:69:30
+
+TEST contract.coroutine.test_sleep_awaitable
+WARNING: ThreadSanitizer: data race (pid=1732)
+Read of size 8 at 0x7ffd17afa7f8 by main thread:
+  tests/contract/coroutine/test_sleep_awaitable.cpp:86:34
+Previous write of size 8 at 0x7ffd17afa7f8 by thread T2:
+  tests/contract/coroutine/test_sleep_awaitable.cpp:70:23
+  mini/coroutine/Task.h:199:19
+  tests/contract/coroutine/test_sleep_awaitable.cpp:76:40
+
+TEST contract.coroutine.test_sleep_awaitable
+WARNING: ThreadSanitizer: data race (pid=1732)
+Atomic write of size 8 at 0x721800000068 by main thread:
+  tests/contract/coroutine/test_sleep_awaitable.cpp:86:34
+Previous write of size 8 at 0x721800000068 by thread T2:
+  mini/coroutine/SleepAwaitable.h:35:18
+  mini/coroutine/SleepAwaitable.h:128:12
+  tests/contract/coroutine/test_sleep_awaitable.cpp:69:30
+
+TEST contract.connector.test_connector
+WARNING: ThreadSanitizer: data race (pid=1621)
+Write of size 1 at 0x7248000000c4 by main thread:
+  mini/net/Connector.cc:66:14
+  tests/contract/connector/test_connector.cpp:148:24
+Previous read of size 1 at 0x7248000000c4 by thread T4:
+  mini/net/Connector.cc:268:9
+  mini/net/Connector.cc:236:5
+  mini/net/Connector.cc:145:41
+
+TEST contract.coroutine.test_cancellation_contract
+WARNING: ThreadSanitizer: data race (pid=1763)
+Read of size 1 at 0x7230000060b0 by main thread:
+  mini/coroutine/Task.h:169:24
+  tests/contract/coroutine/test_cancellation_contract.cpp:72:5
+Previous write of size 1 at 0x7230000060b0 by thread T1:
+  tests/contract/coroutine/test_cancellation_contract.cpp:18:29
+  mini/coroutine/SleepAwaitable.h:74:35
+  mini/net/EventLoop.cc:242:9
+
+TEST contract.coroutine.test_cancellation_contract
+WARNING: ThreadSanitizer: data race (pid=1763)
+Write of size 8 at 0x723000006000 by main thread:
+  tests/contract/coroutine/test_cancellation_contract.cpp:18:29
+  mini/coroutine/Task.h:169:24
+  tests/contract/coroutine/test_cancellation_contract.cpp:72:5
+Previous write of size 8 at 0x723000006000 by thread T1:
+  tests/contract/coroutine/test_cancellation_contract.cpp:18:29
+  mini/coroutine/SleepAwaitable.h:74:35
+  mini/net/EventLoop.cc:242:9
+
+TEST contract.dns.test_dns_contract
+WARNING: ThreadSanitizer: data race (pid=1776)
+Read of size 1 at 0x722400000110 by thread T12:
+  mini/net/DnsResolver.cc:25:22
+  mini/net/DnsResolver.cc:64:28
+  mini/net/EventLoop.cc:242:9
+Previous write of size 1 at 0x722400000110 by main thread:
+  mini/net/DnsResolver.cc:62:33
+  tests/contract/dns/test_dns_contract.cpp:178:18
+  mini/net/DnsResolver.cc:57:22
+
+TEST contract.dns.test_dns_contract
+WARNING: ThreadSanitizer: data race (pid=1776)
+Read of size 8 at 0x7224000000f8 by thread T12:
+  mini/coroutine/CancellationToken.h:60:14
+  mini/coroutine/CancellationToken.h:56:9
+  mini/net/DnsResolver.cc:25:22
+Previous write of size 8 at 0x7224000000f8 by main thread:
+  mini/coroutine/CancellationToken.h:42:18
+  mini/net/DnsResolver.cc:62:33
+  tests/contract/dns/test_dns_contract.cpp:178:18
+
+TEST contract.dns.test_dns_contract
+WARNING: ThreadSanitizer: data race (pid=1776)
+Read of size 8 at 0x722400000100 by thread T12:
+  mini/coroutine/CancellationToken.h:57:5
+  mini/net/DnsResolver.cc:25:22
+  mini/net/DnsResolver.cc:64:28
+Previous write of size 8 at 0x722400000100 by main thread:
+  mini/coroutine/CancellationToken.h:42:18
+  mini/net/DnsResolver.cc:62:33
+  tests/contract/dns/test_dns_contract.cpp:178:18
+
+TEST integration.tcp_server.test_tcp_server
+WARNING: ThreadSanitizer: data race (pid=1807)
+Write of size 8 at 0x720800000040 by thread T1:
+  mini/net/TcpServer.cc:388:34
+  mini/net/detail/ConnectionCallbackDispatcher.h:14:7
+  mini/net/TcpConnection.cc:20:23
+Previous read of size 8 at 0x720800000040 by main thread:
+  mini/net/TcpServer.cc:103:20
+  tests/integration/tcp_server/test_tcp_server.cpp:100:1
+  mini/net/EventLoopThread.cc:27:15
+
+TEST integration.tcp_server.test_tcp_server_threaded
+WARNING: ThreadSanitizer: data race (pid=1815)
+Write of size 8 at 0x720800000040 by thread T1:
+  mini/net/TcpServer.cc:388:34
+  mini/net/detail/ConnectionCallbackDispatcher.h:14:7
+  mini/net/TcpConnection.cc:20:23
+Previous read of size 8 at 0x720800000040 by main thread:
+  mini/net/TcpServer.cc:103:20
+  tests/integration/tcp_server/test_tcp_server_threaded.cpp:133:1
+  mini/net/EventLoopThread.cc:27:15

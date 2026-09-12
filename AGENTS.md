@@ -123,22 +123,18 @@ Each PR or direct change touching a core module must answer:
 
 ---
 
-## Current v1 Focus
-- `v1-alpha`: synchronous Reactor main path is stable
-  - Channel / Poller / EPollPoller / EventLoop / Buffer / Acceptor / TcpConnection / TcpServer
-  - contract + integration coverage for the callback-based mainline
-- `v1-beta`: thread model is stable
-  - EventLoopThread / EventLoopThreadPool
-  - cross-thread scheduling and one-loop-per-thread behavior are contract-tested
-- `v1-coro-preview`: coroutine bridge runs through
-  - `mini::coroutine::Task`
-  - `TcpConnection` awaitables
-  - coroutine echo main path runs through without bypassing EventLoop semantics
-
-Deferred until after `v1-coro-preview`:
-- TimerQueue
-- async timers
-- backpressure policy work
+## Current Development Scope (2026-09 reset)
+- Read `intents/architecture/reactor_scope_reset.intent.md` and `docs/roadmap.md` first.
+- S0: scope reduction and trustworthy build/test/install boundaries.
+- S1: coroutine frame lifetime, suspension publication, DNS teardown/re-entry,
+  thread startup/shutdown and callback lifecycle correctness before new features.
+- S2: minimal TCP contracts and explicit Linux/Windows support boundaries.
+- S3: reproducible load evidence before a stable release claim.
+- TimerQueue and basic backpressure remain necessary TCP runtime support.
+- Game/session/AOI, HTTP/WebSocket/RPC, custom KCP/UDP/PMTU/FEC and business
+  metrics exporters are retired from this library, not optional future core work.
+- Historical version plans in `docs/archive/` do not authorize feature expansion.
+- Keep all retained API tests; never retire a failing test for an API still supported.
 
 
 ## When the user asks to analyze a framework / understand a project / generate source-code reading documentation

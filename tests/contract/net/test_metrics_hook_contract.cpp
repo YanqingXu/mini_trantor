@@ -16,6 +16,7 @@
 #include <chrono>
 #include <iostream>
 #include <thread>
+#include <unistd.h>
 
 using namespace mini::net;
 

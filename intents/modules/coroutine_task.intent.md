@@ -1,5 +1,10 @@
 # Module Intent: coroutine::Task
 
+> S1 gap: Task owns its frame, but timer/I/O waiters do not unregister when a
+> suspended frame is destroyed. See P0-01/P1-04 in
+> [the audit](../../docs/audit_2026-09-12.md). Passing existing tests does not
+> establish arbitrary suspended destruction or cross-thread resume safety.
+
 ## 1. Intent
 Task is the minimal composable coroutine result object for mini-trantor.
 It provides start/detach/co_await semantics so that coroutine-based connection
@@ -87,8 +92,8 @@ Task is a bridge, not a scheduler.
 - Task<T> supports arbitrary return types via TaskPromise<T>::return_value
 - Task<void> specialization uses return_void
 - FinalAwaiter's symmetric transfer enables efficient Task-to-Task chaining
-- future extensions (e.g. cancellation token) would be added to the promise,
-  not to the Task shell
+- cancellation token propagation already exists in the promise;
+  frame unregistration and safe completion are the next required contracts
 
 ---
 

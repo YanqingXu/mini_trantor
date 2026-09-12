@@ -17,6 +17,14 @@ namespace {
 
 thread_local EventLoop* t_loopInThisThread = nullptr;
 
+std::thread::id checkedOwnerThread() {
+    // Reject a second loop before allocating its poller or wakeup descriptors.
+    if (t_loopInThisThread != nullptr) {
+        throw std::runtime_error("another EventLoop already exists in this thread");
+    }
+    return std::this_thread::get_id();
+}
+
 }  // namespace
 
 EventLoop::EventLoop()
@@ -24,7 +32,7 @@ EventLoop::EventLoop()
       quit_(false),
       eventHandling_(false),
       callingPendingFunctors_(false),
-      threadId_(std::this_thread::get_id()),
+      threadId_(checkedOwnerThread()),
       poller_(Poller::newDefaultPoller(this)),
       timerQueue_(std::make_unique<TimerQueue>(this)),
       wakeupFds_(platform::createWakeupFds()),
@@ -32,13 +40,9 @@ EventLoop::EventLoop()
       currentActiveChannel_(nullptr),
       pendingFunctorPeak_(0),
       wakeupCount_(0) {
-    if (t_loopInThisThread != nullptr) {
-        throw std::runtime_error("another EventLoop already exists in this thread");
-    }
-    t_loopInThisThread = this;
-
     wakeupChannel_->setReadCallback([this](mini::base::Timestamp receiveTime) { handleRead(receiveTime); });
     wakeupChannel_->enableReading();
+    t_loopInThisThread = this;
 }
 
 EventLoop::~EventLoop() {
@@ -56,6 +60,9 @@ EventLoop::~EventLoop() {
 
 void EventLoop::loop() {
     assertInLoopThread();
+    if (looping_) {
+        throw std::logic_error("EventLoop::loop cannot be re-entered");
+    }
     looping_ = true;
 
     while (!quit_) {
@@ -63,6 +70,9 @@ void EventLoop::loop() {
         pollReturnTime_ = poller_->poll(timerQueue_->pollTimeoutMs(10000), &activeChannels_);
         eventHandling_ = true;
         for (Channel* channel : activeChannels_) {
+            if (channel == nullptr) {
+                continue;
+            }
             currentActiveChannel_ = channel;
             channel->handleEvent(pollReturnTime_);
         }
@@ -122,7 +132,7 @@ void EventLoop::queueInLoop(Functor cb) {
         }
     }
 
-    if (!isInLoopThread() || callingPendingFunctors_) {
+    if (!isInLoopThread() || callingPendingFunctors_ || !looping_) {
         wakeup();
     }
 }
@@ -167,6 +177,15 @@ void EventLoop::updateChannel(Channel* channel) {
 void EventLoop::removeChannel(Channel* channel) {
     assertInLoopThread();
     poller_->removeChannel(channel);
+    // A callback may remove another channel from this poll batch and destroy it.
+    // Invalidate the borrowed pointer without changing the vector's iterators.
+    if (eventHandling_) {
+        for (auto& active : activeChannels_) {
+            if (active == channel) {
+                active = nullptr;
+            }
+        }
+    }
 }
 
 bool EventLoop::hasChannel(Channel* channel) {

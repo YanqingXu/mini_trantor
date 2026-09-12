@@ -123,6 +123,8 @@ void testTcpServerOptionsDefaults() {
 void testTcpServerOptionsValidation() {
     TcpServerOptions opts;
     opts.numThreads = 0;
+    opts.validate();
+    opts.numThreads = -1;
     try {
         opts.validate();
         assert(false && "should have thrown");
@@ -169,6 +171,23 @@ void testTcpServerWithOptions() {
 
     // Verify that set*() can override Options.
     server.setThreadNum(2);
+
+    for (int invalidWorkers : {-1, -2}) {
+        bool rejected = false;
+        try { server.setThreadNum(invalidWorkers); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        assert(rejected);
+    }
+    bool rejectedTimeout = false;
+    try { server.setIdleTimeout(Duration(-1)); }
+    catch (const std::invalid_argument&) { rejectedTimeout = true; }
+    assert(rejectedTimeout);
+
+    opts.numThreads = -1;
+    bool rejectedOptions = false;
+    try { TcpServer invalid(&loop, listenAddr, "invalid", opts); }
+    catch (const std::invalid_argument&) { rejectedOptions = true; }
+    assert(rejectedOptions);
 
     std::cout << "  PASS: TcpServer constructed with TcpServerOptions\n";
 }

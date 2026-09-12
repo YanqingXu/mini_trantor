@@ -38,6 +38,10 @@ EventLoop is the heart of reactor execution in mini-trantor.
 - quit must not abandon already-queued pending functors
 - wakeup is used to interrupt blocking poll when needed
 - channel update/remove must respect EventLoop ownership
+- work queued before loop() starts must execute without waiting for the default poll timeout
+- loop() cannot be re-entered from callbacks
+- removing another Channel during dispatch invalidates its pointer in the active poll batch
+- constructing a second loop on the same thread fails before allocating wakeup resources
 - Poller lifetime does not exceed EventLoop lifetime
 
 ---

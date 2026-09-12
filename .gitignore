@@ -1,5 +1,8 @@
-build/
-build_*/
+/build/
+/out/
+/Testing/
+/build_audit*
+/build_*/
 *.swp
 *.swo
 .vscode/

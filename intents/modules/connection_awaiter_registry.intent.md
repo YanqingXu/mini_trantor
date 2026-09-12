@@ -1,5 +1,9 @@
 # Module Intent: ConnectionAwaiterRegistry
 
+> S1 gap: queued/stored handles lack a frame-destruction unregistration protocol.
+> Existing cancel methods request completion; they do not make early frame
+> destruction safe. See [the audit](../../docs/audit_2026-09-12.md).
+
 ## 1. Intent
 ConnectionAwaiterRegistry coordinates coroutine waiters that suspend on one
 TcpConnection for read readiness, write completion, or close completion.
@@ -72,7 +76,7 @@ and resume semantics still flow through EventLoop scheduling.
 ---
 
 ## 9. Extension Points
-- future cancellation support
+- cancellation exists; destruction-vs-queued-resume safety must be established next
 - future richer read/write completion result types
 - future observability for waiter counts and resume reasons
 

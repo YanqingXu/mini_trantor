@@ -32,6 +32,8 @@ function(enable_sanitizers target)
     endif()
 
     if(MINI_ENABLE_FUZZ)
+        # Coverage must instrument the parser library, not only the harness.
+        target_compile_options(${target} PRIVATE -fsanitize=fuzzer-no-link)
         target_compile_options(${target} PUBLIC ${sanitizer_compile_options})
         target_link_options(${target} PUBLIC ${sanitizer_link_options})
         return()
