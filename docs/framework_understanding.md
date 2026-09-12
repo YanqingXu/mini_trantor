@@ -14,7 +14,7 @@
 7. TimerQueue 通过 poll timeout 驱动，无独立 timer 线程，也不再依赖 timerfd。
 8. Task 管 coroutine frame，awaitable 负责把网络等待接回 EventLoop；两者不能相互替代。
 9. DNS 有阻塞解析 worker；它与 Reactor 的回流边界需要特别审计。
-10. 基础能力已有测试，但 DNS 关闭、线程启停和 TLS 身份校验仍有未关闭风险；协程与 DNS 锁边界修复见 S1 执行记录。
+10. 协程、DNS 投递与线程启停已有 S1 修复；TcpServer 关闭、TLS 身份校验及共享控制块 TSan 分诊仍未关闭。
 11. `mini/net/detail/ConnectionTransport` 是 TCP/TLS 内部 I/O 策略；已移除的通用
     `mini/net/transport/` 则是另一套上层抽象，两者不能混淆。
 
@@ -240,9 +240,9 @@ SleepAwaitable 在 timer 回调恢复，网络 awaiter 通过 queueInLoop 恢复
 4. **依赖**：EventLoop 与 jthread、mutex、condition_variable。
 5. **调用方**：TcpServer 和需要单独 I/O loop 的应用。
 6. **关键方法**：startLoop 发布栈上 loop；stop 请求 quit 并 join；getNextLoop 轮询，0 worker 回 base。
-7. **阅读抓手**：线程栈指针如何发布/清空，stop 与自然退出是否有共同状态机。
-8. **易误解处**：裸 loop 指针不是 lifetime token；池内缓存不能延长已退出 worker 的栈对象。
-9. **修改约束**：init-quit/throw、重复启动、外部提前 quit 必须有失败合同；不得靠额外 sleep 修等待竞争。
+7. **阅读抓手**：Starting/Running/Exited/Stopping 状态；控制锁串行化启动和 join，状态锁保护 quit/wakeup 与清空指针。
+8. **易误解处**：提前退出时 worker 保留栈对象到 stop/restart/析构；裸指针仍存活不代表 loop 继续调度，关闭后的 LoopHandle 拒绝投递。
+9. **修改约束**：init-quit/throw 回传并清理，pool 全部成功才发布；先请求所有 worker 停止再 join。合同及状态图见 [S1-03](s1_thread_lifecycle.md)。
 
 ### `mini/coroutine/Task.h`
 

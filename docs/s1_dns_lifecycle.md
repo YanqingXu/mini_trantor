@@ -150,3 +150,23 @@ sleep/TCP/DNS/whenAny/timeout 合同。自定义裸 handle awaitable 和未清�
 S1-02c 验证：ASan/UBSan + TLS 全量 69/69；Linux Release 66/66；Windows Release
 29/29。完整 Clang/libc++ TSan 61/66，剩余失败入口与上一轮相同；新的 resolve/取消清理
 合同均通过。没有删除测试或设置 suppressions。S1 的线程启停、异常与 TLS 阻塞项继续开放。
+
+## S1-03 全量检查追加的控制块分诊
+
+线程启停变更的首轮完整 TSan 在 `test_dns_lifetime` 的 closed 场景报告：
+取消线程释放 weak 控制块，与 DNS worker 释放最后一个 ResolveOperationState 强引用
+中的虚函数读取发生冲突。它不同于已经用 registrationMutex 修复的注册字段竞争。
+原始证据在 `build_audit_s1_thread_full_tsan.log`；最终轮 DNS 通过也不能删除此记录。
+
+独立的 `build_audit_s1_shared_weak_plain_probe.cpp` 仅创建 shared_ptr<int>，将唯一
+强引用移入 std::thread，同时在主线程释放 weak_ptr，随后 join；没有项目代码、没有
+共享 wrapper 的并发修改、没有 barrier。系统 libc++ 18 + TSan 同样报告一次
+`__release_shared` 虚调用读取与控制块 delete 冲突。
+
+这是标准库插桩边界的具体线索，尚不是所有项目报告的归因结论。
+TSan 作者说明未插桩库中的原子同步可能导致误报或漏报，建议检查依赖的插桩；
+[官方手册](https://github.com/google/sanitizers/wiki/ThreadSanitizerCppManual#non-instrumented-code)。
+LLVM 18 的 weak release 位于单独编译的
+[memory.cpp](https://github.com/llvm/llvm-project/blob/llvmorg-18.1.8/libcxx/src/memory.cpp)，
+下一步需重建插桩后的 libc++/libc++abi 并对比最小程序及全部项目测试。
+不得通过 suppression、排除测试或给共享指针套无业务含义的锁关闭报告。

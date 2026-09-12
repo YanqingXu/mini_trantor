@@ -53,6 +53,9 @@ It is the lifecycle boundary between listening infrastructure and per-connection
 - idle timeout should converge on the normal connection close/remove path
 - backpressure configuration should not leave accepted connections permanently read-paused after drain
 - callback lifetime must remain safe during server destruction
+- An initialization exception from the worker pool resets the start guard so start
+  can be retried. Listening begins only after all worker initializers succeed.
+  This is startup rollback, not a promise to restart a server after stop().
 
 ---
 

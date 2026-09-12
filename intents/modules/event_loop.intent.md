@@ -56,6 +56,8 @@ EventLoop is the heart of reactor execution in mini-trantor.
 - coordinates with Channel objects for I/O event dispatch
 - provides scheduling point for timer callbacks and coroutine awaiter resume
 - interacts with EventLoopThread / thread-pool wrappers in scaled mode
+- EventLoopThread may inspect the atomic quit flag during initialization/selection;
+  this private collaboration adds no cross-thread mutation of reactor state.
 
 ---
 

@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | EventLoop / Channel / Poller / Buffer | 核心调度与字节缓冲 | 核心候选，尚未作稳定发布承诺 |
 | TCP server/client、连接生命周期、基础背压 | 核心网络路径 | 下一阶段优先补关闭、重入与资源上限契约 |
-| EventLoopThread / ThreadPool、TimerQueue | 必要运行时支撑 | 线程启停边界仍需加固；定时器继续留在 owner loop |
+| EventLoopThread / ThreadPool、TimerQueue | 必要运行时支撑 | 已补启动失败回传与停止竞争回归；定时器继续留在 owner loop |
 | Task、网络 awaitable、取消/超时/组合器 | 协程预览 | 已补 sleep/TCP 注销和组合器父帧保护；请求取消与统一关闭继续验证 |
 | DNS | 已有辅助能力，冻结扩展 | 缓存与关闭投递已加固；捕获资源须遵守释放线程约束 |
 | TLS | 显式可选，默认关闭 | 需 OpenSSL；单独测试，不等同于完整 TLS 安全审计 |
@@ -22,8 +22,8 @@
 | Linux epoll / Windows select | Linux 主验证平台 / Windows 预览 | select 有容量限制，Windows 测试子集不代表全平台等价 |
 
 当前阶段是**收敛与加固**。历史“Stable”“阶段完成”和测试数量不再作为当前成熟度承诺。
-审计中的协程悬空恢复与 DNS 锁边界、迟到投递已有回归和修复；TLS 对端校验、线程启停
-及 TcpServer 关闭仍有阻塞项。最新测试和开放问题以[研发路线](docs/roadmap.md)及其 S1
+审计中的协程悬空恢复、DNS 锁边界与迟到投递、线程启停已有回归和修复；TLS 对端校验、
+TcpServer 关闭及剩余 TSan 分诊仍有阻塞项。最新测试和开放问题以[研发路线](docs/roadmap.md)及其 S1
 执行记录为准；部分合同通过不代表全部生命周期已闭环。
 
 ## 构建与验证

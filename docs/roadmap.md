@@ -53,6 +53,12 @@ S1-02b 建立 LoopHandle 的入队/关闭互斥，DNS worker 和取消回调不�
 S1-02c 补齐 ResolveAwaitable 的单次等待/析构取消，并将 sleep/TCP 的迟到通知迁移到
 安全投递边界；TCP 强引用只在 owner-loop 获取。当前转入线程启停与统一关闭，
 完整 S1 门槛仍需剩余 TSan 报告和 TLS 身份验证等工作共同满足。
+S1-03 已落实线程启动结果、提前退出保留、部分线程池回滚与拥有者停止；
+原 pool wakeup/close 竞争通过状态锁消除。最终 ASan/UBSan 70/70、Linux Release
+67/67、Windows Release 30/30，完整 TSan 本轮 65/67；历史未复现报告继续开放。
+新增 DNS 控制块报告与独立 shared/weak 最小复现进入标准库插桩分诊，详见
+[线程实施记录](s1_thread_lifecycle.md)与 [DNS 追加记录](s1_dns_lifecycle.md)。
+下一步依次完成关闭重入/异常策略、剩余 TSan 分诊和 TLS 对端身份合同。
 
 | 顺序 | 任务 | 必须守住的合同 | 退出证据 |
 | --- | --- | --- | --- |

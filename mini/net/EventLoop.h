@@ -87,6 +87,7 @@ private:
     mutable std::mutex mutex_;
     std::vector<PendingFunctor> pendingFunctors_;
     friend class LoopHandle;
+    friend class EventLoopThread;
 };
 
 }  // namespace mini::net

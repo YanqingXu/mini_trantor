@@ -197,28 +197,31 @@ void TcpServer::start() {
     bool expected = false;
     if (started_.compare_exchange_strong(expected, true)) {
         stopped_ = false;
-        auto loopMetricCallback = eventLoopQueueMetricsEnabled_
-            ? eventLoopMetricCallback_
-            : EventLoopMetricCallback{};
-        if (loopMetricCallback) {
-            loop_->setEventLoopMetricCallback(loopMetricCallback);
-        }
-        auto threadInitCallback = threadInitCallback_;
-        threadPool_->start([loopMetricCallback, threadInitCallback](EventLoop* loop) {
+        try {
+            auto loopMetricCallback = eventLoopQueueMetricsEnabled_
+                ? eventLoopMetricCallback_
+                : EventLoopMetricCallback{};
             if (loopMetricCallback) {
-                loop->setEventLoopMetricCallback(loopMetricCallback);
+                loop_->setEventLoopMetricCallback(loopMetricCallback);
             }
-            if (threadInitCallback) {
-                threadInitCallback(loop);
-            }
-        });
-        std::weak_ptr<void> lifetime = lifetimeToken_;
-        loop_->runInLoop([this, lifetime] {
-            if (!lifetime.lock()) {
-                return;
-            }
-            acceptor_->listen();
-        });
+            auto threadInitCallback = threadInitCallback_;
+            threadPool_->start([loopMetricCallback, threadInitCallback](EventLoop* loop) {
+                if (loopMetricCallback) { loop->setEventLoopMetricCallback(loopMetricCallback); }
+                if (threadInitCallback) { threadInitCallback(loop); }
+            });
+            std::weak_ptr<void> lifetime = lifetimeToken_;
+            loop_->runInLoop([this, lifetime] {
+                if (!lifetime.lock()) { return; }
+                acceptor_->listen();
+            });
+        } catch (...) {
+            // Pool startup has already joined partial workers. Also cover failures
+            // after successful startup but before listener publication.
+            threadPool_->stop();
+            started_ = false;
+            stopped_ = false;
+            throw;
+        }
     }
 }
 
